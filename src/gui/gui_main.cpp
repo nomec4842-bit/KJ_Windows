@@ -28,7 +28,7 @@ void buildStepRects()
     const int startX = 40;
     const int startY = 180;
     const int stepWidth = 35;
-    const int stepHeight = 160;
+    const int stepHeight = stepWidth;
     const int spacing = 10;
 
     for (int i = 0; i < kNumSequencerSteps; ++i)
