@@ -5,6 +5,9 @@
 #include <thread>
 #include <atomic>
 #include <cmath>
+#include <algorithm>
+
+#include "core/sequencer.h"
 
 std::atomic<bool> isPlaying = false;
 static bool running = true;
@@ -52,6 +55,9 @@ void audioLoop() {
     double phase = 0.0;
     const double twoPi = 6.283185307179586;
     const double sampleRate = 44100.0;
+    double stepSampleCounter = 0.0;
+    double envelope = 0.0;
+    bool previousPlaying = false;
 
     while (running) {
         UINT32 padding = 0;
@@ -61,12 +67,67 @@ void audioLoop() {
             BYTE* data;
             renderClient->GetBuffer(available, &data);
             short* samples = (short*)data;
+            int bpm = std::clamp(sequencerBPM.load(std::memory_order_relaxed), 30, 240);
+            double stepDurationSamples = sampleRate * 60.0 / (static_cast<double>(bpm) * 4.0);
+            if (stepDurationSamples < 1.0) stepDurationSamples = 1.0;
+
             for (UINT32 i = 0; i < available; i++) {
-                short value = isPlaying ? (short)(sin(phase) * 32767.0) : 0;
-                samples[i * 2] = value;
-                samples[i * 2 + 1] = value;
+                bool playing = isPlaying.load(std::memory_order_relaxed);
+                bool stepAdvanced = false;
+
+                if (!playing) {
+                    if (previousPlaying) {
+                        sequencerResetRequested.store(true, std::memory_order_relaxed);
+                    }
+                    previousPlaying = false;
+                    stepSampleCounter = 0.0;
+                    envelope *= 0.92;
+                    if (envelope < 0.0001) envelope = 0.0;
+                } else {
+                    if (!previousPlaying) {
+                        sequencerResetRequested.store(true, std::memory_order_relaxed);
+                    }
+                    previousPlaying = true;
+
+                    if (sequencerResetRequested.exchange(false, std::memory_order_acq_rel)) {
+                        sequencerCurrentStep.store(0, std::memory_order_relaxed);
+                        stepSampleCounter = 0.0;
+                        envelope = 0.0;
+                    }
+
+                    stepSampleCounter += 1.0;
+                    if (stepSampleCounter >= stepDurationSamples) {
+                        stepSampleCounter -= stepDurationSamples;
+                        int nextStep = sequencerCurrentStep.load(std::memory_order_relaxed) + 1;
+                        if (nextStep >= kNumSequencerSteps) nextStep = 0;
+                        sequencerCurrentStep.store(nextStep, std::memory_order_relaxed);
+                        stepAdvanced = true;
+                    }
+
+                    int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+                    bool gate = sequencerSteps[currentStep].load(std::memory_order_relaxed);
+                    double target = gate ? 0.8 : 0.0;
+
+                    if (stepAdvanced && gate) {
+                        envelope = 0.9;
+                    }
+
+                    if (envelope < target) {
+                        envelope += 0.005;
+                        if (envelope > target) envelope = target;
+                    } else {
+                        envelope -= 0.003;
+                        if (envelope < target) envelope = target;
+                    }
+                }
+
+                double sampleValue = sin(phase) * envelope;
                 phase += twoPi * freq / sampleRate;
                 if (phase >= twoPi) phase -= twoPi;
+
+                short value = static_cast<short>(sampleValue * 32767.0);
+                samples[i * 2] = value;
+                samples[i * 2 + 1] = value;
             }
             renderClient->ReleaseBuffer(available, 0);
         }
