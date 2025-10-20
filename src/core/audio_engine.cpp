@@ -6,12 +6,47 @@
 #include <atomic>
 #include <cmath>
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <memory>
 
+#include "core/sample_loader.h"
 #include "core/sequencer.h"
 
 std::atomic<bool> isPlaying = false;
 static bool running = true;
 static std::thread audioThread;
+static std::shared_ptr<const SampleBuffer> gSampleBuffer;
+
+namespace {
+
+std::filesystem::path getExecutableDirectory() {
+    std::array<wchar_t, MAX_PATH> buffer{};
+    DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length == buffer.size())
+        return {};
+    return std::filesystem::path(buffer.data()).parent_path();
+}
+
+std::filesystem::path findDefaultSamplePath() {
+    auto exeDir = getExecutableDirectory();
+    if (exeDir.empty())
+        return {};
+
+    const std::array<std::filesystem::path, 2> candidates = {
+        exeDir / "assets" / "sample.wav",
+        exeDir / "sample.wav"
+    };
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate))
+            return candidate;
+    }
+
+    return {};
+}
+
+} // namespace
 
 void audioLoop() {
     HRESULT hr;
@@ -58,8 +93,27 @@ void audioLoop() {
     double stepSampleCounter = 0.0;
     double envelope = 0.0;
     bool previousPlaying = false;
+    double samplePosition = 0.0;
+    double sampleIncrement = 1.0;
+    bool samplePlaying = false;
+
+    std::shared_ptr<const SampleBuffer> sampleBuffer;
+    size_t sampleFrameCount = 0;
 
     while (running) {
+        auto loadedBuffer = std::atomic_load(&gSampleBuffer);
+        if (loadedBuffer != sampleBuffer) {
+            sampleBuffer = std::move(loadedBuffer);
+            sampleFrameCount = sampleBuffer ? sampleBuffer->frameCount() : 0;
+            if (sampleBuffer && sampleBuffer->sampleRate > 0) {
+                sampleIncrement = static_cast<double>(sampleBuffer->sampleRate) / sampleRate;
+            } else {
+                sampleIncrement = 1.0;
+            }
+            samplePlaying = false;
+            samplePosition = 0.0;
+        }
+
         UINT32 padding = 0;
         client->GetCurrentPadding(&padding);
         UINT32 available = bufferFrameCount - padding;
@@ -83,6 +137,8 @@ void audioLoop() {
                     stepSampleCounter = 0.0;
                     envelope *= 0.92;
                     if (envelope < 0.0001) envelope = 0.0;
+                    samplePlaying = false;
+                    samplePosition = 0.0;
                 } else {
                     if (!previousPlaying) {
                         sequencerResetRequested.store(true, std::memory_order_relaxed);
@@ -110,6 +166,10 @@ void audioLoop() {
 
                     if (stepAdvanced && gate) {
                         envelope = 0.9;
+                        if (sampleBuffer && sampleFrameCount > 0) {
+                            samplePlaying = true;
+                            samplePosition = 0.0;
+                        }
                     }
 
                     if (envelope < target) {
@@ -121,13 +181,44 @@ void audioLoop() {
                     }
                 }
 
-                double sampleValue = sin(phase) * envelope;
-                phase += twoPi * freq / sampleRate;
-                if (phase >= twoPi) phase -= twoPi;
+                double leftValue = 0.0;
+                double rightValue = 0.0;
+                bool producedSample = false;
 
-                short value = static_cast<short>(sampleValue * 32767.0);
-                samples[i * 2] = value;
-                samples[i * 2 + 1] = value;
+                if (sampleBuffer && samplePlaying) {
+                    size_t index = static_cast<size_t>(samplePosition);
+                    if (index < sampleFrameCount) {
+                        int channels = std::max(sampleBuffer->channels, 1);
+                        const auto& rawSamples = sampleBuffer->samples;
+                        int16_t leftSample = rawSamples[index * channels];
+                        int16_t rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
+                        leftValue = static_cast<double>(leftSample) / 32768.0;
+                        rightValue = static_cast<double>(rightSample) / 32768.0;
+                        samplePosition += sampleIncrement;
+                        producedSample = true;
+                    } else {
+                        samplePlaying = false;
+                    }
+                }
+
+                if (!producedSample) {
+                    if (!sampleBuffer) {
+                        double sampleValue = sin(phase) * envelope;
+                        phase += twoPi * freq / sampleRate;
+                        if (phase >= twoPi) phase -= twoPi;
+                        leftValue = sampleValue;
+                        rightValue = sampleValue;
+                    } else {
+                        leftValue = 0.0;
+                        rightValue = 0.0;
+                    }
+                }
+
+                leftValue = std::clamp(leftValue, -1.0, 1.0);
+                rightValue = std::clamp(rightValue, -1.0, 1.0);
+
+                samples[i * 2] = static_cast<short>(leftValue * 32767.0);
+                samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
             }
             renderClient->ReleaseBuffer(available, 0);
         }
@@ -144,6 +235,17 @@ void audioLoop() {
 }
 
 void initAudio() {
+    if (!std::atomic_load(&gSampleBuffer)) {
+        auto defaultSample = findDefaultSamplePath();
+        if (!defaultSample.empty()) {
+            SampleBuffer buffer;
+            if (loadSampleFromFile(defaultSample, buffer)) {
+                auto sharedBuffer = std::make_shared<SampleBuffer>(std::move(buffer));
+                std::shared_ptr<const SampleBuffer> immutableBuffer = std::move(sharedBuffer);
+                std::atomic_store(&gSampleBuffer, std::move(immutableBuffer));
+            }
+        }
+    }
     running = true;
     audioThread = std::thread(audioLoop);
 }
@@ -152,4 +254,15 @@ void shutdownAudio() {
     running = false;
     isPlaying = false;
     if (audioThread.joinable()) audioThread.join();
+}
+
+bool loadSampleFile(const std::filesystem::path& path) {
+    SampleBuffer buffer;
+    if (!loadSampleFromFile(path, buffer))
+        return false;
+
+    auto sharedBuffer = std::make_shared<SampleBuffer>(std::move(buffer));
+    std::shared_ptr<const SampleBuffer> immutableBuffer = std::move(sharedBuffer);
+    std::atomic_store(&gSampleBuffer, std::move(immutableBuffer));
+    return true;
 }
