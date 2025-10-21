@@ -154,13 +154,19 @@ void audioLoop() {
                     stepSampleCounter += 1.0;
                     if (stepSampleCounter >= stepDurationSamples) {
                         stepSampleCounter -= stepDurationSamples;
+                        int stepCount = getSequencerStepCount();
                         int nextStep = sequencerCurrentStep.load(std::memory_order_relaxed) + 1;
-                        if (nextStep >= kNumSequencerSteps) nextStep = 0;
+                        if (nextStep >= stepCount) nextStep = 0;
                         sequencerCurrentStep.store(nextStep, std::memory_order_relaxed);
                         stepAdvanced = true;
                     }
 
+                    int stepCount = getSequencerStepCount();
                     int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+                    if (currentStep >= stepCount) {
+                        currentStep = 0;
+                        sequencerCurrentStep.store(currentStep, std::memory_order_relaxed);
+                    }
                     bool gate = sequencerSteps[currentStep].load(std::memory_order_relaxed);
                     double target = gate ? 0.8 : 0.0;
 
