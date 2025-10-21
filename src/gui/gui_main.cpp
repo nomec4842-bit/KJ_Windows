@@ -4,10 +4,12 @@
 #include "wdl/lice/lice.h"
 
 #include <windows.h>
+#include <commdlg.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -17,8 +19,9 @@ constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
 RECT playButton = {40, 40, 180, 110};
-RECT bpmDownButton = {220, 55, 260, 95};
-RECT bpmUpButton = {320, 55, 360, 95};
+RECT loadSampleButton = {200, 40, 340, 110};
+RECT bpmDownButton = {360, 55, 400, 95};
+RECT bpmUpButton = {410, 55, 450, 95};
 std::array<RECT, kNumSequencerSteps> stepRects;
 
 std::unique_ptr<wdl::LICE_SysBitmap> gSurface;
@@ -124,12 +127,16 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
                RGB(30, 30, 30),
                isPlaying.load(std::memory_order_relaxed) ? "Stop" : "Play");
 
+    drawButton(surface, loadSampleButton,
+               RGB(50, 50, 50), RGB(120, 120, 120),
+               "Load Sample");
+
     drawButton(surface, bpmDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
     drawButton(surface, bpmUpButton, RGB(50, 50, 50), RGB(120, 120, 120), "+");
 
     int bpm = sequencerBPM.load(std::memory_order_relaxed);
     std::string bpmText = "Tempo: " + std::to_string(bpm) + " BPM";
-    RECT bpmRect {380, 55, client.right - 40, 95};
+    RECT bpmRect {470, 55, client.right - 40, 95};
     wdl::LICE_DrawText(surface, bpmRect, bpmText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -156,6 +163,34 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             isPlaying.store(!playing, std::memory_order_relaxed);
             requestSequencerReset();
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        if (pointInRect(loadSampleButton, x, y))
+        {
+            wchar_t fileBuffer[MAX_PATH] = {0};
+            OPENFILENAMEW ofn = {0};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"WAV Files\0*.wav\0All Files\0*.*\0";
+            ofn.lpstrFile = fileBuffer;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            ofn.lpstrDefExt = L"wav";
+
+            if (GetOpenFileNameW(&ofn))
+            {
+                std::filesystem::path selectedPath(fileBuffer);
+                if (!loadSampleFile(selectedPath))
+                {
+                    MessageBoxW(hwnd,
+                                L"Failed to load selected sample.",
+                                L"Load Sample",
+                                MB_OK | MB_ICONERROR);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+
             return 0;
         }
 
