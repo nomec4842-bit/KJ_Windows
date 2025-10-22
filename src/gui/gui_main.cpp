@@ -51,7 +51,58 @@ std::vector<RECT> trackTabRects;
 int openTrackTypeTrackId = 0;
 HWND gMainWindow = nullptr;
 
-std::unique_ptr<wdl::LICE_SysBitmap> gSurface;
+std::unique_ptr<LICE_SysBitmap> gSurface;
+
+inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
+{
+    return LICE_RGBA(GetRValue(color), GetGValue(color), GetBValue(color), alpha);
+}
+
+void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLORREF color,
+              UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE)
+{
+    if (!text)
+        return;
+
+    int textWidth = 0;
+    int textHeight = 0;
+    LICE_MeasureText(text, &textWidth, &textHeight);
+
+    const int rectWidth = rect.right - rect.left;
+    const int rectHeight = rect.bottom - rect.top;
+
+    int x = rect.left;
+    if (format & DT_CENTER)
+    {
+        x = rect.left + (rectWidth - textWidth) / 2;
+    }
+    else if (format & DT_RIGHT)
+    {
+        x = rect.right - textWidth;
+    }
+
+    int maxX = rect.right - textWidth;
+    if (maxX < rect.left)
+        maxX = rect.left;
+    x = std::clamp(x, rect.left, maxX);
+
+    int y = rect.top;
+    if (format & DT_VCENTER)
+    {
+        y = rect.top + (rectHeight - textHeight) / 2;
+    }
+    else if (format & DT_BOTTOM)
+    {
+        y = rect.bottom - textHeight;
+    }
+
+    int maxY = rect.bottom - textHeight;
+    if (maxY < rect.top)
+        maxY = rect.top;
+    y = std::clamp(y, rect.top, maxY);
+
+    LICE_DrawText(&surface, x, y, text, LICE_ColorFromCOLORREF(color), 1.0f, LICE_BLIT_MODE_COPY);
+}
 
 void buildStepRects()
 {
@@ -239,28 +290,28 @@ void ensureSurfaceSize(int width, int height)
 
     if (!gSurface)
     {
-        gSurface = std::make_unique<wdl::LICE_SysBitmap>(width, height);
+        gSurface = std::make_unique<LICE_SysBitmap>(width, height);
         return;
     }
 
     gSurface->resize(width, height);
 }
 
-void drawButton(wdl::LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, COLORREF outline, const char* text)
+void drawButton(LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, COLORREF outline, const char* text)
 {
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
 
-    wdl::LICE_FillRect(&surface, rect.left, rect.top, width, height,
-                       wdl::LICE_ColorFromCOLORREF(fill));
-    wdl::LICE_DrawRect(&surface, rect.left, rect.top, width, height,
-                       wdl::LICE_ColorFromCOLORREF(outline));
+    LICE_FillRect(&surface, rect.left, rect.top, width, height,
+                  LICE_ColorFromCOLORREF(fill));
+    LICE_DrawRect(&surface, rect.left, rect.top, width, height,
+                  LICE_ColorFromCOLORREF(outline));
 
     RECT textRect = rect;
-    wdl::LICE_DrawText(surface, textRect, text, RGB(230, 230, 230));
+    drawText(surface, textRect, text, RGB(230, 230, 230));
 }
 
-void drawSequencer(wdl::LICE_SysBitmap& surface, int activeTrackId)
+void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
 {
     bool playing = isPlaying.load(std::memory_order_relaxed);
     auto tracks = getTracks();
@@ -291,8 +342,8 @@ void drawSequencer(wdl::LICE_SysBitmap& surface, int activeTrackId)
         {
             fill = RGB(30, 30, 30);
         }
-        wdl::LICE_FillRect(&surface, rect.left, rect.top, width, height,
-                           wdl::LICE_ColorFromCOLORREF(fill));
+        LICE_FillRect(&surface, rect.left, rect.top, width, height,
+                      LICE_ColorFromCOLORREF(fill));
 
         COLORREF borderColor = RGB(70, 70, 70);
         int penWidth = 2;
@@ -309,23 +360,23 @@ void drawSequencer(wdl::LICE_SysBitmap& surface, int activeTrackId)
 
         for (int p = 0; p < penWidth; ++p)
         {
-            wdl::LICE_DrawRect(&surface, rect.left - p, rect.top - p,
-                                width + p * 2, height + p * 2,
-                                wdl::LICE_ColorFromCOLORREF(borderColor));
+            LICE_DrawRect(&surface, rect.left - p, rect.top - p,
+                          width + p * 2, height + p * 2,
+                          LICE_ColorFromCOLORREF(borderColor));
         }
 
         RECT labelRect = rect;
         labelRect.top = rect.bottom - 22;
         labelRect.left += 4;
         std::string label = inRange ? std::to_string(stepIndex + 1) : "-";
-        wdl::LICE_DrawText(surface, labelRect, label.c_str(), RGB(220, 220, 220),
-                           DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        drawText(surface, labelRect, label.c_str(), RGB(220, 220, 220),
+                 DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
     }
 }
 
-void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
+void renderUI(LICE_SysBitmap& surface, const RECT& client)
 {
-    wdl::LICE_Clear(&surface, wdl::LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
+    LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
 
     drawButton(surface, playButton,
                isPlaying.load(std::memory_order_relaxed) ? RGB(0, 150, 0) : RGB(120, 0, 0),
@@ -370,16 +421,16 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     int bpm = sequencerBPM.load(std::memory_order_relaxed);
     std::string bpmText = "Tempo: " + std::to_string(bpm) + " BPM";
     RECT bpmRect {470, 20, client.right - 40, 50};
-    wdl::LICE_DrawText(surface, bpmRect, bpmText.c_str(), RGB(220, 220, 220),
-                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(surface, bpmRect, bpmText.c_str(), RGB(220, 220, 220),
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     int totalSteps = getSequencerStepCount(activeTrackId);
     if (totalSteps < 1)
         totalSteps = kSequencerStepsPerPage;
     std::string stepText = "Steps: " + std::to_string(totalSteps);
     RECT stepRect {470, 95, client.right - 40, 125};
-    wdl::LICE_DrawText(surface, stepRect, stepText.c_str(), RGB(220, 220, 220),
-                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(surface, stepRect, stepText.c_str(), RGB(220, 220, 220),
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     clampCurrentPageForTrack(activeTrackId);
     int totalPages = (totalSteps + kSequencerStepsPerPage - 1) / kSequencerStepsPerPage;
@@ -387,14 +438,14 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
         totalPages = 1;
     std::string pageText = "Page: " + std::to_string(currentStepPage + 1) + "/" + std::to_string(totalPages);
     RECT pageRect {470, 130, client.right - 40, 160};
-    wdl::LICE_DrawText(surface, pageRect, pageText.c_str(), RGB(220, 220, 220),
-                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(surface, pageRect, pageText.c_str(), RGB(220, 220, 220),
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     size_t trackCount = tracks.size();
     std::string trackText = "Tracks: " + std::to_string(trackCount);
     RECT trackRect {40, 140, client.right - 40, 170};
-    wdl::LICE_DrawText(surface, trackRect, trackText.c_str(), RGB(220, 220, 220),
-                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    drawText(surface, trackRect, trackText.c_str(), RGB(220, 220, 220),
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     const size_t rectCount = trackTabRects.size();
     const size_t tabCount = std::min(rectCount, tracks.size());
@@ -422,8 +473,8 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
         {
             nameRect.bottom = typeRect.top;
         }
-        wdl::LICE_DrawText(surface, nameRect, track.name.c_str(), RGB(230, 230, 230),
-                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        drawText(surface, nameRect, track.name.c_str(), RGB(230, 230, 230),
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         std::string typeLabel = "Type: " + trackTypeToString(track.type);
         COLORREF typeFill = isActive ? RGB(0, 90, 160) : RGB(45, 45, 45);
