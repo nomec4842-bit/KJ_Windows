@@ -17,6 +17,11 @@
 
 namespace {
 
+std::wstring ToWideString(const std::string& value)
+{
+    return std::wstring(value.begin(), value.end());
+}
+
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
@@ -502,10 +507,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             auto updatedTracks = getTracks();
             ensureTrackTabState(updatedTracks);
             std::string message = newTrack.name + " created.";
-            MessageBox(hwnd,
-                       message.c_str(),
-                       "Add Track",
-                       MB_OK | MB_ICONINFORMATION);
+            std::wstring wideMessage = ToWideString(message);
+            MessageBoxW(hwnd,
+                        wideMessage.c_str(),
+                        L"Add Track",
+                        MB_OK | MB_ICONINFORMATION);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -561,24 +567,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 void initGUI()
 {
-    WNDCLASS wc = {0};
+    WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(nullptr);
-    wc.lpszClassName = "KJWDLWindow";
-    RegisterClass(&wc);
+    wc.lpszClassName = L"KJWDLWindow";
+    RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowEx(0, "KJWDLWindow", "KJ",
-                               WS_OVERLAPPEDWINDOW,
-                               CW_USEDEFAULT, CW_USEDEFAULT, kWindowWidth, kWindowHeight,
-                               nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = CreateWindowExW(0, L"KJWDLWindow", L"KJ",
+                                WS_OVERLAPPEDWINDOW,
+                                CW_USEDEFAULT, CW_USEDEFAULT, kWindowWidth, kWindowHeight,
+                                nullptr, nullptr, wc.hInstance, nullptr);
     if (!hwnd)
     {
-        MessageBox(nullptr, "Window creation failed!", "Error", MB_OK);
+        MessageBoxW(nullptr, L"Window creation failed!", L"Error", MB_OK);
         return;
     }
 
@@ -588,10 +594,10 @@ void initGUI()
     UpdateWindow(hwnd);
 
     MSG msg = {0};
-    while (GetMessage(&msg, nullptr, 0, 0))
+    while (GetMessageW(&msg, nullptr, 0, 0))
     {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        DispatchMessageW(&msg);
     }
 }
 
