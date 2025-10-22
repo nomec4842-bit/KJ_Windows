@@ -1,8 +1,11 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
+
+struct SampleBuffer;
 
 enum class TrackType
 {
@@ -30,3 +33,6 @@ void trackSetStepState(int trackId, int stepIndex, bool enabled);
 void trackToggleStepState(int trackId, int stepIndex);
 int trackGetStepCount(int trackId);
 void trackSetStepCount(int trackId, int count);
+
+std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId);
+void trackSetSampleBuffer(int trackId, std::shared_ptr<const SampleBuffer> buffer);

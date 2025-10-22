@@ -1,4 +1,5 @@
 #include "core/tracks.h"
+#include "core/sample_loader.h"
 #include "core/sequencer.h"
 
 #include <algorithm>
@@ -38,6 +39,7 @@ struct TrackData
     std::atomic<TrackType> type{TrackType::Synth};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::atomic<int> stepCount{1};
+    std::shared_ptr<const SampleBuffer> sampleBuffer;
 };
 
 std::vector<std::shared_ptr<TrackData>> gTracks;
@@ -218,4 +220,30 @@ void trackSetType(int trackId, TrackType type)
         return;
 
     track->type.store(type, std::memory_order_relaxed);
+}
+
+std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)
+{
+    std::shared_lock<std::shared_mutex> lock(gTrackMutex);
+    for (const auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            return track->sampleBuffer;
+        }
+    }
+    return {};
+}
+
+void trackSetSampleBuffer(int trackId, std::shared_ptr<const SampleBuffer> buffer)
+{
+    std::unique_lock<std::shared_mutex> lock(gTrackMutex);
+    for (auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            track->sampleBuffer = std::move(buffer);
+            return;
+        }
+    }
 }

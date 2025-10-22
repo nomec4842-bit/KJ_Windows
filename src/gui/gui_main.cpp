@@ -591,7 +591,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (GetOpenFileNameW(&ofn))
             {
                 std::filesystem::path selectedPath(fileBuffer);
-                if (!loadSampleFile(selectedPath))
+                if (activeTrackId <= 0 || !loadSampleFile(activeTrackId, selectedPath))
                 {
                     MessageBoxW(hwnd,
                                 L"Failed to load selected sample.",

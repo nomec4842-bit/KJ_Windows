@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
@@ -19,7 +20,6 @@
 std::atomic<bool> isPlaying = false;
 static bool running = true;
 static std::thread audioThread;
-static std::shared_ptr<const SampleBuffer> gSampleBuffer;
 
 namespace {
 
@@ -48,6 +48,17 @@ std::filesystem::path findDefaultSamplePath() {
 
     return {};
 }
+
+struct TrackPlaybackState {
+    TrackType type = TrackType::Synth;
+    double envelope = 0.0;
+    double phase = 0.0;
+    bool samplePlaying = false;
+    double samplePosition = 0.0;
+    double sampleIncrement = 1.0;
+    std::shared_ptr<const SampleBuffer> sampleBuffer;
+    size_t sampleFrameCount = 0;
+};
 
 } // namespace
 
@@ -89,34 +100,14 @@ void audioLoop() {
     hr = client->Start();
     if (FAILED(hr)) return;
 
-    const double freq = 440.0;
-    double phase = 0.0;
+    const double baseFreq = 440.0;
     const double twoPi = 6.283185307179586;
     const double sampleRate = 44100.0;
     double stepSampleCounter = 0.0;
-    double envelope = 0.0;
     bool previousPlaying = false;
-    double samplePosition = 0.0;
-    double sampleIncrement = 1.0;
-    bool samplePlaying = false;
-
-    std::shared_ptr<const SampleBuffer> sampleBuffer;
-    size_t sampleFrameCount = 0;
+    std::unordered_map<int, TrackPlaybackState> playbackStates;
 
     while (running) {
-        auto loadedBuffer = std::atomic_load(&gSampleBuffer);
-        if (loadedBuffer != sampleBuffer) {
-            sampleBuffer = std::move(loadedBuffer);
-            sampleFrameCount = sampleBuffer ? sampleBuffer->frameCount() : 0;
-            if (sampleBuffer && sampleBuffer->sampleRate > 0) {
-                sampleIncrement = static_cast<double>(sampleBuffer->sampleRate) / sampleRate;
-            } else {
-                sampleIncrement = 1.0;
-            }
-            samplePlaying = false;
-            samplePosition = 0.0;
-        }
-
         UINT32 padding = 0;
         client->GetCurrentPadding(&padding);
         UINT32 available = bufferFrameCount - padding;
@@ -152,6 +143,44 @@ void audioLoop() {
                 }
             }
 
+            for (auto it = playbackStates.begin(); it != playbackStates.end(); ) {
+                int trackId = it->first;
+                bool exists = std::any_of(trackInfos.begin(), trackInfos.end(), [trackId](const Track& track) {
+                    return track.id == trackId;
+                });
+                if (!exists) {
+                    it = playbackStates.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            for (const auto& trackInfo : trackInfos) {
+                auto& state = playbackStates[trackInfo.id];
+                state.type = trackInfo.type;
+                if (trackInfo.type == TrackType::Sample) {
+                    auto sampleBuffer = trackGetSampleBuffer(trackInfo.id);
+                    if (sampleBuffer != state.sampleBuffer) {
+                        state.sampleBuffer = std::move(sampleBuffer);
+                        state.sampleFrameCount = state.sampleBuffer ? state.sampleBuffer->frameCount() : 0;
+                        if (state.sampleBuffer && state.sampleBuffer->sampleRate > 0) {
+                            state.sampleIncrement = static_cast<double>(state.sampleBuffer->sampleRate) / sampleRate;
+                        } else {
+                            state.sampleIncrement = 1.0;
+                        }
+                        state.samplePlaying = false;
+                        state.samplePosition = 0.0;
+                    }
+                    state.envelope = 0.0;
+                    state.phase = 0.0;
+                } else {
+                    state.sampleBuffer.reset();
+                    state.sampleFrameCount = 0;
+                    state.samplePlaying = false;
+                    state.samplePosition = 0.0;
+                }
+            }
+
             for (UINT32 i = 0; i < available; i++) {
                 bool playing = isPlaying.load(std::memory_order_relaxed);
                 bool stepAdvanced = false;
@@ -162,10 +191,13 @@ void audioLoop() {
                     }
                     previousPlaying = false;
                     stepSampleCounter = 0.0;
-                    envelope *= 0.92;
-                    if (envelope < 0.0001) envelope = 0.0;
-                    samplePlaying = false;
-                    samplePosition = 0.0;
+                    for (auto& [_, state] : playbackStates) {
+                        state.envelope *= 0.92;
+                        if (state.envelope < 0.0001)
+                            state.envelope = 0.0;
+                        state.samplePlaying = false;
+                        state.samplePosition = 0.0;
+                    }
                 } else {
                     if (!previousPlaying) {
                         sequencerResetRequested.store(true, std::memory_order_relaxed);
@@ -175,7 +207,11 @@ void audioLoop() {
                     if (sequencerResetRequested.exchange(false, std::memory_order_acq_rel)) {
                         sequencerCurrentStep.store(0, std::memory_order_relaxed);
                         stepSampleCounter = 0.0;
-                        envelope = 0.0;
+                        for (auto& [_, state] : playbackStates) {
+                            state.envelope = 0.0;
+                            state.samplePlaying = false;
+                            state.samplePosition = 0.0;
+                        }
                     }
 
                     stepSampleCounter += 1.0;
@@ -194,80 +230,87 @@ void audioLoop() {
                         currentStep = 0;
                         sequencerCurrentStep.store(currentStep, std::memory_order_relaxed);
                     }
-                    bool gate = false;
-                    bool triggered = false;
+
+                    double leftValue = 0.0;
+                    double rightValue = 0.0;
 
                     for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
-                        int trackId = trackInfos[trackIndex].id;
+                        const auto& trackInfo = trackInfos[trackIndex];
                         int trackStepCount = trackStepCounts[trackIndex];
-                        if (trackStepCount <= 0)
+                        auto stateIt = playbackStates.find(trackInfo.id);
+                        if (stateIt == playbackStates.end())
                             continue;
-                        if (currentStep >= trackStepCount)
-                            continue;
-                        if (getTrackStepState(trackId, currentStep)) {
-                            gate = true;
-                            if (stepAdvanced)
-                                triggered = true;
+                        auto& state = stateIt->second;
+
+                        bool gate = false;
+                        bool triggered = false;
+                        if (trackStepCount > 0 && currentStep < trackStepCount) {
+                            if (getTrackStepState(trackInfo.id, currentStep)) {
+                                gate = true;
+                                if (stepAdvanced)
+                                    triggered = true;
+                            }
+                        }
+
+                        if (trackInfo.type == TrackType::Sample) {
+                            if (triggered) {
+                                if (state.sampleBuffer && state.sampleFrameCount > 0) {
+                                    state.samplePlaying = true;
+                                    state.samplePosition = 0.0;
+                                } else {
+                                    state.samplePlaying = false;
+                                }
+                            }
+
+                            if (state.samplePlaying && state.sampleBuffer) {
+                                size_t index = static_cast<size_t>(state.samplePosition);
+                                if (index < state.sampleFrameCount) {
+                                    int channels = std::max(state.sampleBuffer->channels, 1);
+                                    const auto& rawSamples = state.sampleBuffer->samples;
+                                    int16_t leftSample = rawSamples[index * channels];
+                                    int16_t rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
+                                    leftValue += static_cast<double>(leftSample) / 32768.0;
+                                    rightValue += static_cast<double>(rightSample) / 32768.0;
+                                    state.samplePosition += state.sampleIncrement;
+                                } else {
+                                    state.samplePlaying = false;
+                                }
+                            }
+                        } else {
+                            double target = gate ? 0.8 : 0.0;
+
+                            if (triggered) {
+                                state.envelope = 0.9;
+                            }
+
+                            if (state.envelope < target) {
+                                state.envelope += 0.005;
+                                if (state.envelope > target)
+                                    state.envelope = target;
+                            } else {
+                                state.envelope -= 0.003;
+                                if (state.envelope < target)
+                                    state.envelope = target;
+                            }
+
+                            double sampleValue = std::sin(state.phase) * state.envelope;
+                            state.phase += twoPi * baseFreq / sampleRate;
+                            if (state.phase >= twoPi)
+                                state.phase -= twoPi;
+                            leftValue += sampleValue;
+                            rightValue += sampleValue;
                         }
                     }
 
-                    double target = gate ? 0.8 : 0.0;
+                    leftValue = std::clamp(leftValue, -1.0, 1.0);
+                    rightValue = std::clamp(rightValue, -1.0, 1.0);
 
-                    if (triggered) {
-                        envelope = 0.9;
-                        if (sampleBuffer && sampleFrameCount > 0) {
-                            samplePlaying = true;
-                            samplePosition = 0.0;
-                        }
-                    }
-
-                    if (envelope < target) {
-                        envelope += 0.005;
-                        if (envelope > target) envelope = target;
-                    } else {
-                        envelope -= 0.003;
-                        if (envelope < target) envelope = target;
-                    }
+                    samples[i * 2] = static_cast<short>(leftValue * 32767.0);
+                    samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
+                    continue;
                 }
-
-                double leftValue = 0.0;
-                double rightValue = 0.0;
-                bool producedSample = false;
-
-                if (sampleBuffer && samplePlaying) {
-                    size_t index = static_cast<size_t>(samplePosition);
-                    if (index < sampleFrameCount) {
-                        int channels = std::max(sampleBuffer->channels, 1);
-                        const auto& rawSamples = sampleBuffer->samples;
-                        int16_t leftSample = rawSamples[index * channels];
-                        int16_t rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
-                        leftValue = static_cast<double>(leftSample) / 32768.0;
-                        rightValue = static_cast<double>(rightSample) / 32768.0;
-                        samplePosition += sampleIncrement;
-                        producedSample = true;
-                    } else {
-                        samplePlaying = false;
-                    }
-                }
-
-                if (!producedSample) {
-                    if (!sampleBuffer) {
-                        double sampleValue = sin(phase) * envelope;
-                        phase += twoPi * freq / sampleRate;
-                        if (phase >= twoPi) phase -= twoPi;
-                        leftValue = sampleValue;
-                        rightValue = sampleValue;
-                    } else {
-                        leftValue = 0.0;
-                        rightValue = 0.0;
-                    }
-                }
-
-                leftValue = std::clamp(leftValue, -1.0, 1.0);
-                rightValue = std::clamp(rightValue, -1.0, 1.0);
-
-                samples[i * 2] = static_cast<short>(leftValue * 32767.0);
-                samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
+                samples[i * 2] = 0;
+                samples[i * 2 + 1] = 0;
             }
             renderClient->ReleaseBuffer(available, 0);
         }
@@ -284,14 +327,15 @@ void audioLoop() {
 }
 
 void initAudio() {
-    if (!std::atomic_load(&gSampleBuffer)) {
-        auto defaultSample = findDefaultSamplePath();
-        if (!defaultSample.empty()) {
-            SampleBuffer buffer;
-            if (loadSampleFromFile(defaultSample, buffer)) {
-                auto sharedBuffer = std::make_shared<SampleBuffer>(std::move(buffer));
-                std::shared_ptr<const SampleBuffer> immutableBuffer = std::move(sharedBuffer);
-                std::atomic_store(&gSampleBuffer, std::move(immutableBuffer));
+    auto defaultSample = findDefaultSamplePath();
+    if (!defaultSample.empty()) {
+        SampleBuffer buffer;
+        if (loadSampleFromFile(defaultSample, buffer)) {
+            auto sharedBuffer = std::make_shared<SampleBuffer>(std::move(buffer));
+            std::shared_ptr<const SampleBuffer> immutableBuffer = sharedBuffer;
+            auto tracks = getTracks();
+            if (!tracks.empty()) {
+                trackSetSampleBuffer(tracks.front().id, std::move(immutableBuffer));
             }
         }
     }
@@ -305,13 +349,16 @@ void shutdownAudio() {
     if (audioThread.joinable()) audioThread.join();
 }
 
-bool loadSampleFile(const std::filesystem::path& path) {
+bool loadSampleFile(int trackId, const std::filesystem::path& path) {
+    if (trackId <= 0)
+        return false;
+
     SampleBuffer buffer;
     if (!loadSampleFromFile(path, buffer))
         return false;
 
     auto sharedBuffer = std::make_shared<SampleBuffer>(std::move(buffer));
     std::shared_ptr<const SampleBuffer> immutableBuffer = std::move(sharedBuffer);
-    std::atomic_store(&gSampleBuffer, std::move(immutableBuffer));
+    trackSetSampleBuffer(trackId, std::move(immutableBuffer));
     return true;
 }
