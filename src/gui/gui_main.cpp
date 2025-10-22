@@ -1,6 +1,7 @@
 #include "gui/gui_main.h"
 #include "core/audio_engine.h"
 #include "core/sequencer.h"
+#include "core/tracks.h"
 #include "wdl/lice/lice.h"
 
 #include <windows.h>
@@ -192,6 +193,12 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     wdl::LICE_DrawText(surface, pageRect, pageText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+    size_t trackCount = getTrackCount();
+    std::string trackText = "Tracks: " + std::to_string(trackCount);
+    RECT trackRect {40, 140, client.right - 40, 170};
+    wdl::LICE_DrawText(surface, trackRect, trackText.c_str(), RGB(220, 220, 220),
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
     drawSequencer(surface);
 }
 
@@ -308,10 +315,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (pointInRect(addTrackButton, x, y))
         {
+            Track newTrack = addTrack();
+            std::string message = newTrack.name + " created.";
             MessageBox(hwnd,
-                       "Add Track is not implemented yet.",
+                       message.c_str(),
                        "Add Track",
                        MB_OK | MB_ICONINFORMATION);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
 
