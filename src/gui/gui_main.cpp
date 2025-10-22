@@ -194,6 +194,18 @@ bool pointInRect(const RECT& rect, int x, int y)
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+const Track* findTrackById(const std::vector<Track>& tracks, int trackId)
+{
+    auto it = std::find_if(tracks.begin(), tracks.end(), [trackId](const Track& track) {
+        return track.id == trackId;
+    });
+    if (it != tracks.end())
+    {
+        return &(*it);
+    }
+    return nullptr;
+}
+
 std::string trackTypeToString(TrackType type)
 {
     switch (type)
@@ -320,9 +332,32 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
                RGB(30, 30, 30),
                isPlaying.load(std::memory_order_relaxed) ? "Stop" : "Play");
 
-    drawButton(surface, loadSampleButton,
-               RGB(50, 50, 50), RGB(120, 120, 120),
-               "Load Sample");
+    auto tracks = getTracks();
+    ensureTrackTabState(tracks);
+
+    int activeTrackId = selectedTrackId;
+    if (activeTrackId <= 0 && !tracks.empty())
+    {
+        activeTrackId = tracks.front().id;
+        setActiveSequencerTrackId(activeTrackId);
+    }
+
+    bool showSampleLoader = false;
+    if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
+    {
+        showSampleLoader = activeTrack->type == TrackType::Sample;
+    }
+    else if (activeTrackId > 0)
+    {
+        showSampleLoader = trackGetType(activeTrackId) == TrackType::Sample;
+    }
+
+    if (showSampleLoader)
+    {
+        drawButton(surface, loadSampleButton,
+                   RGB(50, 50, 50), RGB(120, 120, 120),
+                   "Load Sample");
+    }
 
     drawButton(surface, bpmDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
     drawButton(surface, bpmUpButton, RGB(50, 50, 50), RGB(120, 120, 120), "+");
@@ -337,16 +372,6 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     RECT bpmRect {470, 20, client.right - 40, 50};
     wdl::LICE_DrawText(surface, bpmRect, bpmText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    auto tracks = getTracks();
-    ensureTrackTabState(tracks);
-
-    int activeTrackId = selectedTrackId;
-    if (activeTrackId <= 0 && !tracks.empty())
-    {
-        activeTrackId = tracks.front().id;
-        setActiveSequencerTrackId(activeTrackId);
-    }
 
     int totalSteps = getSequencerStepCount(activeTrackId);
     if (totalSteps < 1)
@@ -541,7 +566,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
-        if (pointInRect(loadSampleButton, x, y))
+        bool showSampleLoader = false;
+        if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
+        {
+            showSampleLoader = activeTrack->type == TrackType::Sample;
+        }
+        else if (activeTrackId > 0)
+        {
+            showSampleLoader = trackGetType(activeTrackId) == TrackType::Sample;
+        }
+
+        if (showSampleLoader && pointInRect(loadSampleButton, x, y))
         {
             wchar_t fileBuffer[MAX_PATH] = {0};
             OPENFILENAMEW ofn = {0};
