@@ -84,7 +84,7 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
     int maxX = rect.right - textWidth;
     if (maxX < rect.left)
         maxX = rect.left;
-    x = std::clamp(x, rect.left, maxX);
+    x = std::clamp(x, static_cast<int>(rect.left), maxX); // Ensure clamp arguments use a consistent int type.
 
     int y = rect.top;
     if (format & DT_VCENTER)
@@ -99,7 +99,7 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
     int maxY = rect.bottom - textHeight;
     if (maxY < rect.top)
         maxY = rect.top;
-    y = std::clamp(y, rect.top, maxY);
+    y = std::clamp(y, static_cast<int>(rect.top), maxY); // Ensure clamp arguments use a consistent int type.
 
     LICE_DrawText(&surface, x, y, text, LICE_ColorFromCOLORREF(color), 1.0f, LICE_BLIT_MODE_COPY);
 }
@@ -785,7 +785,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (gSurface)
         {
             renderUI(*gSurface, client);
-            gSurface->blitTo(hdc, 0, 0);
+            LICE_Scale_BitBlt(hdc, 0, 0, gSurface->getWidth(), gSurface->getHeight(), gSurface.get(), 0, 0, SRCCOPY); // Use LICE helper to blit the surface to the window HDC.
         }
         EndPaint(hwnd, &ps);
         return 0;
