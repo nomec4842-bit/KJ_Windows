@@ -9,9 +9,11 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
+#include "core/tracks.h"
 
 std::atomic<bool> isPlaying = false;
 static bool running = true;
@@ -125,6 +127,30 @@ void audioLoop() {
             double stepDurationSamples = sampleRate * 60.0 / (static_cast<double>(bpm) * 4.0);
             if (stepDurationSamples < 1.0) stepDurationSamples = 1.0;
 
+            auto trackInfos = getTracks();
+            std::vector<int> trackStepCounts;
+            trackStepCounts.reserve(trackInfos.size());
+
+            int activeTrackId = getActiveSequencerTrackId();
+            int activeTrackStepCount = 0;
+
+            for (const auto& trackInfo : trackInfos) {
+                int count = getSequencerStepCount(trackInfo.id);
+                trackStepCounts.push_back(count);
+                if (trackInfo.id == activeTrackId) {
+                    activeTrackStepCount = count;
+                }
+            }
+
+            if (activeTrackStepCount <= 0) {
+                if (!trackInfos.empty()) {
+                    activeTrackStepCount = trackStepCounts.front();
+                    activeTrackId = trackInfos.front().id;
+                } else {
+                    activeTrackStepCount = kSequencerStepsPerPage;
+                }
+            }
+
             for (UINT32 i = 0; i < available; i++) {
                 bool playing = isPlaying.load(std::memory_order_relaxed);
                 bool stepAdvanced = false;
@@ -154,23 +180,39 @@ void audioLoop() {
                     stepSampleCounter += 1.0;
                     if (stepSampleCounter >= stepDurationSamples) {
                         stepSampleCounter -= stepDurationSamples;
-                        int stepCount = getSequencerStepCount();
+                        int stepCount = activeTrackStepCount > 0 ? activeTrackStepCount : kSequencerStepsPerPage;
                         int nextStep = sequencerCurrentStep.load(std::memory_order_relaxed) + 1;
                         if (nextStep >= stepCount) nextStep = 0;
                         sequencerCurrentStep.store(nextStep, std::memory_order_relaxed);
                         stepAdvanced = true;
                     }
 
-                    int stepCount = getSequencerStepCount();
+                    int stepCount = activeTrackStepCount > 0 ? activeTrackStepCount : kSequencerStepsPerPage;
                     int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
                     if (currentStep >= stepCount) {
                         currentStep = 0;
                         sequencerCurrentStep.store(currentStep, std::memory_order_relaxed);
                     }
-                    bool gate = sequencerSteps[currentStep].load(std::memory_order_relaxed);
+                    bool gate = false;
+                    bool triggered = false;
+
+                    for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
+                        int trackId = trackInfos[trackIndex].id;
+                        int trackStepCount = trackStepCounts[trackIndex];
+                        if (trackStepCount <= 0)
+                            continue;
+                        if (currentStep >= trackStepCount)
+                            continue;
+                        if (getTrackStepState(trackId, currentStep)) {
+                            gate = true;
+                            if (stepAdvanced)
+                                triggered = true;
+                        }
+                    }
+
                     double target = gate ? 0.8 : 0.0;
 
-                    if (stepAdvanced && gate) {
+                    if (triggered) {
                         envelope = 0.9;
                         if (sampleBuffer && sampleFrameCount > 0) {
                             samplePlaying = true;

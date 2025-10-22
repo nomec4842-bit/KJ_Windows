@@ -54,7 +54,19 @@ void buildStepRects()
 
 void clampCurrentPage()
 {
-    int totalSteps = getSequencerStepCount();
+    int activeTrackId = getActiveSequencerTrackId();
+    if (activeTrackId <= 0)
+    {
+        auto tracks = getTracks();
+        if (!tracks.empty())
+        {
+            activeTrackId = tracks.front().id;
+        }
+    }
+
+    int totalSteps = getSequencerStepCount(activeTrackId);
+    if (totalSteps < 1)
+        totalSteps = kSequencerStepsPerPage;
     int totalPages = (totalSteps + kSequencerStepsPerPage - 1) / kSequencerStepsPerPage;
     if (totalPages < 1)
         totalPages = 1;
@@ -103,7 +115,16 @@ void drawSequencer(wdl::LICE_SysBitmap& surface)
     clampCurrentPage();
 
     int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
-    int totalSteps = getSequencerStepCount();
+    int activeTrackId = getActiveSequencerTrackId();
+    auto tracks = getTracks();
+    if (activeTrackId <= 0 && !tracks.empty())
+    {
+        activeTrackId = tracks.front().id;
+    }
+
+    int totalSteps = getSequencerStepCount(activeTrackId);
+    if (totalSteps < 1)
+        totalSteps = kSequencerStepsPerPage;
 
     for (int i = 0; i < kSequencerStepsPerPage; ++i)
     {
@@ -112,7 +133,7 @@ void drawSequencer(wdl::LICE_SysBitmap& surface)
         const int height = rect.bottom - rect.top;
         int stepIndex = currentStepPage * kSequencerStepsPerPage + i;
         bool inRange = stepIndex < totalSteps;
-        bool active = inRange && sequencerSteps[stepIndex].load(std::memory_order_relaxed);
+        bool active = inRange && getTrackStepState(activeTrackId, stepIndex);
 
         COLORREF fill = active ? RGB(0, 120, 200) : RGB(45, 45, 45);
         if (!inRange)
@@ -178,7 +199,16 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     wdl::LICE_DrawText(surface, bpmRect, bpmText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    int totalSteps = getSequencerStepCount();
+    auto tracks = getTracks();
+    int activeTrackId = getActiveSequencerTrackId();
+    if (activeTrackId <= 0 && !tracks.empty())
+    {
+        activeTrackId = tracks.front().id;
+    }
+
+    int totalSteps = getSequencerStepCount(activeTrackId);
+    if (totalSteps < 1)
+        totalSteps = kSequencerStepsPerPage;
     std::string stepText = "Steps: " + std::to_string(totalSteps);
     RECT stepRect {470, 95, client.right - 40, 125};
     wdl::LICE_DrawText(surface, stepRect, stepText.c_str(), RGB(220, 220, 220),
@@ -216,6 +246,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         int x = LOWORD(lParam);
         int y = HIWORD(lParam);
+        auto tracks = getTracks();
+        int activeTrackId = getActiveSequencerTrackId();
+        if (activeTrackId <= 0 && !tracks.empty())
+        {
+            activeTrackId = tracks.front().id;
+        }
+
         if (pointInRect(playButton, x, y))
         {
             bool playing = isPlaying.load(std::memory_order_relaxed);
@@ -273,8 +310,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (pointInRect(stepCountDownButton, x, y))
         {
-            int steps = getSequencerStepCount();
-            setSequencerStepCount(steps - 1);
+            int steps = getSequencerStepCount(activeTrackId);
+            if (steps < 1)
+                steps = kSequencerStepsPerPage;
+            if (activeTrackId > 0)
+            {
+                setSequencerStepCount(activeTrackId, steps - 1);
+            }
             clampCurrentPage();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -282,8 +324,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (pointInRect(stepCountUpButton, x, y))
         {
-            int steps = getSequencerStepCount();
-            setSequencerStepCount(steps + 1);
+            int steps = getSequencerStepCount(activeTrackId);
+            if (steps < 1)
+                steps = kSequencerStepsPerPage;
+            if (activeTrackId > 0)
+            {
+                setSequencerStepCount(activeTrackId, steps + 1);
+            }
             clampCurrentPage();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -301,7 +348,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (pointInRect(pageUpButton, x, y))
         {
-            int totalSteps = getSequencerStepCount();
+            int totalSteps = getSequencerStepCount(activeTrackId);
+            if (totalSteps < 1)
+                totalSteps = kSequencerStepsPerPage;
             int totalPages = (totalSteps + kSequencerStepsPerPage - 1) / kSequencerStepsPerPage;
             if (totalPages < 1)
                 totalPages = 1;
@@ -316,6 +365,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (pointInRect(addTrackButton, x, y))
         {
             Track newTrack = addTrack();
+            if (activeTrackId <= 0 && newTrack.id > 0)
+            {
+                setActiveSequencerTrackId(newTrack.id);
+            }
             std::string message = newTrack.name + " created.";
             MessageBox(hwnd,
                        message.c_str(),
@@ -330,9 +383,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (pointInRect(stepRects[i], x, y))
             {
                 int stepIndex = currentStepPage * kSequencerStepsPerPage + i;
-                if (stepIndex < getSequencerStepCount())
+                int totalSteps = getSequencerStepCount(activeTrackId);
+                if (totalSteps < 1)
+                    totalSteps = kSequencerStepsPerPage;
+                if (stepIndex < totalSteps && activeTrackId > 0)
                 {
-                    toggleSequencerStep(stepIndex);
+                    toggleSequencerStep(activeTrackId, stepIndex);
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 return 0;
