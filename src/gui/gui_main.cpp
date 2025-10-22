@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -30,13 +31,17 @@ RECT pageUpButton = {630, 55, 670, 95};
 RECT addTrackButton = {690, 40, 780, 110};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
+int selectedTrackId = 0;
+std::vector<int> trackTabIds;
+std::vector<RECT> trackTabRects;
+HWND gMainWindow = nullptr;
 
 std::unique_ptr<wdl::LICE_SysBitmap> gSurface;
 
 void buildStepRects()
 {
     const int startX = 40;
-    const int startY = 180;
+    const int startY = 220;
     const int stepWidth = 35;
     const int stepHeight = stepWidth;
     const int spacing = 10;
@@ -52,9 +57,8 @@ void buildStepRects()
     }
 }
 
-void clampCurrentPage()
+void clampCurrentPageForTrack(int activeTrackId)
 {
-    int activeTrackId = getActiveSequencerTrackId();
     if (activeTrackId <= 0)
     {
         auto tracks = getTracks();
@@ -74,6 +78,98 @@ void clampCurrentPage()
         currentStepPage = totalPages - 1;
     if (currentStepPage < 0)
         currentStepPage = 0;
+}
+
+int ensureSelectedTrack(const std::vector<Track>& tracks)
+{
+    int previousSelected = selectedTrackId;
+
+    if (tracks.empty())
+    {
+        selectedTrackId = 0;
+    }
+    else
+    {
+        auto selectedIt = std::find_if(tracks.begin(), tracks.end(), [](const Track& track) {
+            return track.id == selectedTrackId;
+        });
+
+        if (selectedIt == tracks.end())
+        {
+            int activeTrackId = getActiveSequencerTrackId();
+            auto activeIt = std::find_if(tracks.begin(), tracks.end(), [activeTrackId](const Track& track) {
+                return track.id == activeTrackId;
+            });
+
+            if (activeIt != tracks.end())
+            {
+                selectedTrackId = activeTrackId;
+            }
+            else
+            {
+                selectedTrackId = tracks.front().id;
+            }
+        }
+    }
+
+    if (selectedTrackId != previousSelected)
+    {
+        setActiveSequencerTrackId(selectedTrackId);
+        currentStepPage = 0;
+    }
+
+    return selectedTrackId;
+}
+
+void ensureTrackTabState(const std::vector<Track>& tracks)
+{
+    bool changed = tracks.size() != trackTabIds.size();
+
+    if (!changed)
+    {
+        for (size_t i = 0; i < tracks.size(); ++i)
+        {
+            if (trackTabIds[i] != tracks[i].id)
+            {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (changed)
+    {
+        trackTabIds.clear();
+        trackTabRects.clear();
+
+        const int startX = 40;
+        const int startY = 180;
+        const int tabHeight = 30;
+        const int tabWidth = 110;
+        const int spacing = 10;
+
+        int currentX = startX;
+        for (const auto& track : tracks)
+        {
+            trackTabIds.push_back(track.id);
+            RECT rect {};
+            rect.left = currentX;
+            rect.top = startY;
+            rect.right = rect.left + tabWidth;
+            rect.bottom = rect.top + tabHeight;
+            trackTabRects.push_back(rect);
+            currentX = rect.right + spacing;
+        }
+    }
+
+    int previousSelected = selectedTrackId;
+    int ensuredTrackId = ensureSelectedTrack(tracks);
+    bool selectionChanged = ensuredTrackId != previousSelected;
+
+    if ((changed || selectionChanged) && gMainWindow)
+    {
+        InvalidateRect(gMainWindow, nullptr, FALSE);
+    }
 }
 
 bool pointInRect(const RECT& rect, int x, int y)
@@ -109,18 +205,18 @@ void drawButton(wdl::LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, C
     wdl::LICE_DrawText(surface, textRect, text, RGB(230, 230, 230));
 }
 
-void drawSequencer(wdl::LICE_SysBitmap& surface)
+void drawSequencer(wdl::LICE_SysBitmap& surface, int activeTrackId)
 {
     bool playing = isPlaying.load(std::memory_order_relaxed);
-    clampCurrentPage();
-
-    int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
-    int activeTrackId = getActiveSequencerTrackId();
     auto tracks = getTracks();
     if (activeTrackId <= 0 && !tracks.empty())
     {
         activeTrackId = tracks.front().id;
     }
+
+    clampCurrentPageForTrack(activeTrackId);
+
+    int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
 
     int totalSteps = getSequencerStepCount(activeTrackId);
     if (totalSteps < 1)
@@ -200,10 +296,13 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     auto tracks = getTracks();
-    int activeTrackId = getActiveSequencerTrackId();
+    ensureTrackTabState(tracks);
+
+    int activeTrackId = selectedTrackId;
     if (activeTrackId <= 0 && !tracks.empty())
     {
         activeTrackId = tracks.front().id;
+        setActiveSequencerTrackId(activeTrackId);
     }
 
     int totalSteps = getSequencerStepCount(activeTrackId);
@@ -214,7 +313,7 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     wdl::LICE_DrawText(surface, stepRect, stepText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    clampCurrentPage();
+    clampCurrentPageForTrack(activeTrackId);
     int totalPages = (totalSteps + kSequencerStepsPerPage - 1) / kSequencerStepsPerPage;
     if (totalPages < 1)
         totalPages = 1;
@@ -223,13 +322,25 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     wdl::LICE_DrawText(surface, pageRect, pageText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    size_t trackCount = getTrackCount();
+    size_t trackCount = tracks.size();
     std::string trackText = "Tracks: " + std::to_string(trackCount);
     RECT trackRect {40, 140, client.right - 40, 170};
     wdl::LICE_DrawText(surface, trackRect, trackText.c_str(), RGB(220, 220, 220),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    drawSequencer(surface);
+    const size_t rectCount = trackTabRects.size();
+    const size_t tabCount = std::min(rectCount, tracks.size());
+    for (size_t i = 0; i < tabCount; ++i)
+    {
+        const auto& track = tracks[i];
+        const RECT& tabRect = trackTabRects[i];
+        bool isActive = track.id == activeTrackId;
+        COLORREF fill = isActive ? RGB(0, 120, 200) : RGB(60, 60, 60);
+        COLORREF outline = isActive ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        drawButton(surface, tabRect, fill, outline, track.name.c_str());
+    }
+
+    drawSequencer(surface, activeTrackId);
 }
 
 } // namespace
@@ -239,6 +350,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg)
     {
     case WM_CREATE:
+        gMainWindow = hwnd;
         buildStepRects();
         SetTimer(hwnd, 1, 60, nullptr);
         return 0;
@@ -247,10 +359,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int x = LOWORD(lParam);
         int y = HIWORD(lParam);
         auto tracks = getTracks();
-        int activeTrackId = getActiveSequencerTrackId();
+        ensureTrackTabState(tracks);
+        int activeTrackId = selectedTrackId;
         if (activeTrackId <= 0 && !tracks.empty())
         {
             activeTrackId = tracks.front().id;
+            setActiveSequencerTrackId(activeTrackId);
+        }
+
+        for (size_t i = 0; i < trackTabRects.size() && i < tracks.size(); ++i)
+        {
+            if (pointInRect(trackTabRects[i], x, y))
+            {
+                int newTrackId = tracks[i].id;
+                if (newTrackId != selectedTrackId)
+                {
+                    selectedTrackId = newTrackId;
+                    setActiveSequencerTrackId(selectedTrackId);
+                    currentStepPage = 0;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
         }
 
         if (pointInRect(playButton, x, y))
@@ -317,7 +447,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 setSequencerStepCount(activeTrackId, steps - 1);
             }
-            clampCurrentPage();
+            clampCurrentPageForTrack(activeTrackId);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -331,7 +461,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 setSequencerStepCount(activeTrackId, steps + 1);
             }
-            clampCurrentPage();
+            clampCurrentPageForTrack(activeTrackId);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -369,6 +499,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 setActiveSequencerTrackId(newTrack.id);
             }
+            auto updatedTracks = getTracks();
+            ensureTrackTabState(updatedTracks);
             std::string message = newTrack.name + " created.";
             MessageBox(hwnd,
                        message.c_str(),
@@ -425,6 +557,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         KillTimer(hwnd, 1);
         gSurface.reset();
+        gMainWindow = nullptr;
         PostQuitMessage(0);
         return 0;
     }
@@ -448,6 +581,8 @@ void initGUI()
         MessageBox(nullptr, "Window creation failed!", "Error", MB_OK);
         return;
     }
+
+    gMainWindow = hwnd;
 
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
