@@ -24,6 +24,8 @@ struct TrackData
             track.name = "Track " + std::to_string(track.id);
         }
 
+        track.type = TrackType::Synth;
+
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
         {
@@ -33,6 +35,7 @@ struct TrackData
     }
 
     Track track;
+    std::atomic<TrackType> type{TrackType::Synth};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::atomic<int> stepCount{1};
 };
@@ -46,6 +49,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     Track baseTrack;
     baseTrack.id = gNextTrackId++;
     baseTrack.name = name.empty() ? "Track " + std::to_string(baseTrack.id) : name;
+    baseTrack.type = TrackType::Synth;
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -80,7 +84,14 @@ Track addTrack(const std::string& name)
         trackData = makeTrackData(name);
         gTracks.push_back(trackData);
     }
-    return trackData ? trackData->track : Track{};
+    if (!trackData)
+    {
+        return {};
+    }
+
+    Track result = trackData->track;
+    result.type = trackData->type.load(std::memory_order_relaxed);
+    return result;
 }
 
 std::vector<Track> getTracks()
@@ -90,7 +101,9 @@ std::vector<Track> getTracks()
     result.reserve(gTracks.size());
     for (const auto& track : gTracks)
     {
-        result.push_back(track->track);
+        Track info = track->track;
+        info.type = track->type.load(std::memory_order_relaxed);
+        result.push_back(std::move(info));
     }
     return result;
 }
@@ -187,4 +200,22 @@ void trackSetStepCount(int trackId, int count)
     }
 
     track->stepCount.store(clamped, std::memory_order_relaxed);
+}
+
+TrackType trackGetType(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return TrackType::Synth;
+
+    return track->type.load(std::memory_order_relaxed);
+}
+
+void trackSetType(int trackId, TrackType type)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->type.store(type, std::memory_order_relaxed);
 }

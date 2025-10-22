@@ -4,16 +4,26 @@
 #include <string>
 #include <vector>
 
+enum class TrackType
+{
+    Synth,
+    Sample,
+};
+
 struct Track
 {
     int id;
     std::string name;
+    TrackType type = TrackType::Synth;
 };
 
 void initTracks();
 Track addTrack(const std::string& name = {});
 std::vector<Track> getTracks();
 size_t getTrackCount();
+
+TrackType trackGetType(int trackId);
+void trackSetType(int trackId, TrackType type);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);

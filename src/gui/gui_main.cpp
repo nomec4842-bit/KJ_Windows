@@ -25,6 +25,15 @@ std::wstring ToWideString(const std::string& value)
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
+constexpr int kTrackTabWidth = 140;
+constexpr int kTrackTabHeight = 60;
+constexpr int kTrackTypeButtonHeight = 22;
+constexpr int kTrackTypeButtonPadding = 6;
+constexpr int kTrackTypeDropdownSpacing = 4;
+constexpr int kTrackTypeDropdownOptionHeight = 24;
+
+const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample};
+
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
@@ -39,6 +48,7 @@ int currentStepPage = 0;
 int selectedTrackId = 0;
 std::vector<int> trackTabIds;
 std::vector<RECT> trackTabRects;
+int openTrackTypeTrackId = 0;
 HWND gMainWindow = nullptr;
 
 std::unique_ptr<wdl::LICE_SysBitmap> gSurface;
@@ -149,8 +159,8 @@ void ensureTrackTabState(const std::vector<Track>& tracks)
 
         const int startX = 40;
         const int startY = 180;
-        const int tabHeight = 30;
-        const int tabWidth = 110;
+        const int tabHeight = kTrackTabHeight;
+        const int tabWidth = kTrackTabWidth;
         const int spacing = 10;
 
         int currentX = startX;
@@ -165,6 +175,8 @@ void ensureTrackTabState(const std::vector<Track>& tracks)
             trackTabRects.push_back(rect);
             currentX = rect.right + spacing;
         }
+
+        openTrackTypeTrackId = 0;
     }
 
     int previousSelected = selectedTrackId;
@@ -180,6 +192,32 @@ void ensureTrackTabState(const std::vector<Track>& tracks)
 bool pointInRect(const RECT& rect, int x, int y)
 {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+std::string trackTypeToString(TrackType type)
+{
+    switch (type)
+    {
+    case TrackType::Synth:
+        return "Synth";
+    case TrackType::Sample:
+        return "Sample";
+    }
+    return "Unknown";
+}
+
+RECT getTrackTypeButtonRect(const RECT& tabRect)
+{
+    RECT rect = tabRect;
+    rect.left += kTrackTypeButtonPadding;
+    rect.right -= kTrackTypeButtonPadding;
+    rect.bottom -= kTrackTypeButtonPadding;
+    rect.top = rect.bottom - kTrackTypeButtonHeight;
+    if (rect.top < tabRect.top + kTrackTypeButtonPadding)
+    {
+        rect.top = tabRect.top + kTrackTypeButtonPadding;
+    }
+    return rect;
 }
 
 void ensureSurfaceSize(int width, int height)
@@ -335,6 +373,14 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
 
     const size_t rectCount = trackTabRects.size();
     const size_t tabCount = std::min(rectCount, tracks.size());
+    struct PendingDropdownOption
+    {
+        int trackId;
+        TrackType type;
+        RECT rect;
+        bool isSelected;
+    };
+    std::vector<PendingDropdownOption> dropdownOptions;
     for (size_t i = 0; i < tabCount; ++i)
     {
         const auto& track = tracks[i];
@@ -342,10 +388,52 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
         bool isActive = track.id == activeTrackId;
         COLORREF fill = isActive ? RGB(0, 120, 200) : RGB(60, 60, 60);
         COLORREF outline = isActive ? RGB(20, 20, 20) : RGB(120, 120, 120);
-        drawButton(surface, tabRect, fill, outline, track.name.c_str());
+        drawButton(surface, tabRect, fill, outline, "");
+
+        RECT typeRect = getTrackTypeButtonRect(tabRect);
+        RECT nameRect = tabRect;
+        nameRect.bottom = typeRect.top - 4;
+        if (nameRect.bottom <= nameRect.top)
+        {
+            nameRect.bottom = typeRect.top;
+        }
+        wdl::LICE_DrawText(surface, nameRect, track.name.c_str(), RGB(230, 230, 230),
+                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        std::string typeLabel = "Type: " + trackTypeToString(track.type);
+        COLORREF typeFill = isActive ? RGB(0, 90, 160) : RGB(45, 45, 45);
+        COLORREF typeOutline = isActive ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        drawButton(surface, typeRect, typeFill, typeOutline, typeLabel.c_str());
+
+        if (track.id == openTrackTypeTrackId)
+        {
+            RECT optionRect = typeRect;
+            optionRect.top = typeRect.bottom + kTrackTypeDropdownSpacing;
+            optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
+            for (TrackType option : kTrackTypeOptions)
+            {
+                PendingDropdownOption pending {};
+                pending.trackId = track.id;
+                pending.type = option;
+                pending.rect = optionRect;
+                pending.isSelected = (option == track.type);
+                dropdownOptions.push_back(pending);
+
+                optionRect.top = optionRect.bottom + kTrackTypeDropdownSpacing;
+                optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
+            }
+        }
     }
 
     drawSequencer(surface, activeTrackId);
+
+    for (const auto& option : dropdownOptions)
+    {
+        COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string optionLabel = trackTypeToString(option.type);
+        drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
+    }
 }
 
 } // namespace
@@ -372,20 +460,76 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             setActiveSequencerTrackId(activeTrackId);
         }
 
+        int previousDropdownTrack = openTrackTypeTrackId;
         for (size_t i = 0; i < trackTabRects.size() && i < tracks.size(); ++i)
         {
-            if (pointInRect(trackTabRects[i], x, y))
+            const auto& track = tracks[i];
+            const RECT& tabRect = trackTabRects[i];
+            RECT typeRect = getTrackTypeButtonRect(tabRect);
+
+            if (track.id == openTrackTypeTrackId)
             {
-                int newTrackId = tracks[i].id;
+                RECT optionRect = typeRect;
+                optionRect.top = typeRect.bottom + kTrackTypeDropdownSpacing;
+                optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
+                for (TrackType option : kTrackTypeOptions)
+                {
+                    if (pointInRect(optionRect, x, y))
+                    {
+                        trackSetType(track.id, option);
+                        openTrackTypeTrackId = 0;
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    optionRect.top = optionRect.bottom + kTrackTypeDropdownSpacing;
+                    optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
+                }
+            }
+
+            if (pointInRect(typeRect, x, y))
+            {
+                if (openTrackTypeTrackId == track.id)
+                {
+                    openTrackTypeTrackId = 0;
+                }
+                else
+                {
+                    openTrackTypeTrackId = track.id;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+
+            if (pointInRect(tabRect, x, y))
+            {
+                bool stateChanged = false;
+                if (openTrackTypeTrackId != 0)
+                {
+                    openTrackTypeTrackId = 0;
+                    stateChanged = true;
+                }
+
+                int newTrackId = track.id;
                 if (newTrackId != selectedTrackId)
                 {
                     selectedTrackId = newTrackId;
                     setActiveSequencerTrackId(selectedTrackId);
                     currentStepPage = 0;
+                    stateChanged = true;
+                }
+
+                if (stateChanged)
+                {
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 return 0;
             }
+        }
+
+        if (previousDropdownTrack != 0 && openTrackTypeTrackId == previousDropdownTrack)
+        {
+            openTrackTypeTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
         }
 
         if (pointInRect(playButton, x, y))
