@@ -3,6 +3,7 @@
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <thread>
+#include <chrono>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
