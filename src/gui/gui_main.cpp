@@ -26,6 +26,7 @@ RECT stepCountDownButton = {470, 55, 510, 95};
 RECT stepCountUpButton = {520, 55, 560, 95};
 RECT pageDownButton = {580, 55, 620, 95};
 RECT pageUpButton = {630, 55, 670, 95};
+RECT addTrackButton = {690, 40, 780, 110};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
 
@@ -168,6 +169,7 @@ void renderUI(wdl::LICE_SysBitmap& surface, const RECT& client)
     drawButton(surface, stepCountUpButton, RGB(50, 50, 50), RGB(120, 120, 120), "+");
     drawButton(surface, pageDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "<");
     drawButton(surface, pageUpButton, RGB(50, 50, 50), RGB(120, 120, 120), ">");
+    drawButton(surface, addTrackButton, RGB(50, 50, 50), RGB(120, 120, 120), "+Track");
 
     int bpm = sequencerBPM.load(std::memory_order_relaxed);
     std::string bpmText = "Tempo: " + std::to_string(bpm) + " BPM";
@@ -301,6 +303,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 ++currentStepPage;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            return 0;
+        }
+
+        if (pointInRect(addTrackButton, x, y))
+        {
+            MessageBox(hwnd,
+                       "Add Track is not implemented yet.",
+                       "Add Track",
+                       MB_OK | MB_ICONINFORMATION);
             return 0;
         }
 
