@@ -27,6 +27,10 @@ constexpr int kWindowHeight = 600;
 
 constexpr int kTrackTabWidth = 140;
 constexpr int kTrackTabHeight = 60;
+constexpr int kTrackTabsTop = 180;
+constexpr int kTrackTabsStartX = 40;
+constexpr int kTrackTabsSpacing = 10;
+constexpr int kTrackTabsToGridMargin = 20;
 constexpr int kTrackTypeButtonHeight = 22;
 constexpr int kTrackTypeButtonPadding = 6;
 constexpr int kTrackTypeDropdownSpacing = 4;
@@ -107,7 +111,7 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
 void buildStepRects()
 {
     const int startX = 40;
-    const int startY = 220;
+    const int startY = kTrackTabsTop + kTrackTabHeight + kTrackTabsToGridMargin;
     const int stepWidth = 35;
     const int stepHeight = stepWidth;
     const int spacing = 10;
@@ -208,11 +212,11 @@ void ensureTrackTabState(const std::vector<Track>& tracks)
         trackTabIds.clear();
         trackTabRects.clear();
 
-        const int startX = 40;
-        const int startY = 180;
+        const int startX = kTrackTabsStartX;
+        const int startY = kTrackTabsTop;
         const int tabHeight = kTrackTabHeight;
         const int tabWidth = kTrackTabWidth;
-        const int spacing = 10;
+        const int spacing = kTrackTabsSpacing;
 
         int currentX = startX;
         for (const auto& track : tracks)
