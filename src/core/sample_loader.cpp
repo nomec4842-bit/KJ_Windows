@@ -1,7 +1,6 @@
 #include "core/sample_loader.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -126,15 +125,18 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
         return false;
 
     size_t totalSamples = rawSampleData.size() / bytesPerSample;
-    std::vector<int16_t> sampleData(totalSamples);
-
-    auto clampToInt16 = [](double value) {
-        value = std::clamp(value, -1.0, 1.0);
-        return static_cast<int16_t>(std::lround(value * 32767.0));
-    };
+    std::vector<float> sampleData(totalSamples);
 
     if (audioFormat == 1 && bitsPerSample == 16) {
-        std::memcpy(sampleData.data(), rawSampleData.data(), rawSampleData.size());
+        if (rawSampleData.size() % sizeof(int16_t) != 0)
+            return false;
+        const auto* samples16 = reinterpret_cast<const int16_t*>(rawSampleData.data());
+        size_t sampleCount16 = rawSampleData.size() / sizeof(int16_t);
+        if (sampleCount16 != totalSamples)
+            return false;
+        for (size_t i = 0; i < totalSamples; ++i) {
+            sampleData[i] = static_cast<float>(samples16[i]) / 32768.0f;
+        }
     } else if (audioFormat == 1 && bitsPerSample == 24) {
         const auto* bytes = reinterpret_cast<const unsigned char*>(rawSampleData.data());
         for (size_t i = 0; i < totalSamples; ++i) {
@@ -144,8 +146,8 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
                             (static_cast<int32_t>(bytes[offset + 2]) << 16);
             if (value & 0x800000)
                 value |= ~0xFFFFFF;
-            double normalized = static_cast<double>(value) / 8388608.0;
-            sampleData[i] = clampToInt16(normalized);
+            float normalized = static_cast<float>(value) / 8388608.0f;
+            sampleData[i] = std::clamp(normalized, -1.0f, 1.0f);
         }
     } else if (audioFormat == 3 && bitsPerSample == 32) {
         const float* samples = reinterpret_cast<const float*>(rawSampleData.data());
@@ -153,8 +155,7 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
         if (floatSampleCount != totalSamples)
             return false;
         for (size_t i = 0; i < totalSamples; ++i) {
-            double normalized = static_cast<double>(samples[i]);
-            sampleData[i] = clampToInt16(normalized);
+            sampleData[i] = std::clamp(samples[i], -1.0f, 1.0f);
         }
     } else {
         return false;

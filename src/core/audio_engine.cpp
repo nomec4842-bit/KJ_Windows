@@ -267,10 +267,10 @@ void audioLoop() {
                                 if (index < state.sampleFrameCount) {
                                     int channels = std::max(state.sampleBuffer->channels, 1);
                                     const auto& rawSamples = state.sampleBuffer->samples;
-                                    int16_t leftSample = rawSamples[index * channels];
-                                    int16_t rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
-                                    leftValue += static_cast<double>(leftSample) / 32768.0;
-                                    rightValue += static_cast<double>(rightSample) / 32768.0;
+                                    float leftSample = rawSamples[index * channels];
+                                    float rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
+                                    leftValue += static_cast<double>(leftSample);
+                                    rightValue += static_cast<double>(rightSample);
                                     state.samplePosition += state.sampleIncrement;
                                 } else {
                                     state.samplePlaying = false;
