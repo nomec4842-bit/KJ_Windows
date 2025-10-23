@@ -6,7 +6,7 @@
 #include <vector>
 
 struct SampleBuffer {
-    std::vector<int16_t> samples;
+    std::vector<float> samples;
     int channels = 0;
     int sampleRate = 0;
 

@@ -1,8 +1,10 @@
 #include "core/sample_loader.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -57,7 +59,7 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
     uint32_t sampleRate = 0;
     uint16_t bitsPerSample = 0;
 
-    std::vector<int16_t> sampleData;
+    std::vector<char> rawSampleData;
 
     while (file && (!fmtFound || !dataFound)) {
         char chunkId[4];
@@ -84,11 +86,8 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
             if (chunkSize % 2 != 0)
                 file.seekg(1, std::ios::cur);
         } else if (std::strncmp(chunkId, "data", 4) == 0) {
-            if (chunkSize % sizeof(int16_t) != 0)
-                return false;
-
-            sampleData.resize(chunkSize / sizeof(int16_t));
-            file.read(reinterpret_cast<char*>(sampleData.data()), chunkSize);
+            rawSampleData.resize(chunkSize);
+            file.read(rawSampleData.data(), chunkSize);
             if (!file)
                 return false;
 
@@ -108,8 +107,59 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
     if (!fmtFound || !dataFound)
         return false;
 
-    if (audioFormat != 1 || bitsPerSample != 16 || numChannels <= 0)
+    if (numChannels == 0)
         return false;
+
+    if (bitsPerSample % 8 != 0)
+        return false;
+
+    size_t bytesPerSample = bitsPerSample / 8;
+    if (bytesPerSample == 0)
+        return false;
+
+    size_t samplesPerFrame = static_cast<size_t>(numChannels);
+    if (samplesPerFrame == 0)
+        return false;
+
+    if (rawSampleData.size() % (samplesPerFrame * bytesPerSample) != 0)
+        return false;
+
+    size_t totalSamples = rawSampleData.size() / bytesPerSample;
+    std::vector<float> sampleData(totalSamples);
+
+    if (audioFormat == 1 && bitsPerSample == 16) {
+        if (rawSampleData.size() % sizeof(int16_t) != 0)
+            return false;
+        const auto* samples16 = reinterpret_cast<const int16_t*>(rawSampleData.data());
+        size_t sampleCount16 = rawSampleData.size() / sizeof(int16_t);
+        if (sampleCount16 != totalSamples)
+            return false;
+        for (size_t i = 0; i < totalSamples; ++i) {
+            sampleData[i] = static_cast<float>(samples16[i]) / 32768.0f;
+        }
+    } else if (audioFormat == 1 && bitsPerSample == 24) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(rawSampleData.data());
+        for (size_t i = 0; i < totalSamples; ++i) {
+            size_t offset = i * bytesPerSample;
+            int32_t value = static_cast<int32_t>(bytes[offset]) |
+                            (static_cast<int32_t>(bytes[offset + 1]) << 8) |
+                            (static_cast<int32_t>(bytes[offset + 2]) << 16);
+            if (value & 0x800000)
+                value |= ~0xFFFFFF;
+            float normalized = static_cast<float>(value) / 8388608.0f;
+            sampleData[i] = std::clamp(normalized, -1.0f, 1.0f);
+        }
+    } else if (audioFormat == 3 && bitsPerSample == 32) {
+        const float* samples = reinterpret_cast<const float*>(rawSampleData.data());
+        size_t floatSampleCount = rawSampleData.size() / sizeof(float);
+        if (floatSampleCount != totalSamples)
+            return false;
+        for (size_t i = 0; i < totalSamples; ++i) {
+            sampleData[i] = std::clamp(samples[i], -1.0f, 1.0f);
+        }
+    } else {
+        return false;
+    }
 
     outBuffer.samples = std::move(sampleData);
     outBuffer.channels = numChannels;
