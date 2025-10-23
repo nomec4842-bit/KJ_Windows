@@ -150,11 +150,42 @@ void audioLoop() {
             continue;
         }
 
-        UINT32 padding = deviceHandler.currentPadding();
+        UINT32 padding = 0;
+        HRESULT paddingResult = deviceHandler.currentPadding(&padding);
+        if (paddingResult == AUDCLNT_E_DEVICE_INVALIDATED) {
+            deviceHandler.stop();
+            deviceHandler.shutdown();
+            {
+                std::lock_guard<std::mutex> lock(deviceMutex);
+                activeDeviceId.clear();
+                activeDeviceName.clear();
+            }
+            bufferFrameCount = 0;
+            format = nullptr;
+            deviceReady = false;
+            continue;
+        } else if (FAILED(paddingResult)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
         UINT32 available = bufferFrameCount > padding ? bufferFrameCount - padding : 0;
         if (available > 0) {
             BYTE* data;
-            if (!deviceHandler.getBuffer(available, &data)) {
+            HRESULT bufferResult = deviceHandler.getBuffer(available, &data);
+            if (bufferResult == AUDCLNT_E_DEVICE_INVALIDATED) {
+                deviceHandler.stop();
+                deviceHandler.shutdown();
+                {
+                    std::lock_guard<std::mutex> lock(deviceMutex);
+                    activeDeviceId.clear();
+                    activeDeviceName.clear();
+                }
+                bufferFrameCount = 0;
+                format = nullptr;
+                deviceReady = false;
+                continue;
+            } else if (FAILED(bufferResult)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
