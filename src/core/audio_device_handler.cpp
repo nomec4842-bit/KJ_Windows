@@ -1,5 +1,8 @@
 #include "core/audio_device_handler.h"
 
+#include <functiondiscoverykeys_devpkey.h>
+#include <propvarutil.h>
+
 namespace {
 constexpr DWORD kStreamFlags = 0;
 constexpr REFERENCE_TIME kBufferDuration = 10000000; // 1 second
@@ -36,9 +39,11 @@ void AudioDeviceHandler::resetComObjects() {
     }
 }
 
-bool AudioDeviceHandler::initialize() {
+bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
     if (initialized_) {
-        return true;
+        if ((deviceId.empty() && deviceId_.empty()) || (!deviceId.empty() && deviceId == deviceId_)) {
+            return true;
+        }
     }
 
     shutdown();
@@ -49,10 +54,38 @@ bool AudioDeviceHandler::initialize() {
         return false;
     }
 
-    hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+    if (deviceId.empty()) {
+        hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
+    } else {
+        hr = enumerator_->GetDevice(deviceId.c_str(), &device_);
+    }
     if (FAILED(hr)) {
         shutdown();
         return false;
+    }
+
+    LPWSTR resolvedId = nullptr;
+    hr = device_->GetId(&resolvedId);
+    if (SUCCEEDED(hr) && resolvedId) {
+        deviceId_ = resolvedId;
+        CoTaskMemFree(resolvedId);
+    } else {
+        deviceId_.clear();
+    }
+
+    deviceName_.clear();
+    IPropertyStore* propertyStore = nullptr;
+    hr = device_->OpenPropertyStore(STGM_READ, &propertyStore);
+    if (SUCCEEDED(hr) && propertyStore) {
+        PROPVARIANT varName;
+        PropVariantInit(&varName);
+        if (SUCCEEDED(propertyStore->GetValue(PKEY_Device_FriendlyName, &varName))) {
+            if (varName.vt == VT_LPWSTR && varName.pwszVal) {
+                deviceName_ = varName.pwszVal;
+            }
+        }
+        PropVariantClear(&varName);
+        propertyStore->Release();
     }
 
     hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (void**)&client_);
@@ -96,6 +129,9 @@ bool AudioDeviceHandler::initialize() {
     }
 
     initialized_ = true;
+    if (deviceName_.empty()) {
+        deviceName_ = L"Audio Device";
+    }
     return true;
 }
 
@@ -107,6 +143,8 @@ void AudioDeviceHandler::shutdown() {
     mixFormat_.reset();
     bufferFrameCount_ = 0;
     initialized_ = false;
+    deviceId_.clear();
+    deviceName_.clear();
 }
 
 bool AudioDeviceHandler::start() {
@@ -147,5 +185,65 @@ void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {
     if (renderClient_) {
         renderClient_->ReleaseBuffer(frameCount, 0);
     }
+}
+
+std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderDevices() {
+    std::vector<DeviceInfo> devices;
+
+    IMMDeviceEnumerator* enumerator = nullptr;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
+                                  __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
+    if (FAILED(hr)) {
+        return devices;
+    }
+
+    IMMDeviceCollection* collection = nullptr;
+    hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+    if (FAILED(hr)) {
+        enumerator->Release();
+        return devices;
+    }
+
+    UINT count = 0;
+    collection->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        IMMDevice* device = nullptr;
+        hr = collection->Item(i, &device);
+        if (FAILED(hr) || !device) {
+            continue;
+        }
+
+        DeviceInfo info;
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(device->GetId(&id)) && id) {
+            info.id = id;
+            CoTaskMemFree(id);
+        }
+
+        IPropertyStore* propertyStore = nullptr;
+        hr = device->OpenPropertyStore(STGM_READ, &propertyStore);
+        if (SUCCEEDED(hr) && propertyStore) {
+            PROPVARIANT varName;
+            PropVariantInit(&varName);
+            if (SUCCEEDED(propertyStore->GetValue(PKEY_Device_FriendlyName, &varName))) {
+                if (varName.vt == VT_LPWSTR && varName.pwszVal) {
+                    info.name = varName.pwszVal;
+                }
+            }
+            PropVariantClear(&varName);
+            propertyStore->Release();
+        }
+
+        if (info.name.empty()) {
+            info.name = L"Audio Device";
+        }
+
+        devices.push_back(std::move(info));
+        device->Release();
+    }
+
+    collection->Release();
+    enumerator->Release();
+    return devices;
 }
 

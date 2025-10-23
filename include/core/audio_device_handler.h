@@ -5,6 +5,8 @@
 #include <mmdeviceapi.h>
 
 #include <memory>
+#include <string>
+#include <vector>
 
 class AudioDeviceHandler {
 public:
@@ -14,13 +16,20 @@ public:
     AudioDeviceHandler(const AudioDeviceHandler&) = delete;
     AudioDeviceHandler& operator=(const AudioDeviceHandler&) = delete;
 
-    bool initialize();
+    struct DeviceInfo {
+        std::wstring id;
+        std::wstring name;
+    };
+
+    bool initialize(const std::wstring& deviceId = L"");
     void shutdown();
 
     bool start();
     void stop();
 
     bool isInitialized() const { return initialized_; }
+    const std::wstring& deviceId() const { return deviceId_; }
+    const std::wstring& deviceName() const { return deviceName_; }
     IAudioClient* client() const { return client_; }
     IAudioRenderClient* renderClient() const { return renderClient_; }
     const WAVEFORMATEX* format() const { return mixFormat_.get(); }
@@ -29,6 +38,8 @@ public:
     UINT32 currentPadding() const;
     bool getBuffer(UINT32 frameCount, BYTE** data);
     void releaseBuffer(UINT32 frameCount);
+
+    static std::vector<DeviceInfo> enumerateRenderDevices();
 
 private:
     struct FormatDeleter {
@@ -44,5 +55,7 @@ private:
     std::unique_ptr<WAVEFORMATEX, FormatDeleter> mixFormat_;
     UINT32 bufferFrameCount_ = 0;
     bool initialized_ = false;
+    std::wstring deviceId_;
+    std::wstring deviceName_;
 };
 

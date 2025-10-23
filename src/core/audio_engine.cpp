@@ -10,8 +10,10 @@
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
 
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
@@ -21,6 +23,12 @@
 std::atomic<bool> isPlaying = false;
 static bool running = true;
 static std::thread audioThread;
+static std::mutex deviceMutex;
+static std::wstring requestedDeviceId;
+static std::wstring activeDeviceId;
+static std::wstring activeDeviceName;
+static std::wstring activeRequestedDeviceId;
+static std::atomic<bool> deviceChangeRequested{false};
 
 namespace {
 
@@ -67,26 +75,83 @@ void audioLoop() {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
     AudioDeviceHandler deviceHandler;
-    if (!deviceHandler.initialize()) {
-        return;
-    }
-    if (!deviceHandler.start()) {
-        return;
-    }
-
-    UINT32 bufferFrameCount = deviceHandler.bufferFrameCount();
-    const WAVEFORMATEX* format = deviceHandler.format();
-
+    UINT32 bufferFrameCount = 0;
+    const WAVEFORMATEX* format = nullptr;
+    double sampleRate = 44100.0;
     const double baseFreq = 440.0;
     const double twoPi = 6.283185307179586;
-    const double sampleRate = format ? static_cast<double>(format->nSamplesPerSec) : 44100.0;
     double stepSampleCounter = 0.0;
     bool previousPlaying = false;
     std::unordered_map<int, TrackPlaybackState> playbackStates;
+    bool deviceReady = false;
 
     while (running) {
+        bool changeRequested = deviceChangeRequested.exchange(false);
+        std::wstring desiredDeviceId;
+        {
+            std::lock_guard<std::mutex> lock(deviceMutex);
+            desiredDeviceId = requestedDeviceId;
+        }
+
+        if (changeRequested || !deviceReady) {
+            deviceHandler.stop();
+            deviceHandler.shutdown();
+            deviceReady = false;
+
+            bool usedFallback = false;
+            bool initialized = deviceHandler.initialize(desiredDeviceId);
+            if (!initialized && !desiredDeviceId.empty()) {
+                initialized = deviceHandler.initialize();
+                usedFallback = initialized;
+            }
+
+            if (!initialized) {
+                {
+                    std::lock_guard<std::mutex> lock(deviceMutex);
+                    if (!usedFallback) {
+                        activeDeviceId.clear();
+                        activeDeviceName.clear();
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+
+            if (!deviceHandler.start()) {
+                deviceHandler.shutdown();
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+
+            bufferFrameCount = deviceHandler.bufferFrameCount();
+            format = deviceHandler.format();
+            sampleRate = format ? static_cast<double>(format->nSamplesPerSec) : 44100.0;
+            deviceReady = true;
+            stepSampleCounter = 0.0;
+            previousPlaying = false;
+            playbackStates.clear();
+
+            {
+                std::lock_guard<std::mutex> lock(deviceMutex);
+                activeDeviceId = deviceHandler.deviceId();
+                activeDeviceName = deviceHandler.deviceName();
+                if (usedFallback) {
+                    requestedDeviceId.clear();
+                    activeRequestedDeviceId.clear();
+                } else {
+                    requestedDeviceId = desiredDeviceId;
+                    activeRequestedDeviceId = desiredDeviceId;
+                }
+            }
+        }
+
+        if (!deviceReady || bufferFrameCount == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         UINT32 padding = deviceHandler.currentPadding();
-        UINT32 available = bufferFrameCount - padding;
+        UINT32 available = bufferFrameCount > padding ? bufferFrameCount - padding : 0;
         if (available > 0) {
             BYTE* data;
             if (!deviceHandler.getBuffer(available, &data)) {
@@ -299,6 +364,54 @@ void audioLoop() {
     deviceHandler.stop();
     deviceHandler.shutdown();
     CoUninitialize();
+}
+
+std::vector<AudioOutputDevice> getAvailableAudioOutputDevices() {
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool shouldUninitialize = SUCCEEDED(hr);
+    if (hr == RPC_E_CHANGED_MODE) {
+        shouldUninitialize = false;
+    } else if (FAILED(hr)) {
+        return {};
+    }
+
+    std::vector<AudioOutputDevice> result;
+    auto devices = AudioDeviceHandler::enumerateRenderDevices();
+    result.reserve(devices.size());
+    for (auto& device : devices) {
+        AudioOutputDevice info;
+        info.id = std::move(device.id);
+        info.name = std::move(device.name);
+        result.push_back(std::move(info));
+    }
+
+    if (shouldUninitialize) {
+        CoUninitialize();
+    }
+    return result;
+}
+
+AudioOutputDevice getActiveAudioOutputDevice() {
+    std::lock_guard<std::mutex> lock(deviceMutex);
+    AudioOutputDevice info;
+    info.id = activeDeviceId;
+    info.name = activeDeviceName;
+    return info;
+}
+
+std::wstring getRequestedAudioOutputDeviceId() {
+    std::lock_guard<std::mutex> lock(deviceMutex);
+    return activeRequestedDeviceId;
+}
+
+bool setActiveAudioOutputDevice(const std::wstring& deviceId) {
+    {
+        std::lock_guard<std::mutex> lock(deviceMutex);
+        requestedDeviceId = deviceId;
+        activeRequestedDeviceId = deviceId;
+    }
+    deviceChangeRequested.store(true, std::memory_order_release);
+    return true;
 }
 
 void initAudio() {

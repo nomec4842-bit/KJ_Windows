@@ -14,12 +14,27 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <chrono>
 
 namespace {
 
 std::wstring ToWideString(const std::string& value)
 {
     return std::wstring(value.begin(), value.end());
+}
+
+std::string FromWideString(const std::wstring& value)
+{
+    if (value.empty())
+        return {};
+
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (sizeNeeded <= 0)
+        return std::string(value.begin(), value.end());
+
+    std::string result(static_cast<size_t>(sizeNeeded - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), sizeNeeded, nullptr, nullptr);
+    return result;
 }
 
 constexpr int kWindowWidth = 800;
@@ -36,6 +51,9 @@ constexpr int kTrackTypeButtonPadding = 6;
 constexpr int kTrackTypeDropdownSpacing = 4;
 constexpr int kTrackTypeDropdownOptionHeight = 24;
 
+constexpr int kAudioDeviceDropdownSpacing = 4;
+constexpr int kAudioDeviceDropdownOptionHeight = 24;
+
 const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample};
 
 RECT playButton = {40, 40, 180, 110};
@@ -47,15 +65,29 @@ RECT stepCountUpButton = {520, 55, 560, 95};
 RECT pageDownButton = {580, 55, 620, 95};
 RECT pageUpButton = {630, 55, 670, 95};
 RECT addTrackButton = {690, 40, 780, 110};
+RECT audioDeviceButton = {40, 115, 340, 145};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
 int selectedTrackId = 0;
 std::vector<int> trackTabIds;
 std::vector<RECT> trackTabRects;
 int openTrackTypeTrackId = 0;
+bool audioDeviceDropdownOpen = false;
 HWND gMainWindow = nullptr;
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
+
+struct AudioDeviceDropdownOption
+{
+    RECT rect;
+    std::wstring id;
+    std::wstring label;
+    bool isSelected = false;
+};
+
+std::vector<AudioDeviceDropdownOption> gAudioDeviceOptions;
+std::vector<AudioOutputDevice> gCachedAudioDevices;
+std::chrono::steady_clock::time_point gLastAudioDeviceRefresh = std::chrono::steady_clock::time_point::min();
 
 inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
 {
@@ -106,6 +138,19 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
     y = std::clamp(y, static_cast<int>(rect.top), maxY); // Ensure clamp arguments use a consistent int type.
 
     LICE_DrawText(&surface, x, y, text, LICE_ColorFromCOLORREF(color), 1.0f, LICE_BLIT_MODE_COPY);
+}
+
+void refreshAudioDeviceList(bool forceRefresh)
+{
+    auto now = std::chrono::steady_clock::now();
+    if (!forceRefresh && gLastAudioDeviceRefresh != std::chrono::steady_clock::time_point::min())
+    {
+        if (now - gLastAudioDeviceRefresh < std::chrono::seconds(2))
+            return;
+    }
+
+    gCachedAudioDevices = getAvailableAudioOutputDevices();
+    gLastAudioDeviceRefresh = now;
 }
 
 void buildStepRects()
@@ -381,6 +426,7 @@ void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
 void renderUI(LICE_SysBitmap& surface, const RECT& client)
 {
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
+    gAudioDeviceOptions.clear();
 
     drawButton(surface, playButton,
                isPlaying.load(std::memory_order_relaxed) ? RGB(0, 150, 0) : RGB(120, 0, 0),
@@ -422,6 +468,75 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     drawButton(surface, pageUpButton, RGB(50, 50, 50), RGB(120, 120, 120), ">");
     drawButton(surface, addTrackButton, RGB(50, 50, 50), RGB(120, 120, 120), "+Track");
 
+    auto activeOutputDevice = getActiveAudioOutputDevice();
+    std::wstring audioLabel = L"Audio Output: ";
+    if (!activeOutputDevice.name.empty())
+    {
+        audioLabel += activeOutputDevice.name;
+    }
+    else
+    {
+        audioLabel += L"System Default";
+    }
+    std::string audioLabelUtf8 = FromWideString(audioLabel);
+    if (audioLabelUtf8.empty())
+    {
+        audioLabelUtf8 = "Audio Output";
+    }
+    drawButton(surface, audioDeviceButton, RGB(50, 50, 50), RGB(120, 120, 120), audioLabelUtf8.c_str());
+
+    if (audioDeviceDropdownOpen)
+    {
+        refreshAudioDeviceList(false);
+        RECT optionRect = audioDeviceButton;
+        optionRect.top = audioDeviceButton.bottom + kAudioDeviceDropdownSpacing;
+        optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
+
+        std::wstring requestedDeviceId = getRequestedAudioOutputDeviceId();
+        std::wstring defaultLabel = L"System Default";
+        if (requestedDeviceId.empty() && !activeOutputDevice.name.empty())
+        {
+            defaultLabel += L" (" + activeOutputDevice.name + L")";
+        }
+
+        AudioDeviceDropdownOption defaultOption{};
+        defaultOption.rect = optionRect;
+        defaultOption.id.clear();
+        defaultOption.label = std::move(defaultLabel);
+        defaultOption.isSelected = requestedDeviceId.empty();
+        gAudioDeviceOptions.push_back(defaultOption);
+
+        COLORREF defaultFill = defaultOption.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF defaultOutline = defaultOption.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string defaultLabelUtf8 = FromWideString(gAudioDeviceOptions.back().label);
+        if (defaultLabelUtf8.empty())
+            defaultLabelUtf8 = "System Default";
+        drawButton(surface, optionRect, defaultFill, defaultOutline, defaultLabelUtf8.c_str());
+
+        optionRect.top = optionRect.bottom + kAudioDeviceDropdownSpacing;
+        optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
+
+        for (const auto& device : gCachedAudioDevices)
+        {
+            AudioDeviceDropdownOption option{};
+            option.rect = optionRect;
+            option.id = device.id;
+            option.label = device.name.empty() ? L"Audio Device" : device.name;
+            option.isSelected = !requestedDeviceId.empty() && device.id == requestedDeviceId;
+            gAudioDeviceOptions.push_back(option);
+
+            COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+            COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+            std::string optionLabelUtf8 = FromWideString(option.label);
+            if (optionLabelUtf8.empty())
+                optionLabelUtf8 = "Audio Device";
+            drawButton(surface, optionRect, optionFill, optionOutline, optionLabelUtf8.c_str());
+
+            optionRect.top = optionRect.bottom + kAudioDeviceDropdownSpacing;
+            optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
+        }
+    }
+
     int bpm = sequencerBPM.load(std::memory_order_relaxed);
     std::string bpmText = "Tempo: " + std::to_string(bpm) + " BPM";
     RECT bpmRect {470, 20, client.right - 40, 50};
@@ -447,7 +562,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     size_t trackCount = tracks.size();
     std::string trackText = "Tracks: " + std::to_string(trackCount);
-    RECT trackRect {40, 140, client.right - 40, 170};
+    RECT trackRect {40, 155, client.right - 40, 185};
     drawText(surface, trackRect, trackText.c_str(), RGB(220, 220, 220),
              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -531,6 +646,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         int x = LOWORD(lParam);
         int y = HIWORD(lParam);
+        if (audioDeviceDropdownOpen)
+        {
+            for (const auto& option : gAudioDeviceOptions)
+            {
+                if (pointInRect(option.rect, x, y))
+                {
+                    setActiveAudioOutputDevice(option.id);
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+
+            if (!pointInRect(audioDeviceButton, x, y))
+            {
+                audioDeviceDropdownOpen = false;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+
+        if (pointInRect(audioDeviceButton, x, y))
+        {
+            audioDeviceDropdownOpen = !audioDeviceDropdownOpen;
+            if (audioDeviceDropdownOpen)
+            {
+                refreshAudioDeviceList(true);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
         auto tracks = getTracks();
         ensureTrackTabState(tracks);
         int activeTrackId = selectedTrackId;
