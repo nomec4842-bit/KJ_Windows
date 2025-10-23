@@ -161,24 +161,26 @@ void AudioDeviceHandler::stop() {
     }
 }
 
-UINT32 AudioDeviceHandler::currentPadding() const {
+HRESULT AudioDeviceHandler::currentPadding(UINT32* padding) const {
+    if (!padding) {
+        return E_POINTER;
+    }
+    *padding = 0;
     if (!client_) {
-        return 0;
+        return AUDCLNT_E_NOT_INITIALIZED;
     }
-    UINT32 padding = 0;
-    HRESULT hr = client_->GetCurrentPadding(&padding);
-    if (FAILED(hr)) {
-        return 0;
-    }
-    return padding;
+    return client_->GetCurrentPadding(padding);
 }
 
-bool AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
-    if (!renderClient_) {
-        return false;
+HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
+    if (!data) {
+        return E_POINTER;
     }
-    HRESULT hr = renderClient_->GetBuffer(frameCount, data);
-    return SUCCEEDED(hr);
+    *data = nullptr;
+    if (!renderClient_) {
+        return AUDCLNT_E_NOT_INITIALIZED;
+    }
+    return renderClient_->GetBuffer(frameCount, data);
 }
 
 void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {

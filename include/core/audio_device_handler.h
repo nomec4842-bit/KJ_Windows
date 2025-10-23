@@ -35,8 +35,8 @@ public:
     const WAVEFORMATEX* format() const { return mixFormat_.get(); }
     UINT32 bufferFrameCount() const { return bufferFrameCount_; }
 
-    UINT32 currentPadding() const;
-    bool getBuffer(UINT32 frameCount, BYTE** data);
+    HRESULT currentPadding(UINT32* padding) const;
+    HRESULT getBuffer(UINT32 frameCount, BYTE** data);
     void releaseBuffer(UINT32 frameCount);
 
     static std::vector<DeviceInfo> enumerateRenderDevices();
