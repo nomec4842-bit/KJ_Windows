@@ -122,11 +122,23 @@ struct SliderControlRects
     RECT track{};
 };
 
+struct KnobControlRects
+{
+    RECT control{};
+    POINT center{};
+    int radius = 0;
+};
+
 SliderControlRects gVolumeSliderControl{};
 SliderControlRects gPanSliderControl{};
-std::array<SliderControlRects, 3> gEqSliderControls{};
+std::array<KnobControlRects, 3> gEqKnobControls{};
 
 const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kKnobMinAngleDegrees = -135.0;
+constexpr double kKnobMaxAngleDegrees = 135.0;
+constexpr double kKnobSweepDegrees = kKnobMaxAngleDegrees - kKnobMinAngleDegrees;
 
 inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
 {
@@ -439,6 +451,145 @@ float sliderValueFromPosition(const SliderControlRects& slider, int x, float min
     return std::clamp(result, minValue, maxValue);
 }
 
+void fillCircle(LICE_SysBitmap& surface, int centerX, int centerY, int radius, COLORREF color)
+{
+    if (radius <= 0)
+        return;
+
+    int radiusSquared = radius * radius;
+    LICE_pixel pixelColor = LICE_ColorFromCOLORREF(color);
+    for (int dy = -radius; dy <= radius; ++dy)
+    {
+        int span = static_cast<int>(std::sqrt(static_cast<double>(radiusSquared - dy * dy)));
+        int rowX = centerX - span;
+        int rowWidth = span * 2 + 1;
+        LICE_FillRect(&surface, rowX, centerY + dy, rowWidth, 1, pixelColor);
+    }
+}
+
+void drawLine(LICE_SysBitmap& surface, int x0, int y0, int x1, int y1, COLORREF color)
+{
+    LICE_pixel pixelColor = LICE_ColorFromCOLORREF(color);
+    int dx = std::abs(x1 - x0);
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0);
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    while (true)
+    {
+        LICE_FillRect(&surface, x0, y0, 1, 1, pixelColor);
+        if (x0 == x1 && y0 == y1)
+            break;
+        int e2 = 2 * err;
+        if (e2 >= dy)
+        {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx)
+        {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+float knobValueFromPosition(const KnobControlRects& knob, int x, int y, float minValue, float maxValue)
+{
+    if (knob.radius <= 0)
+        return std::clamp(minValue, minValue, maxValue);
+
+    double dx = static_cast<double>(x - knob.center.x);
+    double dy = static_cast<double>(knob.center.y - y);
+    double angleDegrees = std::atan2(dy, dx) * (180.0 / kPi);
+    double clampedAngle = std::clamp(angleDegrees, kKnobMinAngleDegrees, kKnobMaxAngleDegrees);
+    double normalized = (clampedAngle - kKnobMinAngleDegrees) / kKnobSweepDegrees;
+    double value = static_cast<double>(minValue) + normalized * (static_cast<double>(maxValue) - static_cast<double>(minValue));
+    float result = static_cast<float>(value);
+    return std::clamp(result, minValue, maxValue);
+}
+
+void drawKnobControl(LICE_SysBitmap& surface, KnobControlRects& knobRects, const RECT& area, double normalizedValue,
+                     const char* label, const std::string& valueText)
+{
+    knobRects.control = area;
+    knobRects.center = {0, 0};
+    knobRects.radius = 0;
+
+    int width = area.right - area.left;
+    int height = area.bottom - area.top;
+    if (width <= 0 || height <= 0)
+        return;
+
+    LICE_FillRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(35, 35, 35)));
+    LICE_DrawRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
+
+    RECT labelRect = area;
+    labelRect.bottom = std::min(labelRect.top + 18, area.bottom);
+    drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT valueRect = area;
+    valueRect.top = std::max<LONG>(valueRect.bottom - 18, area.top);
+    drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT knobRect = area;
+    knobRect.top = labelRect.bottom + 6;
+    knobRect.bottom = valueRect.top - 6;
+    knobRect.left += 10;
+    knobRect.right -= 10;
+
+    if (knobRect.bottom <= knobRect.top || knobRect.right <= knobRect.left)
+        return;
+
+    int knobWidth = knobRect.right - knobRect.left;
+    int knobHeight = knobRect.bottom - knobRect.top;
+    int diameter = std::min(knobWidth, knobHeight);
+    if (diameter <= 0)
+        return;
+
+    knobRects.center.x = knobRect.left + knobWidth / 2;
+    knobRects.center.y = knobRect.top + knobHeight / 2;
+    int radius = std::max(diameter / 2 - 2, 0);
+    knobRects.radius = radius;
+    if (radius <= 0)
+        return;
+
+    fillCircle(surface, knobRects.center.x, knobRects.center.y, radius, RGB(28, 28, 28));
+    if (radius > 2)
+        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 2, RGB(70, 70, 70));
+    if (radius > 5)
+        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 5, RGB(110, 110, 110));
+    if (radius > 9)
+        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 9, RGB(150, 150, 150));
+
+    auto drawTick = [&](double angleDegrees, int thickness, COLORREF color) {
+        double angleRad = angleDegrees * (kPi / 180.0);
+        int outerX = knobRects.center.x + static_cast<int>(std::round(std::cos(angleRad) * static_cast<double>(radius)));
+        int outerY = knobRects.center.y - static_cast<int>(std::round(std::sin(angleRad) * static_cast<double>(radius)));
+        int innerRadius = std::max(radius - thickness, 0);
+        int innerX = knobRects.center.x + static_cast<int>(std::round(std::cos(angleRad) * static_cast<double>(innerRadius)));
+        int innerY = knobRects.center.y - static_cast<int>(std::round(std::sin(angleRad) * static_cast<double>(innerRadius)));
+        drawLine(surface, innerX, innerY, outerX, outerY, color);
+    };
+
+    drawTick(kKnobMinAngleDegrees, 6, RGB(40, 40, 40));
+    drawTick(0.0, 6, RGB(50, 50, 50));
+    drawTick(kKnobMaxAngleDegrees, 6, RGB(40, 40, 40));
+
+    double clampedNorm = std::clamp(normalizedValue, 0.0, 1.0);
+    double indicatorAngleDeg = kKnobMinAngleDegrees + clampedNorm * kKnobSweepDegrees;
+    double indicatorRad = indicatorAngleDeg * (kPi / 180.0);
+
+    int indicatorInner = std::max(radius / 4, 2);
+    int indicatorOuter = std::max(radius - 6, indicatorInner + 1);
+    int startX = knobRects.center.x + static_cast<int>(std::round(std::cos(indicatorRad) * static_cast<double>(indicatorInner)));
+    int startY = knobRects.center.y - static_cast<int>(std::round(std::sin(indicatorRad) * static_cast<double>(indicatorInner)));
+    int endX = knobRects.center.x + static_cast<int>(std::round(std::cos(indicatorRad) * static_cast<double>(indicatorOuter)));
+    int endY = knobRects.center.y - static_cast<int>(std::round(std::sin(indicatorRad) * static_cast<double>(indicatorOuter)));
+    drawLine(surface, startX, startY, endX, endY, RGB(0, 200, 255));
+}
+
 std::string formatVolumeValue(float volume)
 {
     int percent = static_cast<int>(std::round(std::clamp(volume, kMixerVolumeMin, kMixerVolumeMax) * 100.0f));
@@ -598,8 +749,8 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
         mixerPanelRect = {0, 0, 0, 0};
         gVolumeSliderControl = {};
         gPanSliderControl = {};
-        for (auto& slider : gEqSliderControls)
-            slider = {};
+        for (auto& knob : gEqKnobControls)
+            knob = {};
         return;
     }
 
@@ -609,6 +760,7 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     int sliderHeight = 70;
     int horizontalSpacing = 30;
     int verticalSpacing = 24;
+    int knobHeight = 110;
 
     RECT headerRect {panelLeft + panelPadding, panelTop + panelPadding,
                      panelRight - panelPadding, panelTop + panelPadding + headerHeight};
@@ -622,15 +774,15 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     int eqAvailableWidth = panelRight - panelLeft - panelPadding * 2;
     int eqSpacing = horizontalSpacing;
     int eqWidth = (eqAvailableWidth - eqSpacing * 2) / 3;
-    if (eqWidth < 120)
-        eqWidth = 120;
+    if (eqWidth < 100)
+        eqWidth = 100;
     int eqRowTop = volumeRect.bottom + verticalSpacing;
     RECT eqRect0 {panelLeft + panelPadding, eqRowTop,
-                  panelLeft + panelPadding + eqWidth, eqRowTop + sliderHeight};
+                  panelLeft + panelPadding + eqWidth, eqRowTop + knobHeight};
     RECT eqRect1 {eqRect0.right + eqSpacing, eqRowTop,
-                  eqRect0.right + eqSpacing + eqWidth, eqRowTop + sliderHeight};
+                  eqRect0.right + eqSpacing + eqWidth, eqRowTop + knobHeight};
     RECT eqRect2 {eqRect1.right + eqSpacing, eqRowTop,
-                  eqRect1.right + eqSpacing + eqWidth, eqRowTop + sliderHeight};
+                  eqRect1.right + eqSpacing + eqWidth, eqRowTop + knobHeight};
 
     int panelBottom = eqRect0.bottom + panelPadding;
     mixerPanelRect = {panelLeft, panelTop, panelRight, panelBottom};
@@ -654,8 +806,8 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         gVolumeSliderControl = {};
         gPanSliderControl = {};
-        for (auto& slider : gEqSliderControls)
-            slider = {};
+        for (auto& knob : gEqKnobControls)
+            knob = {};
         return;
     }
 
@@ -670,12 +822,12 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     drawSliderControl(surface, gPanSliderControl, panRect, panNorm,
                       "Pan", formatPanValue(activeTrack->pan));
 
-    drawSliderControl(surface, gEqSliderControls[0], eqRect0, lowNorm,
-                      kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
-    drawSliderControl(surface, gEqSliderControls[1], eqRect1, midNorm,
-                      kEqBandLabels[1], formatEqValue(activeTrack->midGainDb));
-    drawSliderControl(surface, gEqSliderControls[2], eqRect2, highNorm,
-                      kEqBandLabels[2], formatEqValue(activeTrack->highGainDb));
+    drawKnobControl(surface, gEqKnobControls[0], eqRect0, lowNorm,
+                    kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
+    drawKnobControl(surface, gEqKnobControls[1], eqRect1, midNorm,
+                    kEqBandLabels[1], formatEqValue(activeTrack->midGainDb));
+    drawKnobControl(surface, gEqKnobControls[2], eqRect2, highNorm,
+                    kEqBandLabels[2], formatEqValue(activeTrack->highGainDb));
 }
 
 void renderUI(LICE_SysBitmap& surface, const RECT& client)
@@ -1088,11 +1240,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 return 0;
             }
 
-            for (size_t eqIndex = 0; eqIndex < gEqSliderControls.size(); ++eqIndex)
+            for (size_t eqIndex = 0; eqIndex < gEqKnobControls.size(); ++eqIndex)
             {
-                if (pointInRect(gEqSliderControls[eqIndex].control, x, y))
+                if (pointInRect(gEqKnobControls[eqIndex].control, x, y))
                 {
-                    float newGain = sliderValueFromPosition(gEqSliderControls[eqIndex], x, kMixerEqMin, kMixerEqMax);
+                    float newGain = knobValueFromPosition(gEqKnobControls[eqIndex], x, y, kMixerEqMin, kMixerEqMax);
                     switch (eqIndex)
                     {
                     case 0:
