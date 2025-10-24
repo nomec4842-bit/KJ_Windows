@@ -15,6 +15,13 @@
 namespace
 {
 
+constexpr float kMinVolume = 0.0f;
+constexpr float kMaxVolume = 1.0f;
+constexpr float kMinPan = -1.0f;
+constexpr float kMaxPan = 1.0f;
+constexpr float kMinEqGainDb = -12.0f;
+constexpr float kMaxEqGainDb = 12.0f;
+
 struct TrackData
 {
     explicit TrackData(Track baseTrack)
@@ -27,6 +34,11 @@ struct TrackData
 
         track.type = TrackType::Synth;
         track.synthWaveType = SynthWaveType::Sine;
+        track.volume = 1.0f;
+        track.pan = 0.0f;
+        track.lowGainDb = 0.0f;
+        track.midGainDb = 0.0f;
+        track.highGainDb = 0.0f;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
@@ -39,6 +51,11 @@ struct TrackData
     Track track;
     std::atomic<TrackType> type{TrackType::Synth};
     std::atomic<SynthWaveType> waveType{SynthWaveType::Sine};
+    std::atomic<float> volume{1.0f};
+    std::atomic<float> pan{0.0f};
+    std::atomic<float> lowGainDb{0.0f};
+    std::atomic<float> midGainDb{0.0f};
+    std::atomic<float> highGainDb{0.0f};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::atomic<int> stepCount{1};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
@@ -55,6 +72,11 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.name = name.empty() ? "Track " + std::to_string(baseTrack.id) : name;
     baseTrack.type = TrackType::Synth;
     baseTrack.synthWaveType = SynthWaveType::Sine;
+    baseTrack.volume = 1.0f;
+    baseTrack.pan = 0.0f;
+    baseTrack.lowGainDb = 0.0f;
+    baseTrack.midGainDb = 0.0f;
+    baseTrack.highGainDb = 0.0f;
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -110,6 +132,11 @@ std::vector<Track> getTracks()
         Track info = track->track;
         info.type = track->type.load(std::memory_order_relaxed);
         info.synthWaveType = track->waveType.load(std::memory_order_relaxed);
+        info.volume = track->volume.load(std::memory_order_relaxed);
+        info.pan = track->pan.load(std::memory_order_relaxed);
+        info.lowGainDb = track->lowGainDb.load(std::memory_order_relaxed);
+        info.midGainDb = track->midGainDb.load(std::memory_order_relaxed);
+        info.highGainDb = track->highGainDb.load(std::memory_order_relaxed);
         result.push_back(std::move(info));
     }
     return result;
@@ -243,6 +270,106 @@ void trackSetSynthWaveType(int trackId, SynthWaveType type)
         return;
 
     track->waveType.store(type, std::memory_order_relaxed);
+}
+
+float trackGetVolume(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 1.0f;
+
+    float volume = track->volume.load(std::memory_order_relaxed);
+    return std::clamp(volume, kMinVolume, kMaxVolume);
+}
+
+void trackSetVolume(int trackId, float volume)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(volume, kMinVolume, kMaxVolume);
+    track->volume.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetPan(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float pan = track->pan.load(std::memory_order_relaxed);
+    return std::clamp(pan, kMinPan, kMaxPan);
+}
+
+void trackSetPan(int trackId, float pan)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(pan, kMinPan, kMaxPan);
+    track->pan.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetEqLowGain(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float gain = track->lowGainDb.load(std::memory_order_relaxed);
+    return std::clamp(gain, kMinEqGainDb, kMaxEqGainDb);
+}
+
+float trackGetEqMidGain(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float gain = track->midGainDb.load(std::memory_order_relaxed);
+    return std::clamp(gain, kMinEqGainDb, kMaxEqGainDb);
+}
+
+float trackGetEqHighGain(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float gain = track->highGainDb.load(std::memory_order_relaxed);
+    return std::clamp(gain, kMinEqGainDb, kMaxEqGainDb);
+}
+
+void trackSetEqLowGain(int trackId, float gainDb)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
+    track->lowGainDb.store(clamped, std::memory_order_relaxed);
+}
+
+void trackSetEqMidGain(int trackId, float gainDb)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
+    track->midGainDb.store(clamped, std::memory_order_relaxed);
+}
+
+void trackSetEqHighGain(int trackId, float gainDb)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
+    track->highGainDb.store(clamped, std::memory_order_relaxed);
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)
