@@ -368,7 +368,30 @@ void audioLoop() {
                                     state.envelope = target;
                             }
 
-                            double sampleValue = std::sin(state.phase) * state.envelope;
+                            double waveform = 0.0;
+                            switch (trackInfo.synthWaveType)
+                            {
+                            case SynthWaveType::Sine:
+                                waveform = std::sin(state.phase);
+                                break;
+                            case SynthWaveType::Square:
+                                waveform = (state.phase < twoPi * 0.5) ? 1.0 : -1.0;
+                                break;
+                            case SynthWaveType::Saw:
+                            {
+                                double normalized = state.phase / twoPi;
+                                waveform = 2.0 * normalized - 1.0;
+                                break;
+                            }
+                            case SynthWaveType::Triangle:
+                            {
+                                double normalized = state.phase / twoPi;
+                                double centered = 2.0 * normalized - 1.0;
+                                waveform = 2.0 * (1.0 - std::abs(centered)) - 1.0;
+                                break;
+                            }
+                            }
+                            double sampleValue = waveform * state.envelope;
                             state.phase += twoPi * baseFreq / sampleRate;
                             if (state.phase >= twoPi)
                                 state.phase -= twoPi;

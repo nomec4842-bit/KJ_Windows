@@ -53,11 +53,16 @@ constexpr int kTrackTypeDropdownOptionHeight = 24;
 
 constexpr int kAudioDeviceDropdownSpacing = 4;
 constexpr int kAudioDeviceDropdownOptionHeight = 24;
+constexpr int kWaveDropdownSpacing = 4;
+constexpr int kWaveDropdownOptionHeight = 24;
 
 const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample};
+const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, SynthWaveType::Square,
+                                                        SynthWaveType::Saw, SynthWaveType::Triangle};
 
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
+RECT waveSelectButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
 RECT stepCountDownButton = {470, 55, 510, 95};
@@ -73,6 +78,8 @@ std::vector<int> trackTabIds;
 std::vector<RECT> trackTabRects;
 int openTrackTypeTrackId = 0;
 bool audioDeviceDropdownOpen = false;
+bool waveDropdownOpen = false;
+int waveDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
@@ -88,6 +95,15 @@ struct AudioDeviceDropdownOption
 std::vector<AudioDeviceDropdownOption> gAudioDeviceOptions;
 std::vector<AudioOutputDevice> gCachedAudioDevices;
 std::chrono::steady_clock::time_point gLastAudioDeviceRefresh = std::chrono::steady_clock::time_point::min();
+
+struct WaveDropdownOption
+{
+    RECT rect;
+    SynthWaveType type = SynthWaveType::Sine;
+    bool isSelected = false;
+};
+
+std::vector<WaveDropdownOption> gWaveOptions;
 
 inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
 {
@@ -318,6 +334,22 @@ std::string trackTypeToString(TrackType type)
     return "Unknown";
 }
 
+std::string synthWaveTypeToString(SynthWaveType type)
+{
+    switch (type)
+    {
+    case SynthWaveType::Sine:
+        return "Sine";
+    case SynthWaveType::Square:
+        return "Square";
+    case SynthWaveType::Saw:
+        return "Saw";
+    case SynthWaveType::Triangle:
+        return "Triangle";
+    }
+    return "Wave";
+}
+
 RECT getTrackTypeButtonRect(const RECT& tabRect)
 {
     RECT rect = tabRect;
@@ -427,6 +459,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 {
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
     gAudioDeviceOptions.clear();
+    gWaveOptions.clear();
 
     drawButton(surface, playButton,
                isPlaying.load(std::memory_order_relaxed) ? RGB(0, 150, 0) : RGB(120, 0, 0),
@@ -444,13 +477,38 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     }
 
     bool showSampleLoader = false;
+    bool showWaveSelector = false;
+    SynthWaveType activeWaveType = SynthWaveType::Sine;
     if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
     {
-        showSampleLoader = activeTrack->type == TrackType::Sample;
+        if (activeTrack->type == TrackType::Sample)
+        {
+            showSampleLoader = true;
+        }
+        else if (activeTrack->type == TrackType::Synth)
+        {
+            showWaveSelector = true;
+            activeWaveType = activeTrack->synthWaveType;
+        }
     }
     else if (activeTrackId > 0)
     {
-        showSampleLoader = trackGetType(activeTrackId) == TrackType::Sample;
+        TrackType trackType = trackGetType(activeTrackId);
+        if (trackType == TrackType::Sample)
+        {
+            showSampleLoader = true;
+        }
+        else if (trackType == TrackType::Synth)
+        {
+            showWaveSelector = true;
+            activeWaveType = trackGetSynthWaveType(activeTrackId);
+        }
+    }
+
+    if (waveDropdownOpen && (!showWaveSelector || waveDropdownTrackId != activeTrackId))
+    {
+        waveDropdownOpen = false;
+        waveDropdownTrackId = 0;
     }
 
     if (showSampleLoader)
@@ -458,6 +516,37 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         drawButton(surface, loadSampleButton,
                    RGB(50, 50, 50), RGB(120, 120, 120),
                    "Load Sample");
+    }
+    else if (showWaveSelector)
+    {
+        std::string waveLabel = synthWaveTypeToString(activeWaveType);
+        drawButton(surface, waveSelectButton,
+                   RGB(50, 50, 50), RGB(120, 120, 120),
+                   waveLabel.c_str());
+
+        if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
+        {
+            RECT optionRect = waveSelectButton;
+            optionRect.top = waveSelectButton.bottom + kWaveDropdownSpacing;
+            optionRect.bottom = optionRect.top + kWaveDropdownOptionHeight;
+
+            for (SynthWaveType option : kSynthWaveOptions)
+            {
+                WaveDropdownOption dropdownOption{};
+                dropdownOption.rect = optionRect;
+                dropdownOption.type = option;
+                dropdownOption.isSelected = option == activeWaveType;
+                gWaveOptions.push_back(dropdownOption);
+
+                COLORREF optionFill = dropdownOption.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+                COLORREF optionOutline = dropdownOption.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+                std::string optionLabel = synthWaveTypeToString(option);
+                drawButton(surface, optionRect, optionFill, optionOutline, optionLabel.c_str());
+
+                optionRect.top = optionRect.bottom + kWaveDropdownSpacing;
+                optionRect.bottom = optionRect.top + kWaveDropdownOptionHeight;
+            }
+        }
     }
 
     drawButton(surface, bpmDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
@@ -654,6 +743,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     setActiveAudioOutputDevice(option.id);
                     audioDeviceDropdownOpen = false;
+                    waveDropdownOpen = false;
+                    waveDropdownTrackId = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
@@ -662,6 +753,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (!pointInRect(audioDeviceButton, x, y))
             {
                 audioDeviceDropdownOpen = false;
+                waveDropdownOpen = false;
+                waveDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
         }
@@ -673,6 +766,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 refreshAudioDeviceList(true);
             }
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -684,6 +779,62 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             activeTrackId = tracks.front().id;
             setActiveSequencerTrackId(activeTrackId);
+        }
+
+        bool showSampleLoader = false;
+        bool showWaveSelector = false;
+        if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
+        {
+            showSampleLoader = activeTrack->type == TrackType::Sample;
+            showWaveSelector = activeTrack->type == TrackType::Synth;
+        }
+        else if (activeTrackId > 0)
+        {
+            TrackType trackType = trackGetType(activeTrackId);
+            showSampleLoader = trackType == TrackType::Sample;
+            showWaveSelector = trackType == TrackType::Synth;
+        }
+
+        if (!showWaveSelector)
+        {
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+        }
+
+        bool waveDropdownWasOpen = waveDropdownOpen;
+        int previousWaveDropdownTrack = waveDropdownTrackId;
+
+        if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
+        {
+            for (const auto& option : gWaveOptions)
+            {
+                if (pointInRect(option.rect, x, y))
+                {
+                    trackSetSynthWaveType(activeTrackId, option.type);
+                    waveDropdownOpen = false;
+                    waveDropdownTrackId = 0;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        if (showWaveSelector && pointInRect(waveSelectButton, x, y))
+        {
+            if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
+            {
+                waveDropdownOpen = false;
+                waveDropdownTrackId = 0;
+            }
+            else
+            {
+                waveDropdownOpen = true;
+                waveDropdownTrackId = activeTrackId;
+            }
+            openTrackTypeTrackId = 0;
+            audioDeviceDropdownOpen = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
 
         int previousDropdownTrack = openTrackTypeTrackId;
@@ -703,6 +854,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     if (pointInRect(optionRect, x, y))
                     {
                         trackSetType(track.id, option);
+                        if (option != TrackType::Synth && waveDropdownTrackId == track.id)
+                        {
+                            waveDropdownOpen = false;
+                            waveDropdownTrackId = 0;
+                        }
                         openTrackTypeTrackId = 0;
                         InvalidateRect(hwnd, nullptr, FALSE);
                         return 0;
@@ -722,6 +878,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = track.id;
                 }
+                waveDropdownOpen = false;
+                waveDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
@@ -732,6 +890,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (openTrackTypeTrackId != 0)
                 {
                     openTrackTypeTrackId = 0;
+                    stateChanged = true;
+                }
+
+                if (waveDropdownOpen)
+                {
+                    waveDropdownOpen = false;
+                    waveDropdownTrackId = 0;
                     stateChanged = true;
                 }
 
@@ -758,6 +923,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             InvalidateRect(hwnd, nullptr, FALSE);
         }
 
+        if (waveDropdownWasOpen && waveDropdownOpen && waveDropdownTrackId == previousWaveDropdownTrack)
+        {
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+
         if (pointInRect(playButton, x, y))
         {
             bool playing = isPlaying.load(std::memory_order_relaxed);
@@ -765,16 +937,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             requestSequencerReset();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        }
-
-        bool showSampleLoader = false;
-        if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
-        {
-            showSampleLoader = activeTrack->type == TrackType::Sample;
-        }
-        else if (activeTrackId > 0)
-        {
-            showSampleLoader = trackGetType(activeTrackId) == TrackType::Sample;
         }
 
         if (showSampleLoader && pointInRect(loadSampleButton, x, y))
