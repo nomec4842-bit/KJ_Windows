@@ -26,6 +26,7 @@ struct TrackData
         }
 
         track.type = TrackType::Synth;
+        track.synthWaveType = SynthWaveType::Sine;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
@@ -37,6 +38,7 @@ struct TrackData
 
     Track track;
     std::atomic<TrackType> type{TrackType::Synth};
+    std::atomic<SynthWaveType> waveType{SynthWaveType::Sine};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::atomic<int> stepCount{1};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
@@ -52,6 +54,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.id = gNextTrackId++;
     baseTrack.name = name.empty() ? "Track " + std::to_string(baseTrack.id) : name;
     baseTrack.type = TrackType::Synth;
+    baseTrack.synthWaveType = SynthWaveType::Sine;
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -93,6 +96,7 @@ Track addTrack(const std::string& name)
 
     Track result = trackData->track;
     result.type = trackData->type.load(std::memory_order_relaxed);
+    result.synthWaveType = trackData->waveType.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -105,6 +109,7 @@ std::vector<Track> getTracks()
     {
         Track info = track->track;
         info.type = track->type.load(std::memory_order_relaxed);
+        info.synthWaveType = track->waveType.load(std::memory_order_relaxed);
         result.push_back(std::move(info));
     }
     return result;
@@ -220,6 +225,24 @@ void trackSetType(int trackId, TrackType type)
         return;
 
     track->type.store(type, std::memory_order_relaxed);
+}
+
+SynthWaveType trackGetSynthWaveType(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return SynthWaveType::Sine;
+
+    return track->waveType.load(std::memory_order_relaxed);
+}
+
+void trackSetSynthWaveType(int trackId, SynthWaveType type)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->waveType.store(type, std::memory_order_relaxed);
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)

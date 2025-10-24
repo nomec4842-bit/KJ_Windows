@@ -13,11 +13,20 @@ enum class TrackType
     Sample,
 };
 
+enum class SynthWaveType
+{
+    Sine,
+    Square,
+    Saw,
+    Triangle,
+};
+
 struct Track
 {
     int id;
     std::string name;
     TrackType type = TrackType::Synth;
+    SynthWaveType synthWaveType = SynthWaveType::Sine;
 };
 
 void initTracks();
@@ -27,6 +36,9 @@ size_t getTrackCount();
 
 TrackType trackGetType(int trackId);
 void trackSetType(int trackId, TrackType type);
+
+SynthWaveType trackGetSynthWaveType(int trackId);
+void trackSetSynthWaveType(int trackId, SynthWaveType type);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);
