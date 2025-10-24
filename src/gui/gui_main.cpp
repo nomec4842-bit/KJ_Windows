@@ -11,7 +11,10 @@
 #include <array>
 #include <atomic>
 #include <filesystem>
+#include <cmath>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -71,6 +74,7 @@ RECT pageDownButton = {580, 55, 620, 95};
 RECT pageUpButton = {630, 55, 670, 95};
 RECT addTrackButton = {690, 40, 780, 110};
 RECT audioDeviceButton = {40, 115, 340, 145};
+RECT mixerPanelRect {};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
 int selectedTrackId = 0;
@@ -104,6 +108,25 @@ struct WaveDropdownOption
 };
 
 std::vector<WaveDropdownOption> gWaveOptions;
+
+constexpr float kMixerVolumeMin = 0.0f;
+constexpr float kMixerVolumeMax = 1.0f;
+constexpr float kMixerPanMin = -1.0f;
+constexpr float kMixerPanMax = 1.0f;
+constexpr float kMixerEqMin = -12.0f;
+constexpr float kMixerEqMax = 12.0f;
+
+struct SliderControlRects
+{
+    RECT control{};
+    RECT track{};
+};
+
+SliderControlRects gVolumeSliderControl{};
+SliderControlRects gPanSliderControl{};
+std::array<SliderControlRects, 3> gEqSliderControls{};
+
+const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
 
 inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
 {
@@ -392,6 +415,112 @@ void drawButton(LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, COLORR
     drawText(surface, textRect, text, RGB(230, 230, 230));
 }
 
+double computeNormalized(double value, double minValue, double maxValue)
+{
+    if (maxValue <= minValue)
+        return 0.0;
+    double normalized = (value - minValue) / (maxValue - minValue);
+    return std::clamp(normalized, 0.0, 1.0);
+}
+
+float sliderValueFromPosition(const SliderControlRects& slider, int x, float minValue, float maxValue)
+{
+    int trackWidth = slider.track.right - slider.track.left;
+    if (trackWidth <= 0)
+        return minValue;
+
+    int clampedX = std::clamp(x, slider.track.left, slider.track.right);
+    double normalized = static_cast<double>(clampedX - slider.track.left) / static_cast<double>(trackWidth);
+    double value = static_cast<double>(minValue) + normalized * (static_cast<double>(maxValue) - static_cast<double>(minValue));
+    float result = static_cast<float>(value);
+    return std::clamp(result, minValue, maxValue);
+}
+
+std::string formatVolumeValue(float volume)
+{
+    int percent = static_cast<int>(std::round(std::clamp(volume, kMixerVolumeMin, kMixerVolumeMax) * 100.0f));
+    return std::to_string(percent) + "%";
+}
+
+std::string formatPanValue(float pan)
+{
+    float clamped = std::clamp(pan, kMixerPanMin, kMixerPanMax);
+    if (std::abs(clamped) < 0.01f)
+        return "Center";
+
+    float percent = std::round(std::abs(clamped) * 100.0f);
+    std::ostringstream oss;
+    oss << (clamped < 0.0f ? "L " : "R ") << static_cast<int>(percent) << "%";
+    return oss.str();
+}
+
+std::string formatEqValue(float gainDb)
+{
+    float clamped = std::clamp(gainDb, kMixerEqMin, kMixerEqMax);
+    std::ostringstream oss;
+    oss << std::showpos << std::fixed << std::setprecision(1) << clamped << " dB";
+    return oss.str();
+}
+
+void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects, const RECT& area, double normalizedValue,
+                       const char* label, const std::string& valueText)
+{
+    sliderRects.control = area;
+
+    int width = area.right - area.left;
+    int height = area.bottom - area.top;
+    if (width <= 0 || height <= 0)
+    {
+        sliderRects.track = {0, 0, 0, 0};
+        return;
+    }
+
+    LICE_FillRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(35, 35, 35)));
+    LICE_DrawRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
+
+    RECT labelRect = area;
+    labelRect.bottom = std::min(labelRect.top + 18, area.bottom);
+    drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT valueRect = area;
+    valueRect.top = std::max(valueRect.bottom - 18, area.top);
+    drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT trackRect = area;
+    trackRect.top = labelRect.bottom + 6;
+    trackRect.bottom = valueRect.top - 6;
+    if (trackRect.bottom <= trackRect.top)
+    {
+        int mid = (area.top + area.bottom) / 2;
+        trackRect.top = mid - 4;
+        trackRect.bottom = mid + 4;
+    }
+    trackRect.left += 10;
+    trackRect.right -= 10;
+    if (trackRect.right <= trackRect.left)
+    {
+        trackRect.right = trackRect.left + 20;
+    }
+
+    int trackHeight = std::max(4, trackRect.bottom - trackRect.top);
+    int trackTop = trackRect.top;
+    int trackWidth = trackRect.right - trackRect.left;
+    LICE_FillRect(&surface, trackRect.left, trackTop, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(55, 55, 55)));
+    LICE_DrawRect(&surface, trackRect.left, trackTop, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(90, 90, 90)));
+
+    double clampedNorm = std::clamp(normalizedValue, 0.0, 1.0);
+    int handleWidth = 12;
+    int handleRange = std::max(trackWidth - handleWidth, 1);
+    int handleX = trackRect.left + static_cast<int>(std::round(clampedNorm * handleRange));
+    RECT handleRect {handleX, trackTop - 4, handleX + handleWidth, trackTop + trackHeight + 4};
+    LICE_FillRect(&surface, handleRect.left, handleRect.top, handleRect.right - handleRect.left,
+                  handleRect.bottom - handleRect.top, LICE_ColorFromCOLORREF(RGB(0, 120, 200)));
+    LICE_DrawRect(&surface, handleRect.left, handleRect.top, handleRect.right - handleRect.left,
+                  handleRect.bottom - handleRect.top, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
+
+    sliderRects.track = trackRect;
+}
+
 void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
 {
     bool playing = isPlaying.load(std::memory_order_relaxed);
@@ -455,6 +584,95 @@ void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
     }
 }
 
+void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
+{
+    int panelLeft = 40;
+    int panelRight = client.right - 40;
+    if (panelRight <= panelLeft)
+    {
+        mixerPanelRect = {0, 0, 0, 0};
+        gVolumeSliderControl = {};
+        gPanSliderControl = {};
+        for (auto& slider : gEqSliderControls)
+            slider = {};
+        return;
+    }
+
+    int panelTop = stepRects[0].bottom + 40;
+    int panelPadding = 20;
+    int headerHeight = 24;
+    int sliderHeight = 70;
+    int horizontalSpacing = 30;
+    int verticalSpacing = 24;
+
+    RECT headerRect {panelLeft + panelPadding, panelTop + panelPadding,
+                     panelRight - panelPadding, panelTop + panelPadding + headerHeight};
+
+    int sliderRowTop = headerRect.bottom + 10;
+    RECT volumeRect {panelLeft + panelPadding, sliderRowTop,
+                     panelLeft + panelPadding + 220, sliderRowTop + sliderHeight};
+    RECT panRect {volumeRect.right + horizontalSpacing, sliderRowTop,
+                  volumeRect.right + horizontalSpacing + 220, sliderRowTop + sliderHeight};
+
+    int eqAvailableWidth = panelRight - panelLeft - panelPadding * 2;
+    int eqSpacing = horizontalSpacing;
+    int eqWidth = (eqAvailableWidth - eqSpacing * 2) / 3;
+    if (eqWidth < 120)
+        eqWidth = 120;
+    int eqRowTop = volumeRect.bottom + verticalSpacing;
+    RECT eqRect0 {panelLeft + panelPadding, eqRowTop,
+                  panelLeft + panelPadding + eqWidth, eqRowTop + sliderHeight};
+    RECT eqRect1 {eqRect0.right + eqSpacing, eqRowTop,
+                  eqRect0.right + eqSpacing + eqWidth, eqRowTop + sliderHeight};
+    RECT eqRect2 {eqRect1.right + eqSpacing, eqRowTop,
+                  eqRect1.right + eqSpacing + eqWidth, eqRowTop + sliderHeight};
+
+    int panelBottom = eqRect0.bottom + panelPadding;
+    mixerPanelRect = {panelLeft, panelTop, panelRight, panelBottom};
+
+    int width = mixerPanelRect.right - mixerPanelRect.left;
+    int height = mixerPanelRect.bottom - mixerPanelRect.top;
+    if (width <= 0 || height <= 0)
+        return;
+
+    LICE_FillRect(&surface, mixerPanelRect.left, mixerPanelRect.top, width, height,
+                  LICE_ColorFromCOLORREF(RGB(30, 30, 30)));
+    LICE_DrawRect(&surface, mixerPanelRect.left, mixerPanelRect.top, width, height,
+                  LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
+
+    drawText(surface, headerRect, "Mixer", RGB(230, 230, 230), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    if (!activeTrack)
+    {
+        RECT messageRect {headerRect.left, headerRect.bottom + 20, headerRect.right, headerRect.bottom + 60};
+        drawText(surface, messageRect, "Select a track to adjust mixer settings.", RGB(200, 200, 200),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        gVolumeSliderControl = {};
+        gPanSliderControl = {};
+        for (auto& slider : gEqSliderControls)
+            slider = {};
+        return;
+    }
+
+    double volumeNorm = computeNormalized(activeTrack->volume, kMixerVolumeMin, kMixerVolumeMax);
+    double panNorm = computeNormalized(activeTrack->pan, kMixerPanMin, kMixerPanMax);
+    double lowNorm = computeNormalized(activeTrack->lowGainDb, kMixerEqMin, kMixerEqMax);
+    double midNorm = computeNormalized(activeTrack->midGainDb, kMixerEqMin, kMixerEqMax);
+    double highNorm = computeNormalized(activeTrack->highGainDb, kMixerEqMin, kMixerEqMax);
+
+    drawSliderControl(surface, gVolumeSliderControl, volumeRect, volumeNorm,
+                      "Volume", formatVolumeValue(activeTrack->volume));
+    drawSliderControl(surface, gPanSliderControl, panRect, panNorm,
+                      "Pan", formatPanValue(activeTrack->pan));
+
+    drawSliderControl(surface, gEqSliderControls[0], eqRect0, lowNorm,
+                      kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
+    drawSliderControl(surface, gEqSliderControls[1], eqRect1, midNorm,
+                      kEqBandLabels[1], formatEqValue(activeTrack->midGainDb));
+    drawSliderControl(surface, gEqSliderControls[2], eqRect2, highNorm,
+                      kEqBandLabels[2], formatEqValue(activeTrack->highGainDb));
+}
+
 void renderUI(LICE_SysBitmap& surface, const RECT& client)
 {
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
@@ -476,32 +694,34 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         setActiveSequencerTrackId(activeTrackId);
     }
 
+    const Track* activeTrackPtr = findTrackById(tracks, activeTrackId);
+    Track fallbackTrack{};
+    if (!activeTrackPtr && activeTrackId > 0)
+    {
+        fallbackTrack.id = activeTrackId;
+        fallbackTrack.type = trackGetType(activeTrackId);
+        fallbackTrack.synthWaveType = trackGetSynthWaveType(activeTrackId);
+        fallbackTrack.volume = trackGetVolume(activeTrackId);
+        fallbackTrack.pan = trackGetPan(activeTrackId);
+        fallbackTrack.lowGainDb = trackGetEqLowGain(activeTrackId);
+        fallbackTrack.midGainDb = trackGetEqMidGain(activeTrackId);
+        fallbackTrack.highGainDb = trackGetEqHighGain(activeTrackId);
+        activeTrackPtr = &fallbackTrack;
+    }
+
     bool showSampleLoader = false;
     bool showWaveSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
-    if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
+    if (activeTrackPtr)
     {
-        if (activeTrack->type == TrackType::Sample)
+        if (activeTrackPtr->type == TrackType::Sample)
         {
             showSampleLoader = true;
         }
-        else if (activeTrack->type == TrackType::Synth)
+        else if (activeTrackPtr->type == TrackType::Synth)
         {
             showWaveSelector = true;
-            activeWaveType = activeTrack->synthWaveType;
-        }
-    }
-    else if (activeTrackId > 0)
-    {
-        TrackType trackType = trackGetType(activeTrackId);
-        if (trackType == TrackType::Sample)
-        {
-            showSampleLoader = true;
-        }
-        else if (trackType == TrackType::Synth)
-        {
-            showWaveSelector = true;
-            activeWaveType = trackGetSynthWaveType(activeTrackId);
+            activeWaveType = activeTrackPtr->synthWaveType;
         }
     }
 
@@ -711,6 +931,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     drawSequencer(surface, activeTrackId);
 
+    drawMixerControls(surface, client, activeTrackPtr);
+
     for (const auto& option : dropdownOptions)
     {
         COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
@@ -835,6 +1057,58 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             audioDeviceDropdownOpen = false;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        }
+
+        if (activeTrackId > 0)
+        {
+            if (pointInRect(gVolumeSliderControl.control, x, y))
+            {
+                float newVolume = sliderValueFromPosition(gVolumeSliderControl, x, kMixerVolumeMin, kMixerVolumeMax);
+                trackSetVolume(activeTrackId, newVolume);
+                openTrackTypeTrackId = 0;
+                waveDropdownOpen = false;
+                audioDeviceDropdownOpen = false;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+
+            if (pointInRect(gPanSliderControl.control, x, y))
+            {
+                float newPan = sliderValueFromPosition(gPanSliderControl, x, kMixerPanMin, kMixerPanMax);
+                trackSetPan(activeTrackId, newPan);
+                openTrackTypeTrackId = 0;
+                waveDropdownOpen = false;
+                audioDeviceDropdownOpen = false;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+
+            for (size_t eqIndex = 0; eqIndex < gEqSliderControls.size(); ++eqIndex)
+            {
+                if (pointInRect(gEqSliderControls[eqIndex].control, x, y))
+                {
+                    float newGain = sliderValueFromPosition(gEqSliderControls[eqIndex], x, kMixerEqMin, kMixerEqMax);
+                    switch (eqIndex)
+                    {
+                    case 0:
+                        trackSetEqLowGain(activeTrackId, newGain);
+                        break;
+                    case 1:
+                        trackSetEqMidGain(activeTrackId, newGain);
+                        break;
+                    case 2:
+                        trackSetEqHighGain(activeTrackId, newGain);
+                        break;
+                    default:
+                        break;
+                    }
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
         }
 
         int previousDropdownTrack = openTrackTypeTrackId;

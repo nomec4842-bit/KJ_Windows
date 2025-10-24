@@ -27,6 +27,11 @@ struct Track
     std::string name;
     TrackType type = TrackType::Synth;
     SynthWaveType synthWaveType = SynthWaveType::Sine;
+    float volume = 1.0f;
+    float pan = 0.0f;
+    float lowGainDb = 0.0f;
+    float midGainDb = 0.0f;
+    float highGainDb = 0.0f;
 };
 
 void initTracks();
@@ -39,6 +44,20 @@ void trackSetType(int trackId, TrackType type);
 
 SynthWaveType trackGetSynthWaveType(int trackId);
 void trackSetSynthWaveType(int trackId, SynthWaveType type);
+
+float trackGetVolume(int trackId);
+void trackSetVolume(int trackId, float volume);
+
+float trackGetPan(int trackId);
+void trackSetPan(int trackId, float pan);
+
+float trackGetEqLowGain(int trackId);
+float trackGetEqMidGain(int trackId);
+float trackGetEqHighGain(int trackId);
+
+void trackSetEqLowGain(int trackId, float gainDb);
+void trackSetEqMidGain(int trackId, float gainDb);
+void trackSetEqHighGain(int trackId, float gainDb);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);

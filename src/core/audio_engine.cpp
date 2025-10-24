@@ -58,6 +58,163 @@ std::filesystem::path findDefaultSamplePath() {
     return {};
 }
 
+struct BiquadFilter {
+    double b0 = 1.0;
+    double b1 = 0.0;
+    double b2 = 0.0;
+    double a1 = 0.0;
+    double a2 = 0.0;
+    double z1L = 0.0;
+    double z2L = 0.0;
+    double z1R = 0.0;
+    double z2R = 0.0;
+};
+
+constexpr double kPi = 3.14159265358979323846264338327950288;
+constexpr double kLowShelfFrequency = 200.0;
+constexpr double kMidPeakFrequency = 1000.0;
+constexpr double kHighShelfFrequency = 5000.0;
+constexpr double kMidPeakQ = 1.0;
+
+void resetFilterState(BiquadFilter& filter)
+{
+    filter.z1L = filter.z2L = 0.0;
+    filter.z1R = filter.z2R = 0.0;
+}
+
+void setBiquadCoefficients(BiquadFilter& filter, double b0, double b1, double b2, double a0, double a1, double a2)
+{
+    if (std::abs(a0) < 1e-12)
+        a0 = 1.0;
+
+    filter.b0 = b0 / a0;
+    filter.b1 = b1 / a0;
+    filter.b2 = b2 / a0;
+    filter.a1 = a1 / a0;
+    filter.a2 = a2 / a0;
+}
+
+double processBiquadSample(BiquadFilter& filter, double input, bool rightChannel)
+{
+    double& z1 = rightChannel ? filter.z1R : filter.z1L;
+    double& z2 = rightChannel ? filter.z2R : filter.z2L;
+
+    double y = filter.b0 * input + z1;
+    double newZ1 = filter.b1 * input + z2 - filter.a1 * y;
+    double newZ2 = filter.b2 * input - filter.a2 * y;
+    z1 = newZ1;
+    z2 = newZ2;
+    return y;
+}
+
+double clampFrequency(double sampleRate, double frequency)
+{
+    double sr = std::max(sampleRate, 1.0);
+    double nyquist = sr * 0.5;
+    double minFreq = 10.0;
+    double maxFreq = std::max(nyquist - 10.0, minFreq);
+    return std::clamp(frequency, minFreq, maxFreq);
+}
+
+void configureLowShelf(BiquadFilter& filter, double sampleRate, double frequency, double gainDb)
+{
+    double sr = std::max(sampleRate, 1.0);
+    double w0 = 2.0 * kPi * clampFrequency(sr, frequency) / sr;
+    double cosw0 = std::cos(w0);
+    double sinw0 = std::sin(w0);
+    double A = std::pow(10.0, gainDb / 40.0);
+    double alpha = sinw0 / 2.0 * std::sqrt(2.0);
+    double twoSqrtAAlpha = 2.0 * std::sqrt(A) * alpha;
+
+    double b0 = A * ((A + 1.0) - (A - 1.0) * cosw0 + twoSqrtAAlpha);
+    double b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosw0);
+    double b2 = A * ((A + 1.0) - (A - 1.0) * cosw0 - twoSqrtAAlpha);
+    double a0 = (A + 1.0) + (A - 1.0) * cosw0 + twoSqrtAAlpha;
+    double a1 = -2.0 * ((A - 1.0) + (A + 1.0) * cosw0);
+    double a2 = (A + 1.0) + (A - 1.0) * cosw0 - twoSqrtAAlpha;
+    setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
+}
+
+void configureHighShelf(BiquadFilter& filter, double sampleRate, double frequency, double gainDb)
+{
+    double sr = std::max(sampleRate, 1.0);
+    double w0 = 2.0 * kPi * clampFrequency(sr, frequency) / sr;
+    double cosw0 = std::cos(w0);
+    double sinw0 = std::sin(w0);
+    double A = std::pow(10.0, gainDb / 40.0);
+    double alpha = sinw0 / 2.0 * std::sqrt(2.0);
+    double twoSqrtAAlpha = 2.0 * std::sqrt(A) * alpha;
+
+    double b0 = A * ((A + 1.0) + (A - 1.0) * cosw0 + twoSqrtAAlpha);
+    double b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cosw0);
+    double b2 = A * ((A + 1.0) + (A - 1.0) * cosw0 - twoSqrtAAlpha);
+    double a0 = (A + 1.0) - (A - 1.0) * cosw0 + twoSqrtAAlpha;
+    double a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cosw0);
+    double a2 = (A + 1.0) - (A - 1.0) * cosw0 - twoSqrtAAlpha;
+    setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
+}
+
+void configurePeaking(BiquadFilter& filter, double sampleRate, double frequency, double gainDb, double Q)
+{
+    double sr = std::max(sampleRate, 1.0);
+    double w0 = 2.0 * kPi * clampFrequency(sr, frequency) / sr;
+    double cosw0 = std::cos(w0);
+    double sinw0 = std::sin(w0);
+    double A = std::pow(10.0, gainDb / 40.0);
+    double safeQ = std::max(Q, 0.1);
+    double alpha = sinw0 / (2.0 * safeQ);
+
+    double b0 = 1.0 + alpha * A;
+    double b1 = -2.0 * cosw0;
+    double b2 = 1.0 - alpha * A;
+    double a0 = 1.0 + alpha / A;
+    double a1 = -2.0 * cosw0;
+    double a2 = 1.0 - alpha / A;
+    setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
+}
+
+void updateMixerState(TrackPlaybackState& state, const Track& track, double sampleRate)
+{
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double newVolume = std::clamp(static_cast<double>(track.volume), 0.0, 1.0);
+    double newPan = std::clamp(static_cast<double>(track.pan), -1.0, 1.0);
+    double newLow = static_cast<double>(track.lowGainDb);
+    double newMid = static_cast<double>(track.midGainDb);
+    double newHigh = static_cast<double>(track.highGainDb);
+
+    bool sampleRateChanged = std::abs(state.lastSampleRate - sr) > 1e-6;
+    bool lowChanged = sampleRateChanged || std::abs(state.lowGain - newLow) > 1e-6;
+    bool midChanged = sampleRateChanged || std::abs(state.midGain - newMid) > 1e-6;
+    bool highChanged = sampleRateChanged || std::abs(state.highGain - newHigh) > 1e-6;
+
+    if (lowChanged)
+    {
+        configureLowShelf(state.lowShelf, sr, kLowShelfFrequency, newLow);
+        state.lowGain = newLow;
+    }
+    if (midChanged)
+    {
+        configurePeaking(state.midPeak, sr, kMidPeakFrequency, newMid, kMidPeakQ);
+        state.midGain = newMid;
+    }
+    if (highChanged)
+    {
+        configureHighShelf(state.highShelf, sr, kHighShelfFrequency, newHigh);
+        state.highGain = newHigh;
+    }
+
+    if (sampleRateChanged || lowChanged || midChanged || highChanged)
+    {
+        resetFilterState(state.lowShelf);
+        resetFilterState(state.midPeak);
+        resetFilterState(state.highShelf);
+    }
+
+    state.volume = newVolume;
+    state.pan = newPan;
+    state.lastSampleRate = sr;
+}
+
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     double envelope = 0.0;
@@ -67,6 +224,15 @@ struct TrackPlaybackState {
     double sampleIncrement = 1.0;
     std::shared_ptr<const SampleBuffer> sampleBuffer;
     size_t sampleFrameCount = 0;
+    double volume = 1.0;
+    double pan = 0.0;
+    double lowGain = 0.0;
+    double midGain = 0.0;
+    double highGain = 0.0;
+    double lastSampleRate = 0.0;
+    BiquadFilter lowShelf;
+    BiquadFilter midPeak;
+    BiquadFilter highShelf;
 };
 
 } // namespace
@@ -254,6 +420,8 @@ void audioLoop() {
                     state.samplePlaying = false;
                     state.samplePosition = 0.0;
                 }
+
+                updateMixerState(state, trackInfo, sampleRate);
             }
 
             for (UINT32 i = 0; i < available; i++) {
@@ -327,6 +495,9 @@ void audioLoop() {
                             }
                         }
 
+                        double trackLeft = 0.0;
+                        double trackRight = 0.0;
+
                         if (trackInfo.type == TrackType::Sample) {
                             if (triggered) {
                                 if (state.sampleBuffer && state.sampleFrameCount > 0) {
@@ -344,8 +515,8 @@ void audioLoop() {
                                     const auto& rawSamples = state.sampleBuffer->samples;
                                     float leftSample = rawSamples[index * channels];
                                     float rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
-                                    leftValue += static_cast<double>(leftSample);
-                                    rightValue += static_cast<double>(rightSample);
+                                    trackLeft = static_cast<double>(leftSample);
+                                    trackRight = static_cast<double>(rightSample);
                                     state.samplePosition += state.sampleIncrement;
                                 } else {
                                     state.samplePlaying = false;
@@ -395,9 +566,25 @@ void audioLoop() {
                             state.phase += twoPi * baseFreq / sampleRate;
                             if (state.phase >= twoPi)
                                 state.phase -= twoPi;
-                            leftValue += sampleValue;
-                            rightValue += sampleValue;
+                            trackLeft = sampleValue;
+                            trackRight = sampleValue;
                         }
+
+                        double processedLeft = processBiquadSample(state.lowShelf, trackLeft, false);
+                        processedLeft = processBiquadSample(state.midPeak, processedLeft, false);
+                        processedLeft = processBiquadSample(state.highShelf, processedLeft, false);
+
+                        double processedRight = processBiquadSample(state.lowShelf, trackRight, true);
+                        processedRight = processBiquadSample(state.midPeak, processedRight, true);
+                        processedRight = processBiquadSample(state.highShelf, processedRight, true);
+
+                        double panAmount = std::clamp((state.pan + 1.0) * 0.5, 0.0, 1.0);
+                        double leftPanGain = std::cos(panAmount * (kPi * 0.5));
+                        double rightPanGain = std::sin(panAmount * (kPi * 0.5));
+                        double volumeGain = state.volume;
+
+                        leftValue += processedLeft * volumeGain * leftPanGain;
+                        rightValue += processedRight * volumeGain * rightPanGain;
                     }
 
                     leftValue = std::clamp(leftValue, -1.0, 1.0);
