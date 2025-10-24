@@ -15,9 +15,9 @@
 #include <unordered_map>
 #include <mutex>
 
+#include "core/tracks.h"
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
-#include "core/tracks.h"
 #include "core/audio_device_handler.h"
 
 std::atomic<bool> isPlaying = false;
@@ -173,6 +173,27 @@ void configurePeaking(BiquadFilter& filter, double sampleRate, double frequency,
     setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
 }
 
+struct TrackPlaybackState {
+    TrackType type = TrackType::Synth;
+    double envelope = 0.0;
+    double phase = 0.0;
+    bool samplePlaying = false;
+    double samplePosition = 0.0;
+    double sampleIncrement = 1.0;
+    std::shared_ptr<const SampleBuffer> sampleBuffer;
+    size_t sampleFrameCount = 0;
+    double volume = 1.0;
+    double pan = 0.0;
+    double lowGain = 0.0;
+    double midGain = 0.0;
+    double highGain = 0.0;
+    double lastSampleRate = 0.0;
+    BiquadFilter lowShelf;
+    BiquadFilter midPeak;
+    BiquadFilter highShelf;
+};
+
+// Added proper includes and scope for updateMixerState (fix undefined type errors)
 void updateMixerState(TrackPlaybackState& state, const Track& track, double sampleRate)
 {
     double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
@@ -214,26 +235,6 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     state.pan = newPan;
     state.lastSampleRate = sr;
 }
-
-struct TrackPlaybackState {
-    TrackType type = TrackType::Synth;
-    double envelope = 0.0;
-    double phase = 0.0;
-    bool samplePlaying = false;
-    double samplePosition = 0.0;
-    double sampleIncrement = 1.0;
-    std::shared_ptr<const SampleBuffer> sampleBuffer;
-    size_t sampleFrameCount = 0;
-    double volume = 1.0;
-    double pan = 0.0;
-    double lowGain = 0.0;
-    double midGain = 0.0;
-    double highGain = 0.0;
-    double lastSampleRate = 0.0;
-    BiquadFilter lowShelf;
-    BiquadFilter midPeak;
-    BiquadFilter highShelf;
-};
 
 } // namespace
 
