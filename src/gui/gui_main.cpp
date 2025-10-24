@@ -159,7 +159,8 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
     int maxX = rect.right - textWidth;
     if (maxX < rect.left)
         maxX = rect.left;
-    x = std::clamp(x, static_cast<int>(rect.left), maxX); // Ensure clamp arguments use a consistent int type.
+    // Cast for consistent LONG type usage
+    x = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(x), rect.left, static_cast<LONG>(maxX)));
 
     int y = rect.top;
     if (format & DT_VCENTER)
@@ -174,7 +175,8 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
     int maxY = rect.bottom - textHeight;
     if (maxY < rect.top)
         maxY = rect.top;
-    y = std::clamp(y, static_cast<int>(rect.top), maxY); // Ensure clamp arguments use a consistent int type.
+    // Cast for consistent LONG type usage
+    y = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(y), rect.top, static_cast<LONG>(maxY)));
 
     LICE_DrawText(&surface, x, y, text, LICE_ColorFromCOLORREF(color), 1.0f, LICE_BLIT_MODE_COPY);
 }
@@ -429,7 +431,8 @@ float sliderValueFromPosition(const SliderControlRects& slider, int x, float min
     if (trackWidth <= 0)
         return minValue;
 
-    int clampedX = std::clamp(x, slider.track.left, slider.track.right);
+    // Cast for consistent LONG type usage
+    int clampedX = static_cast<int>(std::clamp<LONG>(static_cast<LONG>(x), slider.track.left, slider.track.right));
     double normalized = static_cast<double>(clampedX - slider.track.left) / static_cast<double>(trackWidth);
     double value = static_cast<double>(minValue) + normalized * (static_cast<double>(maxValue) - static_cast<double>(minValue));
     float result = static_cast<float>(value);
@@ -483,7 +486,8 @@ void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects,
     drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT valueRect = area;
-    valueRect.top = std::max(valueRect.bottom - 18, area.top);
+    // Cast for consistent LONG type usage
+    valueRect.top = std::max<LONG>(valueRect.bottom - 18, area.top);
     drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     RECT trackRect = area;
@@ -502,7 +506,8 @@ void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects,
         trackRect.right = trackRect.left + 20;
     }
 
-    int trackHeight = std::max(4, trackRect.bottom - trackRect.top);
+    // Cast for consistent LONG type usage
+    int trackHeight = static_cast<int>(std::max<LONG>(4, trackRect.bottom - trackRect.top));
     int trackTop = trackRect.top;
     int trackWidth = trackRect.right - trackRect.left;
     LICE_FillRect(&surface, trackRect.left, trackTop, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(55, 55, 55)));
