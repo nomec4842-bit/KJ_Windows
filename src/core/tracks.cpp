@@ -21,6 +21,14 @@ constexpr float kMinPan = -1.0f;
 constexpr float kMaxPan = 1.0f;
 constexpr float kMinEqGainDb = -12.0f;
 constexpr float kMaxEqGainDb = 12.0f;
+constexpr int kMinMidiNote = 0;
+constexpr int kMaxMidiNote = 127;
+constexpr int kDefaultMidiNote = 69; // A4
+
+int clampMidiNote(int note)
+{
+    return std::clamp(note, kMinMidiNote, kMaxMidiNote);
+}
 
 struct TrackData
 {
@@ -45,6 +53,7 @@ struct TrackData
         {
             bool enabled = (i < kSequencerStepsPerPage) ? (i % 4 == 0) : false;
             steps[i].store(enabled, std::memory_order_relaxed);
+            notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
         }
     }
 
@@ -57,6 +66,7 @@ struct TrackData
     std::atomic<float> midGainDb{0.0f};
     std::atomic<float> highGainDb{0.0f};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
+    std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
     std::atomic<int> stepCount{1};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
 };
@@ -197,6 +207,40 @@ void trackToggleStepState(int trackId, int stepIndex)
     track->steps[stepIndex].store(!current, std::memory_order_relaxed);
 }
 
+int trackGetStepNote(int trackId, int stepIndex)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return kDefaultMidiNote;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultMidiNote;
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return kDefaultMidiNote;
+
+    int note = track->notes[stepIndex].load(std::memory_order_relaxed);
+    return clampMidiNote(note);
+}
+
+void trackSetStepNote(int trackId, int stepIndex, int midiNote)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return;
+
+    int clamped = clampMidiNote(midiNote);
+    track->notes[stepIndex].store(clamped, std::memory_order_relaxed);
+}
+
 int trackGetStepCount(int trackId)
 {
     auto track = findTrackData(trackId);
@@ -223,6 +267,7 @@ void trackSetStepCount(int trackId, int count)
         for (int i = previous; i < clamped; ++i)
         {
             track->steps[i].store(false, std::memory_order_relaxed);
+            track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
         }
     }
     else
@@ -230,6 +275,7 @@ void trackSetStepCount(int trackId, int count)
         for (int i = clamped; i < previous; ++i)
         {
             track->steps[i].store(false, std::memory_order_relaxed);
+            track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
         }
     }
 
