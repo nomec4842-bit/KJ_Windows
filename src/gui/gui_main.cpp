@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <commdlg.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <array>
@@ -92,6 +93,123 @@ bool gPianoRollClassRegistered = false;
 constexpr wchar_t kPianoRollWindowClassName[] = L"KJPianoRollWindow";
 constexpr int kPianoRollWindowWidth = 640;
 constexpr int kPianoRollWindowHeight = 360;
+constexpr int kPianoRollMargin = 10;
+constexpr int kPianoRollKeyboardWidth = 80;
+constexpr int kPianoRollNoteRows = 24;
+constexpr int kPianoRollLowestNote = 48; // C3
+constexpr int kPianoRollHighestNote = kPianoRollLowestNote + kPianoRollNoteRows - 1;
+constexpr COLORREF kPianoRollGridBackground = RGB(30, 30, 30);
+constexpr COLORREF kPianoRollGridLine = RGB(60, 60, 60);
+constexpr COLORREF kPianoRollActiveNote = RGB(0, 140, 220);
+constexpr COLORREF kPianoRollPlayingColumn = RGB(50, 50, 50);
+constexpr COLORREF kPianoRollKeyboardLight = RGB(80, 80, 80);
+constexpr COLORREF kPianoRollKeyboardDark = RGB(45, 45, 45);
+
+struct PianoRollLayout
+{
+    RECT client{};
+    RECT grid{};
+    RECT keyboard{};
+    std::array<int, kSequencerStepsPerPage + 1> columnX{};
+    std::array<int, kPianoRollNoteRows + 1> rowY{};
+};
+
+PianoRollLayout computePianoRollLayout(const RECT& client)
+{
+    PianoRollLayout layout{};
+    layout.client = client;
+
+    LONG clientLeft = client.left;
+    LONG clientTop = client.top;
+    LONG clientRight = client.right;
+    LONG clientBottom = client.bottom;
+
+    if (clientRight < clientLeft)
+        std::swap(clientRight, clientLeft);
+    if (clientBottom < clientTop)
+        std::swap(clientBottom, clientTop);
+
+    layout.grid.left = static_cast<LONG>(clientLeft + kPianoRollMargin + kPianoRollKeyboardWidth);
+    layout.grid.top = static_cast<LONG>(clientTop + kPianoRollMargin);
+    layout.grid.right = static_cast<LONG>(std::max(layout.grid.left, clientRight - kPianoRollMargin));
+    layout.grid.bottom = static_cast<LONG>(std::max(layout.grid.top, clientBottom - kPianoRollMargin));
+
+    layout.keyboard.left = static_cast<LONG>(clientLeft + kPianoRollMargin);
+    layout.keyboard.top = layout.grid.top;
+    layout.keyboard.right = layout.grid.left;
+    layout.keyboard.bottom = layout.grid.bottom;
+
+    int gridWidth = std::max<LONG>(0, layout.grid.right - layout.grid.left);
+    int gridHeight = std::max<LONG>(0, layout.grid.bottom - layout.grid.top);
+
+    int baseColumnWidth = kSequencerStepsPerPage > 0 ? gridWidth / kSequencerStepsPerPage : 0;
+    int columnRemainder = kSequencerStepsPerPage > 0 ? gridWidth % kSequencerStepsPerPage : 0;
+    int x = layout.grid.left;
+    for (int i = 0; i < kSequencerStepsPerPage; ++i)
+    {
+        layout.columnX[i] = x;
+        int increment = baseColumnWidth + (i < columnRemainder ? 1 : 0);
+        x += increment;
+    }
+    layout.columnX[kSequencerStepsPerPage] = layout.grid.right;
+
+    int baseRowHeight = kPianoRollNoteRows > 0 ? gridHeight / kPianoRollNoteRows : 0;
+    int rowRemainder = kPianoRollNoteRows > 0 ? gridHeight % kPianoRollNoteRows : 0;
+    int y = layout.grid.top;
+    for (int i = 0; i < kPianoRollNoteRows; ++i)
+    {
+        layout.rowY[i] = y;
+        int increment = baseRowHeight + (i < rowRemainder ? 1 : 0);
+        y += increment;
+    }
+    layout.rowY[kPianoRollNoteRows] = layout.grid.bottom;
+
+    return layout;
+}
+
+bool midiNoteIsBlack(int midiNote)
+{
+    int note = midiNote % 12;
+    if (note < 0)
+        note += 12;
+    switch (note)
+    {
+    case 1:
+    case 3:
+    case 6:
+    case 8:
+    case 10:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::wstring midiNoteToLabel(int midiNote)
+{
+    static const wchar_t* kNames[12] = {L"C", L"C#", L"D", L"D#", L"E", L"F", L"F#", L"G", L"G#", L"A", L"A#", L"B"};
+    int clamped = std::clamp(midiNote, 0, 127);
+    int octave = clamped / 12 - 1;
+    const wchar_t* name = kNames[clamped % 12];
+    std::wstring label(name);
+    label += std::to_wstring(octave);
+    return label;
+}
+
+int midiNoteToRow(int midiNote)
+{
+    if (midiNote < kPianoRollLowestNote || midiNote > kPianoRollHighestNote)
+        return -1;
+    return kPianoRollHighestNote - midiNote;
+}
+
+void invalidatePianoRollWindow()
+{
+    if (gPianoRollWindow && IsWindow(gPianoRollWindow))
+    {
+        InvalidateRect(gPianoRollWindow, nullptr, FALSE);
+    }
+}
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
 
@@ -270,6 +388,8 @@ void clampCurrentPageForTrack(int activeTrackId)
         currentStepPage = totalPages - 1;
     if (currentStepPage < 0)
         currentStepPage = 0;
+
+    invalidatePianoRollWindow();
 }
 
 int ensureSelectedTrack(const std::vector<Track>& tracks)
@@ -452,10 +572,14 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 {
     switch (msg)
     {
+    case WM_CREATE:
+        SetTimer(hwnd, 1, 50, nullptr);
+        return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        KillTimer(hwnd, 1);
         if (hwnd == gPianoRollWindow)
         {
             gPianoRollWindow = nullptr;
@@ -465,19 +589,195 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
         }
         return 0;
+    case WM_TIMER:
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONDOWN:
+    {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        PianoRollLayout layout = computePianoRollLayout(client);
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        if (x >= layout.grid.left && x < layout.grid.right && y >= layout.grid.top && y < layout.grid.bottom)
+        {
+            int column = -1;
+            for (int i = 0; i < kSequencerStepsPerPage; ++i)
+            {
+                if (x >= layout.columnX[i] && x < layout.columnX[i + 1])
+                {
+                    column = i;
+                    break;
+                }
+            }
+
+            int row = -1;
+            for (int i = 0; i < kPianoRollNoteRows; ++i)
+            {
+                if (y >= layout.rowY[i] && y < layout.rowY[i + 1])
+                {
+                    row = i;
+                    break;
+                }
+            }
+
+            if (column >= 0 && row >= 0)
+            {
+                int trackId = getActiveSequencerTrackId();
+                if (trackId > 0)
+                {
+                    int totalSteps = getSequencerStepCount(trackId);
+                    if (totalSteps < 1)
+                        totalSteps = kSequencerStepsPerPage;
+
+                    int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
+                    if (stepIndex < totalSteps)
+                    {
+                        int midiNote = kPianoRollHighestNote - row;
+                        bool enabled = getTrackStepState(trackId, stepIndex);
+                        int existingNote = trackGetStepNote(trackId, stepIndex);
+
+                        if (enabled && existingNote == midiNote)
+                        {
+                            trackSetStepState(trackId, stepIndex, false);
+                        }
+                        else
+                        {
+                            trackSetStepNote(trackId, stepIndex, midiNote);
+                            trackSetStepState(trackId, stepIndex, true);
+                        }
+
+                        invalidatePianoRollWindow();
+                        if (gMainWindow && IsWindow(gMainWindow))
+                        {
+                            InvalidateRect(gMainWindow, nullptr, FALSE);
+                        }
+                    }
+                }
+            }
+        }
+        return 0;
+    }
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rect;
-        GetClientRect(hwnd, &rect);
-        HBRUSH background = CreateSolidBrush(RGB(25, 25, 25));
-        FillRect(hdc, &rect, background);
+        RECT client;
+        GetClientRect(hwnd, &client);
+
+        HBRUSH background = CreateSolidBrush(RGB(20, 20, 20));
+        FillRect(hdc, &client, background);
         DeleteObject(background);
+
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(220, 220, 220));
-        const wchar_t* message = L"Piano roll view";
-        DrawTextW(hdc, message, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SetTextColor(hdc, RGB(230, 230, 230));
+
+        PianoRollLayout layout = computePianoRollLayout(client);
+
+        HBRUSH gridBrush = CreateSolidBrush(kPianoRollGridBackground);
+        FillRect(hdc, &layout.grid, gridBrush);
+        DeleteObject(gridBrush);
+
+        int trackId = getActiveSequencerTrackId();
+        int totalSteps = 0;
+        if (trackId > 0)
+            totalSteps = getSequencerStepCount(trackId);
+        if (totalSteps < 1)
+            totalSteps = kSequencerStepsPerPage;
+
+        int startStep = currentStepPage * kSequencerStepsPerPage;
+        int endStep = startStep + kSequencerStepsPerPage;
+
+        if (trackId > 0)
+        {
+            HBRUSH disabledBrush = CreateSolidBrush(RGB(24, 24, 24));
+            for (int column = 0; column < kSequencerStepsPerPage; ++column)
+            {
+                int stepIndex = startStep + column;
+                if (stepIndex >= totalSteps)
+                {
+                    RECT disabledRect {layout.columnX[column], layout.grid.top, layout.columnX[column + 1], layout.grid.bottom};
+                    FillRect(hdc, &disabledRect, disabledBrush);
+                }
+            }
+            DeleteObject(disabledBrush);
+        }
+
+        int playingStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+        if (playingStep >= startStep && playingStep < endStep)
+        {
+            int column = playingStep - startStep;
+            RECT columnRect {layout.columnX[column], layout.grid.top, layout.columnX[column + 1], layout.grid.bottom};
+            HBRUSH playingBrush = CreateSolidBrush(kPianoRollPlayingColumn);
+            FillRect(hdc, &columnRect, playingBrush);
+            DeleteObject(playingBrush);
+        }
+
+        if (trackId > 0)
+        {
+            for (int column = 0; column < kSequencerStepsPerPage; ++column)
+            {
+                int stepIndex = startStep + column;
+                if (stepIndex >= totalSteps)
+                    continue;
+
+                if (getTrackStepState(trackId, stepIndex))
+                {
+                    int midiNote = trackGetStepNote(trackId, stepIndex);
+                    int row = midiNoteToRow(midiNote);
+                    if (row >= 0 && row < kPianoRollNoteRows)
+                    {
+                        RECT cellRect {layout.columnX[column], layout.rowY[row], layout.columnX[column + 1], layout.rowY[row + 1]};
+                        HBRUSH noteBrush = CreateSolidBrush(kPianoRollActiveNote);
+                        FillRect(hdc, &cellRect, noteBrush);
+                        DeleteObject(noteBrush);
+                    }
+                }
+            }
+        }
+
+        for (int row = 0; row < kPianoRollNoteRows; ++row)
+        {
+            int midiNote = kPianoRollHighestNote - row;
+            RECT keyRect {layout.keyboard.left, layout.rowY[row], layout.keyboard.right, layout.rowY[row + 1]};
+            COLORREF keyColor = midiNoteIsBlack(midiNote) ? kPianoRollKeyboardDark : kPianoRollKeyboardLight;
+            HBRUSH keyBrush = CreateSolidBrush(keyColor);
+            FillRect(hdc, &keyRect, keyBrush);
+            DeleteObject(keyBrush);
+
+            RECT labelRect = keyRect;
+            labelRect.left += 6;
+            std::wstring label = midiNoteToLabel(midiNote);
+            DrawTextW(hdc, label.c_str(), -1, &labelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        HPEN gridPen = CreatePen(PS_SOLID, 1, kPianoRollGridLine);
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, gridPen));
+        for (int row = 0; row <= kPianoRollNoteRows; ++row)
+        {
+            MoveToEx(hdc, layout.grid.left, layout.rowY[row], nullptr);
+            LineTo(hdc, layout.grid.right, layout.rowY[row]);
+        }
+        for (int column = 0; column <= kSequencerStepsPerPage; ++column)
+        {
+            MoveToEx(hdc, layout.columnX[column], layout.grid.top, nullptr);
+            LineTo(hdc, layout.columnX[column], layout.grid.bottom);
+        }
+        SelectObject(hdc, oldPen);
+        DeleteObject(gridPen);
+
+        HBRUSH borderBrush = CreateSolidBrush(RGB(15, 15, 15));
+        FrameRect(hdc, &layout.keyboard, borderBrush);
+        FrameRect(hdc, &layout.grid, borderBrush);
+        DeleteObject(borderBrush);
+
+        if (trackId <= 0)
+        {
+            std::wstring message = L"Select a track to edit the piano roll.";
+            DrawTextW(hdc, message.c_str(), -1, &layout.grid, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -1495,6 +1795,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (stateChanged)
                 {
                     InvalidateRect(hwnd, nullptr, FALSE);
+                    invalidatePianoRollWindow();
                 }
                 return 0;
             }
@@ -1519,6 +1820,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             isPlaying.store(!playing, std::memory_order_relaxed);
             requestSequencerReset();
             InvalidateRect(hwnd, nullptr, FALSE);
+            invalidatePianoRollWindow();
             return 0;
         }
 
@@ -1579,6 +1881,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             clampCurrentPageForTrack(activeTrackId);
             InvalidateRect(hwnd, nullptr, FALSE);
+            invalidatePianoRollWindow();
             return 0;
         }
 
@@ -1593,6 +1896,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             clampCurrentPageForTrack(activeTrackId);
             InvalidateRect(hwnd, nullptr, FALSE);
+            invalidatePianoRollWindow();
             return 0;
         }
 
@@ -1602,6 +1906,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 --currentStepPage;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                invalidatePianoRollWindow();
             }
             return 0;
         }
@@ -1618,6 +1923,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 ++currentStepPage;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                invalidatePianoRollWindow();
             }
             return 0;
         }
@@ -1638,6 +1944,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         L"Add Track",
                         MB_OK | MB_ICONINFORMATION);
             InvalidateRect(hwnd, nullptr, FALSE);
+            invalidatePianoRollWindow();
             return 0;
         }
 
@@ -1653,6 +1960,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     toggleSequencerStep(activeTrackId, stepIndex);
                     InvalidateRect(hwnd, nullptr, FALSE);
+                    invalidatePianoRollWindow();
                 }
                 return 0;
             }

@@ -173,10 +173,18 @@ void configurePeaking(BiquadFilter& filter, double sampleRate, double frequency,
     setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
 }
 
+double midiNoteToFrequency(int midiNote)
+{
+    int clamped = std::clamp(midiNote, 0, 127);
+    return 440.0 * std::pow(2.0, (static_cast<double>(clamped) - 69.0) / 12.0);
+}
+
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     double envelope = 0.0;
     double phase = 0.0;
+    int currentMidiNote = 69;
+    double currentFrequency = midiNoteToFrequency(69);
     bool samplePlaying = false;
     double samplePosition = 0.0;
     double sampleIncrement = 1.0;
@@ -245,7 +253,6 @@ void audioLoop() {
     UINT32 bufferFrameCount = 0;
     const WAVEFORMATEX* format = nullptr;
     double sampleRate = 44100.0;
-    const double baseFreq = 440.0;
     const double twoPi = 6.283185307179586;
     double stepSampleCounter = 0.0;
     bool previousPlaying = false;
@@ -415,11 +422,17 @@ void audioLoop() {
                     }
                     state.envelope = 0.0;
                     state.phase = 0.0;
+                    state.currentMidiNote = 69;
+                    state.currentFrequency = midiNoteToFrequency(69);
                 } else {
                     state.sampleBuffer.reset();
                     state.sampleFrameCount = 0;
                     state.samplePlaying = false;
                     state.samplePosition = 0.0;
+                    if (state.currentMidiNote < 0 || state.currentMidiNote > 127) {
+                        state.currentMidiNote = 69;
+                    }
+                    state.currentFrequency = midiNoteToFrequency(state.currentMidiNote);
                 }
 
                 updateMixerState(state, trackInfo, sampleRate);
@@ -488,11 +501,15 @@ void audioLoop() {
 
                         bool gate = false;
                         bool triggered = false;
+                        int stepNote = state.currentMidiNote;
                         if (trackStepCount > 0 && currentStep < trackStepCount) {
                             if (getTrackStepState(trackInfo.id, currentStep)) {
                                 gate = true;
                                 if (stepAdvanced)
+                                {
+                                    stepNote = trackGetStepNote(trackInfo.id, currentStep);
                                     triggered = true;
+                                }
                             }
                         }
 
@@ -527,6 +544,9 @@ void audioLoop() {
                             double target = gate ? 0.8 : 0.0;
 
                             if (triggered) {
+                                state.currentMidiNote = stepNote;
+                                state.currentFrequency = midiNoteToFrequency(stepNote);
+                                state.phase = 0.0;
                                 state.envelope = 0.9;
                             }
 
@@ -564,7 +584,8 @@ void audioLoop() {
                             }
                             }
                             double sampleValue = waveform * state.envelope;
-                            state.phase += twoPi * baseFreq / sampleRate;
+                            double frequency = state.currentFrequency > 0.0 ? state.currentFrequency : midiNoteToFrequency(69);
+                            state.phase += twoPi * frequency / sampleRate;
                             if (state.phase >= twoPi)
                                 state.phase -= twoPi;
                             trackLeft = sampleValue;
