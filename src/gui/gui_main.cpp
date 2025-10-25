@@ -74,6 +74,7 @@ RECT pageDownButton = {580, 55, 620, 95};
 RECT pageUpButton = {630, 55, 670, 95};
 RECT addTrackButton = {690, 40, 780, 110};
 RECT audioDeviceButton = {40, 115, 340, 145};
+RECT pianoRollToggleButton {};
 RECT mixerPanelRect {};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
@@ -85,6 +86,12 @@ bool audioDeviceDropdownOpen = false;
 bool waveDropdownOpen = false;
 int waveDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
+HWND gPianoRollWindow = nullptr;
+bool gPianoRollClassRegistered = false;
+
+constexpr wchar_t kPianoRollWindowClassName[] = L"KJPianoRollWindow";
+constexpr int kPianoRollWindowWidth = 640;
+constexpr int kPianoRollWindowHeight = 360;
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
 
@@ -222,6 +229,23 @@ void buildStepRects()
         rect.right = rect.left + stepWidth;
         rect.bottom = rect.top + stepHeight;
         stepRects[i] = rect;
+    }
+
+    const int toggleHeight = 18;
+    pianoRollToggleButton.left = startX;
+    pianoRollToggleButton.right = startX + 160;
+    pianoRollToggleButton.bottom = startY - 2;
+    pianoRollToggleButton.top = pianoRollToggleButton.bottom - toggleHeight;
+    LONG minimumTop = kTrackTabsTop + kTrackTabHeight;
+    if (pianoRollToggleButton.top < minimumTop)
+    {
+        pianoRollToggleButton.top = minimumTop;
+        pianoRollToggleButton.bottom = pianoRollToggleButton.top + toggleHeight;
+        if (pianoRollToggleButton.bottom > startY - 2)
+        {
+            pianoRollToggleButton.bottom = startY - 2;
+            pianoRollToggleButton.top = pianoRollToggleButton.bottom - toggleHeight;
+        }
     }
 }
 
@@ -413,6 +437,118 @@ void ensureSurfaceSize(int width, int height)
     }
 
     gSurface->resize(width, height);
+}
+
+void closePianoRollWindow()
+{
+    if (gPianoRollWindow && IsWindow(gPianoRollWindow))
+    {
+        DestroyWindow(gPianoRollWindow);
+        gPianoRollWindow = nullptr;
+    }
+}
+
+LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        if (hwnd == gPianoRollWindow)
+        {
+            gPianoRollWindow = nullptr;
+            if (gMainWindow)
+            {
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            }
+        }
+        return 0;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        HBRUSH background = CreateSolidBrush(RGB(25, 25, 25));
+        FillRect(hdc, &rect, background);
+        DeleteObject(background);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(220, 220, 220));
+        const wchar_t* message = L"Piano roll view";
+        DrawTextW(hdc, message, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void ensurePianoRollWindowClass()
+{
+    if (gPianoRollClassRegistered)
+        return;
+
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = PianoRollWndProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kPianoRollWindowClassName;
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (RegisterClassW(&wc))
+    {
+        gPianoRollClassRegistered = true;
+    }
+}
+
+void togglePianoRollWindow(HWND parent)
+{
+    if (gPianoRollWindow && IsWindow(gPianoRollWindow))
+    {
+        closePianoRollWindow();
+        if (gMainWindow)
+        {
+            InvalidateRect(gMainWindow, nullptr, FALSE);
+        }
+        return;
+    }
+
+    ensurePianoRollWindowClass();
+    if (!gPianoRollClassRegistered)
+        return;
+
+    RECT parentRect {0, 0, 0, 0};
+    if (parent && IsWindow(parent))
+    {
+        GetWindowRect(parent, &parentRect);
+    }
+
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    if (parentRect.right > parentRect.left && parentRect.bottom > parentRect.top)
+    {
+        x = parentRect.left + 40;
+        y = parentRect.top + 80;
+    }
+
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW,
+                                kPianoRollWindowClassName,
+                                L"Piano Roll",
+                                WS_OVERLAPPEDWINDOW,
+                                x,
+                                y,
+                                kPianoRollWindowWidth,
+                                kPianoRollWindowHeight,
+                                parent,
+                                nullptr,
+                                GetModuleHandle(nullptr),
+                                nullptr);
+    if (hwnd)
+    {
+        gPianoRollWindow = hwnd;
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
 }
 
 void drawButton(LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, COLORREF outline, const char* text)
@@ -934,6 +1070,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     drawButton(surface, pageUpButton, RGB(50, 50, 50), RGB(120, 120, 120), ">");
     drawButton(surface, addTrackButton, RGB(50, 50, 50), RGB(120, 120, 120), "+Track");
 
+    bool pianoRollOpen = gPianoRollWindow && IsWindow(gPianoRollWindow);
+    COLORREF pianoRollFill = pianoRollOpen ? RGB(0, 90, 160) : RGB(50, 50, 50);
+    COLORREF pianoRollOutline = pianoRollOpen ? RGB(20, 20, 20) : RGB(120, 120, 120);
+    drawButton(surface, pianoRollToggleButton, pianoRollFill, pianoRollOutline,
+               pianoRollOpen ? "Hide Piano Roll" : "Show Piano Roll");
+
     auto activeOutputDevice = getActiveAudioOutputDevice();
     std::wstring audioLabel = L"Audio Output: ";
     if (!activeOutputDevice.name.empty())
@@ -1145,6 +1287,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 refreshAudioDeviceList(true);
             }
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        if (pointInRect(pianoRollToggleButton, x, y))
+        {
+            togglePianoRollWindow(hwnd);
+            audioDeviceDropdownOpen = false;
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -1537,6 +1689,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         KillTimer(hwnd, 1);
         gSurface.reset();
         gMainWindow = nullptr;
+        closePianoRollWindow();
         PostQuitMessage(0);
         return 0;
     }
