@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <commdlg.h>
+#include <commctrl.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -78,6 +79,7 @@ RECT addTrackButton = {690, 40, 780, 110};
 RECT audioDeviceButton = {40, 115, 340, 145};
 RECT pianoRollToggleButton {};
 RECT mixerPanelRect {};
+RECT effectsToggleButton {};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
 int selectedTrackId = 0;
@@ -90,6 +92,8 @@ int waveDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
+HWND gEffectsWindow = nullptr;
+bool gEffectsWindowClassRegistered = false;
 
 struct PianoRollDragState
 {
@@ -119,6 +123,14 @@ constexpr COLORREF kPianoRollActiveNote = RGB(0, 140, 220);
 constexpr COLORREF kPianoRollPlayingColumn = RGB(50, 50, 50);
 constexpr COLORREF kPianoRollKeyboardLight = RGB(80, 80, 80);
 constexpr COLORREF kPianoRollKeyboardDark = RGB(45, 45, 45);
+
+constexpr wchar_t kEffectsWindowClassName[] = L"KJEffectsWindow";
+constexpr int kEffectsWindowWidth = 520;
+constexpr int kEffectsWindowHeight = 360;
+
+constexpr UINT WM_EFFECTS_REFRESH_VALUES = WM_APP + 1;
+constexpr UINT WM_EFFECTS_RELOAD_TRACKS = WM_APP + 2;
+constexpr UINT WM_EFFECTS_SELECT_TRACK = WM_APP + 3;
 
 struct PianoRollLayout
 {
@@ -344,9 +356,9 @@ struct KnobControlRects
     int radius = 0;
 };
 
-SliderControlRects gVolumeSliderControl{};
-SliderControlRects gPanSliderControl{};
-std::array<KnobControlRects, 3> gEqKnobControls{};
+SliderControlRects gMainVolumeSliderControl{};
+SliderControlRects gMainPanSliderControl{};
+std::array<KnobControlRects, 3> gMainEqKnobControls{};
 
 const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
 
@@ -454,6 +466,14 @@ void buildStepRects()
             pianoRollToggleButton.bottom = startY - 2;
             pianoRollToggleButton.top = pianoRollToggleButton.bottom - toggleHeight;
         }
+    }
+
+    effectsToggleButton = pianoRollToggleButton;
+    effectsToggleButton.left = pianoRollToggleButton.right + 12;
+    effectsToggleButton.right = effectsToggleButton.left + (pianoRollToggleButton.right - pianoRollToggleButton.left);
+    if (effectsToggleButton.right <= effectsToggleButton.left)
+    {
+        effectsToggleButton.right = effectsToggleButton.left + 120;
     }
 }
 
@@ -1067,6 +1087,636 @@ void togglePianoRollWindow(HWND parent)
     }
 }
 
+enum
+{
+    kEffectsTrackListId = 1001,
+    kEffectsVolumeSliderId = 1002,
+    kEffectsPanSliderId = 1003,
+    kEffectsLowEqSliderId = 1004,
+    kEffectsMidEqSliderId = 1005,
+    kEffectsHighEqSliderId = 1006,
+};
+
+struct EffectsWindowState
+{
+    HWND trackList = nullptr;
+    HWND trackLabel = nullptr;
+    HWND volumeLabel = nullptr;
+    HWND volumeSlider = nullptr;
+    HWND volumeValueLabel = nullptr;
+    HWND panLabel = nullptr;
+    HWND panSlider = nullptr;
+    HWND panValueLabel = nullptr;
+    HWND lowEqLabel = nullptr;
+    HWND lowEqSlider = nullptr;
+    HWND lowEqValueLabel = nullptr;
+    HWND midEqLabel = nullptr;
+    HWND midEqSlider = nullptr;
+    HWND midEqValueLabel = nullptr;
+    HWND highEqLabel = nullptr;
+    HWND highEqSlider = nullptr;
+    HWND highEqValueLabel = nullptr;
+    int selectedTrackId = 0;
+};
+
+EffectsWindowState* getEffectsWindowState(HWND hwnd)
+{
+    return reinterpret_cast<EffectsWindowState*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+}
+
+void effectsWindowApplyFont(const EffectsWindowState& state, HFONT font)
+{
+    const HWND controls[] = {
+        state.trackList,
+        state.trackLabel,
+        state.volumeLabel,
+        state.volumeSlider,
+        state.volumeValueLabel,
+        state.panLabel,
+        state.panSlider,
+        state.panValueLabel,
+        state.lowEqLabel,
+        state.lowEqSlider,
+        state.lowEqValueLabel,
+        state.midEqLabel,
+        state.midEqSlider,
+        state.midEqValueLabel,
+        state.highEqLabel,
+        state.highEqSlider,
+        state.highEqValueLabel,
+    };
+
+    for (HWND control : controls)
+    {
+        if (control)
+        {
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        }
+    }
+}
+
+void effectsWindowLayout(HWND hwnd, EffectsWindowState* state, int width, int height)
+{
+    if (!state)
+        return;
+
+    const int padding = 12;
+    const int listWidth = 180;
+    const int labelHeight = 18;
+    const int sliderHeight = 32;
+    const int controlSpacing = 10;
+    const int labelToSliderSpacing = 4;
+    const int valueLabelWidth = 110;
+
+    int usableWidth = std::max(width - padding * 3 - listWidth, 160);
+    int listHeight = std::max(height - padding * 2, 80);
+
+    if (state->trackList)
+    {
+        MoveWindow(state->trackList, padding, padding, listWidth, listHeight, TRUE);
+    }
+
+    int rightLeft = padding + listWidth + padding;
+    if (rightLeft + usableWidth > width - padding)
+    {
+        usableWidth = std::max(width - rightLeft - padding, 160);
+    }
+
+    int currentY = padding;
+
+    if (state->trackLabel)
+    {
+        MoveWindow(state->trackLabel, rightLeft, currentY, usableWidth, labelHeight, TRUE);
+        currentY += labelHeight + controlSpacing;
+    }
+
+    auto layoutRow = [&](HWND label, HWND slider, HWND valueLabel)
+    {
+        if (!label || !slider || !valueLabel)
+            return;
+
+        MoveWindow(label, rightLeft, currentY, usableWidth - valueLabelWidth, labelHeight, TRUE);
+        MoveWindow(valueLabel, rightLeft + usableWidth - valueLabelWidth, currentY, valueLabelWidth, labelHeight, TRUE);
+        currentY += labelHeight + labelToSliderSpacing;
+        MoveWindow(slider, rightLeft, currentY, usableWidth, sliderHeight, TRUE);
+        currentY += sliderHeight + controlSpacing;
+    };
+
+    layoutRow(state->volumeLabel, state->volumeSlider, state->volumeValueLabel);
+    layoutRow(state->panLabel, state->panSlider, state->panValueLabel);
+    layoutRow(state->lowEqLabel, state->lowEqSlider, state->lowEqValueLabel);
+    layoutRow(state->midEqLabel, state->midEqSlider, state->midEqValueLabel);
+    layoutRow(state->highEqLabel, state->highEqSlider, state->highEqValueLabel);
+}
+
+void effectsWindowSetValueText(HWND control, const std::string& text)
+{
+    if (!control)
+        return;
+
+    std::wstring wide = ToWideString(text);
+    if (wide.empty())
+        wide = L"-";
+    SetWindowTextW(control, wide.c_str());
+}
+
+void effectsWindowDisableControls(EffectsWindowState* state)
+{
+    if (!state)
+        return;
+
+    const HWND sliders[] = {
+        state->volumeSlider,
+        state->panSlider,
+        state->lowEqSlider,
+        state->midEqSlider,
+        state->highEqSlider,
+    };
+
+    for (HWND slider : sliders)
+    {
+        if (slider)
+        {
+            EnableWindow(slider, FALSE);
+            SendMessageW(slider, TBM_SETPOS, TRUE, 0);
+        }
+    }
+
+    const HWND valueLabels[] = {
+        state->volumeValueLabel,
+        state->panValueLabel,
+        state->lowEqValueLabel,
+        state->midEqValueLabel,
+        state->highEqValueLabel,
+    };
+
+    for (HWND label : valueLabels)
+    {
+        if (label)
+        {
+            SetWindowTextW(label, L"-");
+        }
+    }
+}
+
+void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
+{
+    if (!state)
+        return;
+
+    Track fallbackTrack {};
+    const Track* trackPtr = nullptr;
+
+    if (state->selectedTrackId > 0)
+    {
+        auto tracks = getTracks();
+        trackPtr = findTrackById(tracks, state->selectedTrackId);
+        if (!trackPtr)
+        {
+            fallbackTrack.id = state->selectedTrackId;
+            fallbackTrack.type = trackGetType(state->selectedTrackId);
+            fallbackTrack.synthWaveType = trackGetSynthWaveType(state->selectedTrackId);
+            fallbackTrack.volume = trackGetVolume(state->selectedTrackId);
+            fallbackTrack.pan = trackGetPan(state->selectedTrackId);
+            fallbackTrack.lowGainDb = trackGetEqLowGain(state->selectedTrackId);
+            fallbackTrack.midGainDb = trackGetEqMidGain(state->selectedTrackId);
+            fallbackTrack.highGainDb = trackGetEqHighGain(state->selectedTrackId);
+            trackPtr = &fallbackTrack;
+        }
+    }
+
+    if (trackPtr)
+    {
+        std::wstring trackLabel = ToWideString(trackPtr->name);
+        if (trackLabel.empty())
+            trackLabel = L"Unnamed Track";
+        if (state->trackLabel)
+            SetWindowTextW(state->trackLabel, trackLabel.c_str());
+
+        if (state->volumeSlider)
+        {
+            EnableWindow(state->volumeSlider, TRUE);
+            int volumePos = static_cast<int>(std::lround(std::clamp(trackPtr->volume, kMixerVolumeMin, kMixerVolumeMax) * 100.0f));
+            SendMessageW(state->volumeSlider, TBM_SETPOS, TRUE, volumePos);
+            effectsWindowSetValueText(state->volumeValueLabel, formatVolumeValue(trackPtr->volume));
+        }
+
+        if (state->panSlider)
+        {
+            EnableWindow(state->panSlider, TRUE);
+            float clampedPan = std::clamp(trackPtr->pan, kMixerPanMin, kMixerPanMax);
+            int panPos = static_cast<int>(std::lround((clampedPan - kMixerPanMin) * 100.0f));
+            SendMessageW(state->panSlider, TBM_SETPOS, TRUE, panPos);
+            effectsWindowSetValueText(state->panValueLabel, formatPanValue(trackPtr->pan));
+        }
+
+        auto syncEq = [&](HWND slider, HWND valueLabel, float gain)
+        {
+            if (!slider)
+                return;
+
+            EnableWindow(slider, TRUE);
+            int pos = static_cast<int>(std::lround((gain - kMixerEqMin) * 10.0f));
+            SendMessageW(slider, TBM_SETPOS, TRUE, pos);
+            effectsWindowSetValueText(valueLabel, formatEqValue(gain));
+        };
+
+        syncEq(state->lowEqSlider, state->lowEqValueLabel, trackPtr->lowGainDb);
+        syncEq(state->midEqSlider, state->midEqValueLabel, trackPtr->midGainDb);
+        syncEq(state->highEqSlider, state->highEqValueLabel, trackPtr->highGainDb);
+    }
+    else
+    {
+        if (state->trackLabel)
+            SetWindowTextW(state->trackLabel, L"Select a track from the list.");
+        effectsWindowDisableControls(state);
+    }
+
+    if (hwnd && IsWindow(hwnd))
+        InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void effectsWindowPopulateTrackList(HWND hwnd, EffectsWindowState* state)
+{
+    if (!state || !state->trackList)
+        return;
+
+    int desiredTrackId = state->selectedTrackId;
+
+    SendMessageW(state->trackList, LB_RESETCONTENT, 0, 0);
+
+    auto tracks = getTracks();
+    int selectIndex = -1;
+    for (const auto& track : tracks)
+    {
+        std::wstring name = ToWideString(track.name);
+        if (name.empty())
+        {
+            name = L"Track " + std::to_wstring(track.id);
+        }
+
+        int index = static_cast<int>(SendMessageW(state->trackList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name.c_str())));
+        SendMessageW(state->trackList, LB_SETITEMDATA, index, track.id);
+        if (track.id == desiredTrackId)
+            selectIndex = index;
+    }
+
+    if (selectIndex >= 0)
+    {
+        SendMessageW(state->trackList, LB_SETCURSEL, selectIndex, 0);
+    }
+    else if (!tracks.empty())
+    {
+        SendMessageW(state->trackList, LB_SETCURSEL, 0, 0);
+        state->selectedTrackId = tracks.front().id;
+    }
+    else
+    {
+        state->selectedTrackId = 0;
+    }
+}
+
+void effectsWindowEnsureSelectionVisible(HWND hwnd, EffectsWindowState* state)
+{
+    if (!state || !state->trackList || state->selectedTrackId <= 0)
+        return;
+
+    int count = static_cast<int>(SendMessageW(state->trackList, LB_GETCOUNT, 0, 0));
+    for (int i = 0; i < count; ++i)
+    {
+        if (static_cast<int>(SendMessageW(state->trackList, LB_GETITEMDATA, i, 0)) == state->selectedTrackId)
+        {
+            SendMessageW(state->trackList, LB_SETCURSEL, i, 0);
+            SendMessageW(state->trackList, LB_SETTOPINDEX, i, 0);
+            break;
+        }
+    }
+}
+
+void closeEffectsWindow()
+{
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        DestroyWindow(gEffectsWindow);
+        gEffectsWindow = nullptr;
+    }
+}
+
+LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+void ensureEffectsWindowClass()
+{
+    if (gEffectsWindowClassRegistered)
+        return;
+
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = EffectsWndProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kEffectsWindowClassName;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (RegisterClassW(&wc))
+    {
+        gEffectsWindowClassRegistered = true;
+    }
+}
+
+void toggleEffectsWindow(HWND parent)
+{
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        closeEffectsWindow();
+        if (gMainWindow)
+        {
+            InvalidateRect(gMainWindow, nullptr, FALSE);
+        }
+        return;
+    }
+
+    ensureEffectsWindowClass();
+    if (!gEffectsWindowClassRegistered)
+        return;
+
+    RECT parentRect {0, 0, 0, 0};
+    if (parent && IsWindow(parent))
+    {
+        GetWindowRect(parent, &parentRect);
+    }
+
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    if (parentRect.right > parentRect.left && parentRect.bottom > parentRect.top)
+    {
+        x = parentRect.left + 60;
+        y = parentRect.top + 60;
+    }
+
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW,
+                                kEffectsWindowClassName,
+                                L"Track Effects",
+                                WS_OVERLAPPEDWINDOW,
+                                x,
+                                y,
+                                kEffectsWindowWidth,
+                                kEffectsWindowHeight,
+                                parent,
+                                nullptr,
+                                GetModuleHandle(nullptr),
+                                nullptr);
+    if (hwnd)
+    {
+        gEffectsWindow = hwnd;
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
+}
+
+void notifyEffectsWindowTrackValuesChanged(int trackId)
+{
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        PostMessageW(gEffectsWindow, WM_EFFECTS_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
+    }
+}
+
+void notifyEffectsWindowTrackListChanged()
+{
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        PostMessageW(gEffectsWindow, WM_EFFECTS_RELOAD_TRACKS, 0, 0);
+    }
+}
+
+void notifyEffectsWindowActiveTrackChanged(int trackId)
+{
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        PostMessageW(gEffectsWindow, WM_EFFECTS_SELECT_TRACK, static_cast<WPARAM>(trackId), 0);
+    }
+}
+
+LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    EffectsWindowState* state = getEffectsWindowState(hwnd);
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        auto* newState = new EffectsWindowState();
+        newState->selectedTrackId = selectedTrackId > 0 ? selectedTrackId : getActiveSequencerTrackId();
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(newState));
+
+        HINSTANCE instance = GetModuleHandle(nullptr);
+        DWORD listStyle = WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS;
+        newState->trackList = CreateWindowExW(WS_EX_CLIENTEDGE,
+                                              L"LISTBOX",
+                                              L"",
+                                              listStyle,
+                                              0,
+                                              0,
+                                              100,
+                                              100,
+                                              hwnd,
+                                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEffectsTrackListId)),
+                                              instance,
+                                              nullptr);
+
+        DWORD staticStyle = WS_CHILD | WS_VISIBLE;
+        newState->trackLabel = CreateWindowExW(0, L"STATIC", L"", staticStyle, 0, 0, 100, 20, hwnd, nullptr, instance, nullptr);
+
+        auto createLabeledSlider = [&](const wchar_t* labelText, INT_PTR controlId, HWND& labelOut, HWND& sliderOut, HWND& valueOut,
+                                       int rangeMin, int rangeMax, int ticFreq)
+        {
+            labelOut = CreateWindowExW(0, L"STATIC", labelText, staticStyle, 0, 0, 100, 20, hwnd, nullptr, instance, nullptr);
+            valueOut = CreateWindowExW(0, L"STATIC", L"-", staticStyle | SS_RIGHT, 0, 0, 80, 20, hwnd, nullptr, instance, nullptr);
+            sliderOut = CreateWindowExW(0,
+                                        TRACKBAR_CLASSW,
+                                        L"",
+                                        WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                        0,
+                                        0,
+                                        100,
+                                        30,
+                                        hwnd,
+                                        reinterpret_cast<HMENU>(controlId),
+                                        instance,
+                                        nullptr);
+            SendMessageW(sliderOut, TBM_SETRANGE, TRUE, MAKELPARAM(rangeMin, rangeMax));
+            SendMessageW(sliderOut, TBM_SETTICFREQ, ticFreq, 0);
+        };
+
+        createLabeledSlider(L"Volume", kEffectsVolumeSliderId, newState->volumeLabel, newState->volumeSlider, newState->volumeValueLabel, 0, 100, 10);
+        createLabeledSlider(L"Pan", kEffectsPanSliderId, newState->panLabel, newState->panSlider, newState->panValueLabel, 0, 200, 20);
+        createLabeledSlider(L"Low EQ", kEffectsLowEqSliderId, newState->lowEqLabel, newState->lowEqSlider, newState->lowEqValueLabel, 0, 240, 20);
+        createLabeledSlider(L"Mid EQ", kEffectsMidEqSliderId, newState->midEqLabel, newState->midEqSlider, newState->midEqValueLabel, 0, 240, 20);
+        createLabeledSlider(L"High EQ", kEffectsHighEqSliderId, newState->highEqLabel, newState->highEqSlider, newState->highEqValueLabel, 0, 240, 20);
+
+        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        effectsWindowApplyFont(*newState, font);
+
+        RECT client {0, 0, 0, 0};
+        GetClientRect(hwnd, &client);
+        effectsWindowLayout(hwnd, newState, client.right - client.left, client.bottom - client.top);
+        effectsWindowPopulateTrackList(hwnd, newState);
+        effectsWindowSyncControls(hwnd, newState);
+        effectsWindowEnsureSelectionVisible(hwnd, newState);
+        return 0;
+    }
+    case WM_SIZE:
+    {
+        if (state)
+        {
+            effectsWindowLayout(hwnd, state, LOWORD(lParam), HIWORD(lParam));
+        }
+        return 0;
+    }
+    case WM_COMMAND:
+    {
+        if (LOWORD(wParam) == kEffectsTrackListId && HIWORD(wParam) == LBN_SELCHANGE && state && state->trackList)
+        {
+            int selection = static_cast<int>(SendMessageW(state->trackList, LB_GETCURSEL, 0, 0));
+            if (selection != LB_ERR)
+            {
+                int trackId = static_cast<int>(SendMessageW(state->trackList, LB_GETITEMDATA, selection, 0));
+                if (trackId > 0)
+                {
+                    state->selectedTrackId = trackId;
+                    effectsWindowSyncControls(hwnd, state);
+                    if (selectedTrackId != trackId)
+                    {
+                        selectedTrackId = trackId;
+                        setActiveSequencerTrackId(trackId);
+                        currentStepPage = 0;
+                        if (gMainWindow && IsWindow(gMainWindow))
+                        {
+                            InvalidateRect(gMainWindow, nullptr, FALSE);
+                        }
+                        invalidatePianoRollWindow();
+                    }
+                }
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_HSCROLL:
+    {
+        if (!state)
+            break;
+
+        HWND control = reinterpret_cast<HWND>(lParam);
+        if (!control)
+            control = GetFocus();
+
+        if (!control || state->selectedTrackId <= 0)
+            return 0;
+
+        int trackId = state->selectedTrackId;
+
+        if (control == state->volumeSlider)
+        {
+            int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+            float newVolume = std::clamp(pos / 100.0f, kMixerVolumeMin, kMixerVolumeMax);
+            trackSetVolume(trackId, newVolume);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return 0;
+        }
+
+        if (control == state->panSlider)
+        {
+            int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+            float newPan = std::clamp(static_cast<float>(pos) / 100.0f + kMixerPanMin, kMixerPanMin, kMixerPanMax);
+            trackSetPan(trackId, newPan);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return 0;
+        }
+
+        auto handleEqSlider = [&](HWND slider, auto setter)
+        {
+            if (control != slider)
+                return false;
+            int pos = static_cast<int>(SendMessageW(slider, TBM_GETPOS, 0, 0));
+            float gain = std::clamp(static_cast<float>(pos) / 10.0f + kMixerEqMin, kMixerEqMin, kMixerEqMax);
+            setter(trackId, gain);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return true;
+        };
+
+        if (handleEqSlider(state->lowEqSlider, trackSetEqLowGain))
+            return 0;
+        if (handleEqSlider(state->midEqSlider, trackSetEqMidGain))
+            return 0;
+        if (handleEqSlider(state->highEqSlider, trackSetEqHighGain))
+            return 0;
+
+        return 0;
+    }
+    case WM_EFFECTS_REFRESH_VALUES:
+    {
+        if (state)
+        {
+            int trackId = static_cast<int>(wParam);
+            if (trackId == 0 || trackId == state->selectedTrackId)
+            {
+                effectsWindowSyncControls(hwnd, state);
+            }
+        }
+        return 0;
+    }
+    case WM_EFFECTS_RELOAD_TRACKS:
+    {
+        if (state)
+        {
+            effectsWindowPopulateTrackList(hwnd, state);
+            effectsWindowEnsureSelectionVisible(hwnd, state);
+            effectsWindowSyncControls(hwnd, state);
+        }
+        return 0;
+    }
+    case WM_EFFECTS_SELECT_TRACK:
+    {
+        if (state)
+        {
+            int trackId = static_cast<int>(wParam);
+            state->selectedTrackId = trackId;
+            effectsWindowPopulateTrackList(hwnd, state);
+            effectsWindowEnsureSelectionVisible(hwnd, state);
+            effectsWindowSyncControls(hwnd, state);
+        }
+        return 0;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+    {
+        if (state)
+        {
+            delete state;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+        }
+        if (hwnd == gEffectsWindow)
+        {
+            gEffectsWindow = nullptr;
+            if (gMainWindow && IsWindow(gMainWindow))
+            {
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            }
+        }
+        return 0;
+    }
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 void drawButton(LICE_SysBitmap& surface, const RECT& rect, COLORREF fill, COLORREF outline, const char* text)
 {
     const int width = rect.right - rect.left;
@@ -1526,9 +2176,9 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
         RECT messageRect {headerRect.left, headerRect.bottom + 10, headerRect.right, panelBottom - panelPadding};
         drawText(surface, messageRect, "Select a track to adjust mixer settings.", RGB(200, 200, 200),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        gVolumeSliderControl = {};
-        gPanSliderControl = {};
-        for (auto& knob : gEqKnobControls)
+        gMainVolumeSliderControl = {};
+        gMainPanSliderControl = {};
+        for (auto& knob : gMainEqKnobControls)
             knob = {};
         return;
     }
@@ -1539,9 +2189,9 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     double midNorm = computeNormalized(activeTrack->midGainDb, kMixerEqMin, kMixerEqMax);
     double highNorm = computeNormalized(activeTrack->highGainDb, kMixerEqMin, kMixerEqMax);
 
-    drawSliderControl(surface, gVolumeSliderControl, volumeRect, volumeNorm,
+    drawSliderControl(surface, gMainVolumeSliderControl, volumeRect, volumeNorm,
                       "Volume", formatVolumeValue(activeTrack->volume));
-    drawSliderControl(surface, gPanSliderControl, panRect, panNorm,
+    drawSliderControl(surface, gMainPanSliderControl, panRect, panNorm,
                       "Pan", formatPanValue(activeTrack->pan));
 
     int eqWidth = eqArea.right - eqArea.left;
@@ -1549,7 +2199,7 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     int eqSpacing = std::min(4, std::max(2, eqWidth / 12));
     if (eqWidth <= 0 || eqHeight <= 0)
     {
-        for (auto& knob : gEqKnobControls)
+        for (auto& knob : gMainEqKnobControls)
             knob = {};
         return;
     }
@@ -1565,11 +2215,11 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     if (eqRect2.left > eqRect2.right)
         eqRect2.left = eqRect2.right;
 
-    drawKnobControl(surface, gEqKnobControls[0], eqRect0, lowNorm,
+    drawKnobControl(surface, gMainEqKnobControls[0], eqRect0, lowNorm,
                     kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
-    drawKnobControl(surface, gEqKnobControls[1], eqRect1, midNorm,
+    drawKnobControl(surface, gMainEqKnobControls[1], eqRect1, midNorm,
                     kEqBandLabels[1], formatEqValue(activeTrack->midGainDb));
-    drawKnobControl(surface, gEqKnobControls[2], eqRect2, highNorm,
+    drawKnobControl(surface, gMainEqKnobControls[2], eqRect2, highNorm,
                     kEqBandLabels[2], formatEqValue(activeTrack->highGainDb));
 }
 
@@ -1682,6 +2332,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     COLORREF pianoRollOutline = pianoRollOpen ? RGB(20, 20, 20) : RGB(120, 120, 120);
     drawButton(surface, pianoRollToggleButton, pianoRollFill, pianoRollOutline,
                pianoRollOpen ? "Hide Piano Roll" : "Show Piano Roll");
+
+    bool effectsOpen = gEffectsWindow && IsWindow(gEffectsWindow);
+    COLORREF effectsFill = effectsOpen ? RGB(0, 90, 160) : RGB(50, 50, 50);
+    COLORREF effectsOutline = effectsOpen ? RGB(20, 20, 20) : RGB(120, 120, 120);
+    drawButton(surface, effectsToggleButton, effectsFill, effectsOutline,
+               effectsOpen ? "Hide Effects" : "Show Effects");
 
     auto activeOutputDevice = getActiveAudioOutputDevice();
     std::wstring audioLabel = L"Audio Output: ";
@@ -1910,6 +2566,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
+        if (pointInRect(effectsToggleButton, x, y))
+        {
+            toggleEffectsWindow(hwnd);
+            audioDeviceDropdownOpen = false;
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
         auto tracks = getTracks();
         ensureTrackTabState(tracks);
         int activeTrackId = selectedTrackId;
@@ -1977,33 +2643,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (activeTrackId > 0)
         {
-            if (pointInRect(gVolumeSliderControl.control, x, y))
+            if (pointInRect(gMainVolumeSliderControl.control, x, y))
             {
-                float newVolume = sliderValueFromPosition(gVolumeSliderControl, x, kMixerVolumeMin, kMixerVolumeMax);
+                float newVolume = sliderValueFromPosition(gMainVolumeSliderControl, x, kMixerVolumeMin, kMixerVolumeMax);
                 trackSetVolume(activeTrackId, newVolume);
                 openTrackTypeTrackId = 0;
                 waveDropdownOpen = false;
                 audioDeviceDropdownOpen = false;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                notifyEffectsWindowTrackValuesChanged(activeTrackId);
                 return 0;
             }
 
-            if (pointInRect(gPanSliderControl.control, x, y))
+            if (pointInRect(gMainPanSliderControl.control, x, y))
             {
-                float newPan = sliderValueFromPosition(gPanSliderControl, x, kMixerPanMin, kMixerPanMax);
+                float newPan = sliderValueFromPosition(gMainPanSliderControl, x, kMixerPanMin, kMixerPanMax);
                 trackSetPan(activeTrackId, newPan);
                 openTrackTypeTrackId = 0;
                 waveDropdownOpen = false;
                 audioDeviceDropdownOpen = false;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                notifyEffectsWindowTrackValuesChanged(activeTrackId);
                 return 0;
             }
 
-            for (size_t eqIndex = 0; eqIndex < gEqKnobControls.size(); ++eqIndex)
+            for (size_t eqIndex = 0; eqIndex < gMainEqKnobControls.size(); ++eqIndex)
             {
-                if (pointInRect(gEqKnobControls[eqIndex].control, x, y))
+                if (pointInRect(gMainEqKnobControls[eqIndex].control, x, y))
                 {
-                    float newGain = knobValueFromPosition(gEqKnobControls[eqIndex], x, y, kMixerEqMin, kMixerEqMax);
+                    float newGain = knobValueFromPosition(gMainEqKnobControls[eqIndex], x, y, kMixerEqMin, kMixerEqMax);
                     switch (eqIndex)
                     {
                     case 0:
@@ -2022,6 +2690,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
                     InvalidateRect(hwnd, nullptr, FALSE);
+                    notifyEffectsWindowTrackValuesChanged(activeTrackId);
                     return 0;
                 }
             }
@@ -2103,6 +2772,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     InvalidateRect(hwnd, nullptr, FALSE);
                     invalidatePianoRollWindow();
+                    if (selectedTrackId > 0)
+                        notifyEffectsWindowActiveTrackChanged(selectedTrackId);
                 }
                 return 0;
             }
@@ -2252,6 +2923,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         MB_OK | MB_ICONINFORMATION);
             InvalidateRect(hwnd, nullptr, FALSE);
             invalidatePianoRollWindow();
+            notifyEffectsWindowTrackListChanged();
+            if (selectedTrackId > 0)
+                notifyEffectsWindowActiveTrackChanged(selectedTrackId);
             return 0;
         }
 
@@ -2305,6 +2979,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         gSurface.reset();
         gMainWindow = nullptr;
         closePianoRollWindow();
+        closeEffectsWindow();
         PostQuitMessage(0);
         return 0;
     }
@@ -2313,6 +2988,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 void initGUI()
 {
+    INITCOMMONCONTROLSEX icc {0};
+    icc.dwSize = sizeof(icc);
+    icc.dwICC = ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icc);
+
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(nullptr);

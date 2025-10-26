@@ -4,4 +4,4 @@ add_library(kj_gui STATIC
 )
 
 target_include_directories(kj_gui PRIVATE ../../include ../../external)
-target_link_libraries(kj_gui PRIVATE opengl32 gdi32 user32)
+target_link_libraries(kj_gui PRIVATE opengl32 gdi32 user32 comctl32)
