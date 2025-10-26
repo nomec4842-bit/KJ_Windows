@@ -182,7 +182,6 @@ double midiNoteToFrequency(int midiNote)
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     double envelope = 0.0;
-    double phase = 0.0;
     int currentMidiNote = 69;
     double currentFrequency = midiNoteToFrequency(69);
     bool samplePlaying = false;
@@ -199,6 +198,12 @@ struct TrackPlaybackState {
     BiquadFilter lowShelf;
     BiquadFilter midPeak;
     BiquadFilter highShelf;
+    struct SynthVoice {
+        int midiNote = 69;
+        double frequency = midiNoteToFrequency(69);
+        double phase = 0.0;
+    };
+    std::vector<SynthVoice> voices;
 };
 
 // Added proper includes and scope for updateMixerState (fix undefined type errors)
@@ -421,9 +426,9 @@ void audioLoop() {
                         state.samplePosition = 0.0;
                     }
                     state.envelope = 0.0;
-                    state.phase = 0.0;
                     state.currentMidiNote = 69;
                     state.currentFrequency = midiNoteToFrequency(69);
+                    state.voices.clear();
                 } else {
                     state.sampleBuffer.reset();
                     state.sampleFrameCount = 0;
@@ -501,14 +506,22 @@ void audioLoop() {
 
                         bool gate = false;
                         bool triggered = false;
-                        int stepNote = state.currentMidiNote;
+                        std::vector<int> triggeredNotes;
                         if (trackStepCount > 0 && currentStep < trackStepCount) {
                             if (getTrackStepState(trackInfo.id, currentStep)) {
                                 gate = true;
-                                if (stepAdvanced)
-                                {
-                                    stepNote = trackGetStepNote(trackInfo.id, currentStep);
-                                    triggered = true;
+                                if (stepAdvanced) {
+                                    if (trackInfo.type == TrackType::Synth) {
+                                        triggeredNotes = trackGetStepNotes(trackInfo.id, currentStep);
+                                        if (triggeredNotes.empty()) {
+                                            int fallback = trackGetStepNote(trackInfo.id, currentStep);
+                                            if (fallback >= 0)
+                                                triggeredNotes.push_back(fallback);
+                                        }
+                                        triggered = !triggeredNotes.empty();
+                                    } else {
+                                        triggered = true;
+                                    }
                                 }
                             }
                         }
@@ -544,9 +557,21 @@ void audioLoop() {
                             double target = gate ? 0.8 : 0.0;
 
                             if (triggered) {
-                                state.currentMidiNote = stepNote;
-                                state.currentFrequency = midiNoteToFrequency(stepNote);
-                                state.phase = 0.0;
+                                state.voices.clear();
+                                for (int note : triggeredNotes) {
+                                    TrackPlaybackState::SynthVoice voice{};
+                                    voice.midiNote = note;
+                                    voice.frequency = midiNoteToFrequency(note);
+                                    voice.phase = 0.0;
+                                    state.voices.push_back(voice);
+                                }
+                                if (!state.voices.empty()) {
+                                    state.currentMidiNote = state.voices.front().midiNote;
+                                    state.currentFrequency = state.voices.front().frequency;
+                                } else {
+                                    state.currentMidiNote = 69;
+                                    state.currentFrequency = midiNoteToFrequency(69);
+                                }
                                 state.envelope = 0.9;
                             }
 
@@ -560,34 +585,46 @@ void audioLoop() {
                                     state.envelope = target;
                             }
 
-                            double waveform = 0.0;
-                            switch (trackInfo.synthWaveType)
-                            {
-                            case SynthWaveType::Sine:
-                                waveform = std::sin(state.phase);
-                                break;
-                            case SynthWaveType::Square:
-                                waveform = (state.phase < twoPi * 0.5) ? 1.0 : -1.0;
-                                break;
-                            case SynthWaveType::Saw:
-                            {
-                                double normalized = state.phase / twoPi;
-                                waveform = 2.0 * normalized - 1.0;
-                                break;
+                            double sampleValue = 0.0;
+                            if (!state.voices.empty()) {
+                                for (auto& voice : state.voices) {
+                                    double waveform = 0.0;
+                                    switch (trackInfo.synthWaveType)
+                                    {
+                                    case SynthWaveType::Sine:
+                                        waveform = std::sin(voice.phase);
+                                        break;
+                                    case SynthWaveType::Square:
+                                        waveform = (voice.phase < twoPi * 0.5) ? 1.0 : -1.0;
+                                        break;
+                                    case SynthWaveType::Saw:
+                                    {
+                                        double normalized = voice.phase / twoPi;
+                                        waveform = 2.0 * normalized - 1.0;
+                                        break;
+                                    }
+                                    case SynthWaveType::Triangle:
+                                    {
+                                        double normalized = voice.phase / twoPi;
+                                        double centered = 2.0 * normalized - 1.0;
+                                        waveform = 2.0 * (1.0 - std::abs(centered)) - 1.0;
+                                        break;
+                                    }
+                                    }
+                                    sampleValue += waveform;
+                                    double increment = twoPi * voice.frequency / sampleRate;
+                                    voice.phase += increment;
+                                    if (voice.phase >= twoPi)
+                                    {
+                                        voice.phase = std::fmod(voice.phase, twoPi);
+                                    }
+                                }
+                                sampleValue /= static_cast<double>(state.voices.size());
                             }
-                            case SynthWaveType::Triangle:
-                            {
-                                double normalized = state.phase / twoPi;
-                                double centered = 2.0 * normalized - 1.0;
-                                waveform = 2.0 * (1.0 - std::abs(centered)) - 1.0;
-                                break;
+                            sampleValue *= state.envelope;
+                            if (!gate && state.envelope <= 0.0001) {
+                                state.voices.clear();
                             }
-                            }
-                            double sampleValue = waveform * state.envelope;
-                            double frequency = state.currentFrequency > 0.0 ? state.currentFrequency : midiNoteToFrequency(69);
-                            state.phase += twoPi * frequency / sampleRate;
-                            if (state.phase >= twoPi)
-                                state.phase -= twoPi;
                             trackLeft = sampleValue;
                             trackRight = sampleValue;
                         }

@@ -67,6 +67,8 @@ void trackSetStepCount(int trackId, int count);
 
 int trackGetStepNote(int trackId, int stepIndex);
 void trackSetStepNote(int trackId, int stepIndex, int midiNote);
+std::vector<int> trackGetStepNotes(int trackId, int stepIndex);
+void trackToggleStepNote(int trackId, int stepIndex, int midiNote);
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId);
 void trackSetSampleBuffer(int trackId, std::shared_ptr<const SampleBuffer> buffer);

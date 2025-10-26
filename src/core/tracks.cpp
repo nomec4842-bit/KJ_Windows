@@ -54,6 +54,10 @@ struct TrackData
             bool enabled = (i < kSequencerStepsPerPage) ? (i % 4 == 0) : false;
             steps[i].store(enabled, std::memory_order_relaxed);
             notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
+            if (enabled)
+            {
+                stepNotes[i].push_back(kDefaultMidiNote);
+            }
         }
     }
 
@@ -67,8 +71,10 @@ struct TrackData
     std::atomic<float> highGainDb{0.0f};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
+    std::array<std::vector<int>, kMaxSequencerSteps> stepNotes{};
     std::atomic<int> stepCount{1};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
+    std::mutex noteMutex;
 };
 
 std::vector<std::shared_ptr<TrackData>> gTracks;
@@ -187,6 +193,20 @@ void trackSetStepState(int trackId, int stepIndex, bool enabled)
     if (stepIndex >= stepCount)
         return;
 
+    {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
+        auto& notes = track->stepNotes[stepIndex];
+        if (!enabled)
+        {
+            notes.clear();
+        }
+        else if (notes.empty())
+        {
+            int note = track->notes[stepIndex].load(std::memory_order_relaxed);
+            notes.push_back(clampMidiNote(note));
+        }
+    }
+
     track->steps[stepIndex].store(enabled, std::memory_order_relaxed);
 }
 
@@ -204,7 +224,7 @@ void trackToggleStepState(int trackId, int stepIndex)
         return;
 
     bool current = track->steps[stepIndex].load(std::memory_order_relaxed);
-    track->steps[stepIndex].store(!current, std::memory_order_relaxed);
+    trackSetStepState(trackId, stepIndex, !current);
 }
 
 int trackGetStepNote(int trackId, int stepIndex)
@@ -221,6 +241,14 @@ int trackGetStepNote(int trackId, int stepIndex)
         return kDefaultMidiNote;
 
     int note = track->notes[stepIndex].load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
+        const auto& notes = track->stepNotes[stepIndex];
+        if (!notes.empty())
+        {
+            note = notes.front();
+        }
+    }
     return clampMidiNote(note);
 }
 
@@ -239,6 +267,80 @@ void trackSetStepNote(int trackId, int stepIndex, int midiNote)
 
     int clamped = clampMidiNote(midiNote);
     track->notes[stepIndex].store(clamped, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
+        auto& notes = track->stepNotes[stepIndex];
+        notes.clear();
+        notes.push_back(clamped);
+    }
+    track->steps[stepIndex].store(true, std::memory_order_relaxed);
+}
+
+std::vector<int> trackGetStepNotes(int trackId, int stepIndex)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return {};
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return {};
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return {};
+
+    std::lock_guard<std::mutex> lock(track->noteMutex);
+    std::vector<int> notes = track->stepNotes[stepIndex];
+    for (int& note : notes)
+    {
+        note = clampMidiNote(note);
+    }
+    notes.erase(std::remove_if(notes.begin(), notes.end(), [](int value) {
+        return value < kMinMidiNote || value > kMaxMidiNote;
+    }), notes.end());
+    return notes;
+}
+
+void trackToggleStepNote(int trackId, int stepIndex, int midiNote)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return;
+
+    int clamped = clampMidiNote(midiNote);
+    {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
+        auto& notes = track->stepNotes[stepIndex];
+        auto it = std::find(notes.begin(), notes.end(), clamped);
+        if (it != notes.end())
+        {
+            notes.erase(it);
+        }
+        else
+        {
+            notes.push_back(clamped);
+            std::sort(notes.begin(), notes.end());
+            notes.erase(std::unique(notes.begin(), notes.end()), notes.end());
+        }
+
+        bool enabled = !notes.empty();
+        if (enabled)
+        {
+            track->notes[stepIndex].store(notes.front(), std::memory_order_relaxed);
+        }
+        else
+        {
+            track->notes[stepIndex].store(kDefaultMidiNote, std::memory_order_relaxed);
+        }
+        track->steps[stepIndex].store(enabled, std::memory_order_relaxed);
+    }
 }
 
 int trackGetStepCount(int trackId)
@@ -264,18 +366,22 @@ void trackSetStepCount(int trackId, int count)
 
     if (clamped > previous)
     {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
         for (int i = previous; i < clamped; ++i)
         {
             track->steps[i].store(false, std::memory_order_relaxed);
             track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
+            track->stepNotes[i].clear();
         }
     }
     else
     {
+        std::lock_guard<std::mutex> lock(track->noteMutex);
         for (int i = clamped; i < previous; ++i)
         {
             track->steps[i].store(false, std::memory_order_relaxed);
             track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
+            track->stepNotes[i].clear();
         }
     }
 

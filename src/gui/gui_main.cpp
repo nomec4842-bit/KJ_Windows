@@ -635,18 +635,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (stepIndex < totalSteps)
                     {
                         int midiNote = kPianoRollHighestNote - row;
-                        bool enabled = getTrackStepState(trackId, stepIndex);
-                        int existingNote = trackGetStepNote(trackId, stepIndex);
-
-                        if (enabled && existingNote == midiNote)
-                        {
-                            trackSetStepState(trackId, stepIndex, false);
-                        }
-                        else
-                        {
-                            trackSetStepNote(trackId, stepIndex, midiNote);
-                            trackSetStepState(trackId, stepIndex, true);
-                        }
+                        trackToggleStepNote(trackId, stepIndex, midiNote);
 
                         invalidatePianoRollWindow();
                         if (gMainWindow && IsWindow(gMainWindow))
@@ -722,9 +711,13 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (stepIndex >= totalSteps)
                     continue;
 
-                if (getTrackStepState(trackId, stepIndex))
+                auto notes = trackGetStepNotes(trackId, stepIndex);
+                if (notes.empty() && getTrackStepState(trackId, stepIndex))
                 {
-                    int midiNote = trackGetStepNote(trackId, stepIndex);
+                    notes.push_back(trackGetStepNote(trackId, stepIndex));
+                }
+                for (int midiNote : notes)
+                {
                     int row = midiNoteToRow(midiNote);
                     if (row >= 0 && row < kPianoRollNoteRows)
                     {
