@@ -1952,32 +1952,6 @@ void drawKnobControl(LICE_SysBitmap& surface, KnobControlRects& knobRects, const
     drawLine(surface, startX, startY, endX, endY, RGB(0, 200, 255));
 }
 
-std::string formatVolumeValue(float volume)
-{
-    int percent = static_cast<int>(std::round(std::clamp(volume, kMixerVolumeMin, kMixerVolumeMax) * 100.0f));
-    return std::to_string(percent) + "%";
-}
-
-std::string formatPanValue(float pan)
-{
-    float clamped = std::clamp(pan, kMixerPanMin, kMixerPanMax);
-    if (std::abs(clamped) < 0.01f)
-        return "Center";
-
-    float percent = std::round(std::abs(clamped) * 100.0f);
-    std::ostringstream oss;
-    oss << (clamped < 0.0f ? "L " : "R ") << static_cast<int>(percent) << "%";
-    return oss.str();
-}
-
-std::string formatEqValue(float gainDb)
-{
-    float clamped = std::clamp(gainDb, kMixerEqMin, kMixerEqMax);
-    std::ostringstream oss;
-    oss << std::showpos << std::fixed << std::setprecision(1) << clamped << " dB";
-    return oss.str();
-}
-
 void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects, const RECT& area, double normalizedValue,
                        const char* label, const std::string& valueText)
 {
