@@ -496,6 +496,16 @@ void audioLoop() {
                     double leftValue = 0.0;
                     double rightValue = 0.0;
 
+                    auto getNotesForStep = [](int trackId, int stepIndex) {
+                        std::vector<int> notes = trackGetStepNotes(trackId, stepIndex);
+                        if (notes.empty()) {
+                            int fallback = trackGetStepNote(trackId, stepIndex);
+                            if (fallback >= 0)
+                                notes.push_back(fallback);
+                        }
+                        return notes;
+                    };
+
                     for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
                         const auto& trackInfo = trackInfos[trackIndex];
                         int trackStepCount = trackStepCounts[trackIndex];
@@ -512,12 +522,7 @@ void audioLoop() {
                                 gate = true;
                                 if (stepAdvanced) {
                                     if (trackInfo.type == TrackType::Synth) {
-                                        triggeredNotes = trackGetStepNotes(trackInfo.id, currentStep);
-                                        if (triggeredNotes.empty()) {
-                                            int fallback = trackGetStepNote(trackInfo.id, currentStep);
-                                            if (fallback >= 0)
-                                                triggeredNotes.push_back(fallback);
-                                        }
+                                        triggeredNotes = getNotesForStep(trackInfo.id, currentStep);
                                         triggered = !triggeredNotes.empty();
                                     } else {
                                         triggered = true;
@@ -557,14 +562,47 @@ void audioLoop() {
                             double target = gate ? 0.8 : 0.0;
 
                             if (triggered) {
-                                state.voices.clear();
-                                for (int note : triggeredNotes) {
-                                    TrackPlaybackState::SynthVoice voice{};
-                                    voice.midiNote = note;
-                                    voice.frequency = midiNoteToFrequency(note);
-                                    voice.phase = 0.0;
-                                    state.voices.push_back(voice);
+                                std::vector<int> sustainedNotes;
+                                if (trackStepCount > 0) {
+                                    int previousStep = currentStep - 1;
+                                    if (previousStep < 0)
+                                        previousStep = trackStepCount - 1;
+                                    if (previousStep >= 0 && previousStep < trackStepCount && previousStep != currentStep &&
+                                        getTrackStepState(trackInfo.id, previousStep)) {
+                                        auto previousNotes = getNotesForStep(trackInfo.id, previousStep);
+                                        for (int note : triggeredNotes) {
+                                            if (std::find(previousNotes.begin(), previousNotes.end(), note) != previousNotes.end()) {
+                                                sustainedNotes.push_back(note);
+                                            }
+                                        }
+                                    }
                                 }
+
+                                std::vector<TrackPlaybackState::SynthVoice> updatedVoices;
+                                updatedVoices.reserve(triggeredNotes.size());
+
+                                bool createdNewVoice = false;
+                                for (int note : triggeredNotes) {
+                                    auto existingIt = std::find_if(state.voices.begin(), state.voices.end(),
+                                        [note](const TrackPlaybackState::SynthVoice& voice) {
+                                            return voice.midiNote == note;
+                                        });
+
+                                    bool isSustained = std::find(sustainedNotes.begin(), sustainedNotes.end(), note) != sustainedNotes.end();
+                                    if (existingIt != state.voices.end() && isSustained) {
+                                        updatedVoices.push_back(*existingIt);
+                                    } else {
+                                        TrackPlaybackState::SynthVoice voice{};
+                                        voice.midiNote = note;
+                                        voice.frequency = midiNoteToFrequency(note);
+                                        voice.phase = 0.0;
+                                        updatedVoices.push_back(voice);
+                                        createdNewVoice = true;
+                                    }
+                                }
+
+                                state.voices = std::move(updatedVoices);
+
                                 if (!state.voices.empty()) {
                                     state.currentMidiNote = state.voices.front().midiNote;
                                     state.currentFrequency = state.voices.front().frequency;
@@ -572,7 +610,10 @@ void audioLoop() {
                                     state.currentMidiNote = 69;
                                     state.currentFrequency = midiNoteToFrequency(69);
                                 }
-                                state.envelope = 0.9;
+
+                                if (createdNewVoice) {
+                                    state.envelope = 0.9;
+                                }
                             }
 
                             if (state.envelope < target) {
