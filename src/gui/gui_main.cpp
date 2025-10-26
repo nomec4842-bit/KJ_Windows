@@ -1177,22 +1177,61 @@ void drawKnobControl(LICE_SysBitmap& surface, KnobControlRects& knobRects, const
     LICE_FillRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(35, 35, 35)));
     LICE_DrawRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
 
+    int spacing = std::min(6, std::max(2, height / 12));
+    int labelHeight = std::min(18, std::max(10, height / 4));
+    int valueHeight = std::min(18, std::max(10, height / 4));
+
+    int minimumKnobSpace = 8;
+    int available = height - labelHeight - valueHeight - spacing * 2;
+    if (available < minimumKnobSpace)
+    {
+        int deficit = minimumKnobSpace - available;
+        int labelReduction = std::min(deficit / 2, std::max(labelHeight - 8, 0));
+        labelHeight -= labelReduction;
+        deficit -= labelReduction;
+        int valueReduction = std::min(deficit, std::max(valueHeight - 8, 0));
+        valueHeight -= valueReduction;
+        available = height - labelHeight - valueHeight - spacing * 2;
+        if (available < minimumKnobSpace)
+            available = minimumKnobSpace;
+    }
+
     RECT labelRect = area;
-    labelRect.bottom = std::min(labelRect.top + 18, area.bottom);
+    labelRect.bottom = std::min(labelRect.top + labelHeight, area.bottom);
     drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT valueRect = area;
-    valueRect.top = std::max<LONG>(valueRect.bottom - 18, area.top);
+    valueRect.top = std::max<LONG>(valueRect.bottom - valueHeight, area.top);
     drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     RECT knobRect = area;
-    knobRect.top = labelRect.bottom + 6;
-    knobRect.bottom = valueRect.top - 6;
-    knobRect.left += 10;
-    knobRect.right -= 10;
+    knobRect.top = std::min<LONG>(labelRect.bottom + spacing, area.bottom);
+    knobRect.bottom = std::max<LONG>(valueRect.top - spacing, knobRect.top);
+
+    int horizontalPadding = std::min(10, std::max(2, width / 5));
+    knobRect.left += horizontalPadding;
+    knobRect.right -= horizontalPadding;
 
     if (knobRect.bottom <= knobRect.top || knobRect.right <= knobRect.left)
-        return;
+    {
+        int centerY = area.top + height / 2;
+        int halfSpace = std::max(minimumKnobSpace / 2, 1);
+        knobRect.top = std::max(centerY - halfSpace, area.top);
+        knobRect.bottom = std::min(centerY + halfSpace, area.bottom);
+
+        int centerX = area.left + width / 2;
+        knobRect.left = std::max(centerX - halfSpace, area.left);
+        knobRect.right = knobRect.left + minimumKnobSpace;
+        if (knobRect.right > area.right)
+        {
+            knobRect.right = area.right;
+            knobRect.left = std::max(knobRect.right - minimumKnobSpace, area.left);
+        }
+        if (knobRect.bottom <= knobRect.top)
+        {
+            knobRect.bottom = std::min(knobRect.top + minimumKnobSpace, area.bottom);
+        }
+    }
 
     int knobWidth = knobRect.right - knobRect.left;
     int knobHeight = knobRect.bottom - knobRect.top;
@@ -1284,43 +1323,58 @@ void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects,
     LICE_FillRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(35, 35, 35)));
     LICE_DrawRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
 
+    int spacing = std::min(6, std::max(2, height / 10));
+    int labelHeight = std::min(18, std::max(12, height / 4));
+    int valueHeight = std::min(18, std::max(12, height / 4));
+    int minimumTrackHeight = 8;
+
+    int available = height - labelHeight - valueHeight - spacing * 2;
+    if (available < minimumTrackHeight)
+    {
+        int deficit = minimumTrackHeight - available;
+        int labelReduction = std::min(deficit / 2, std::max(labelHeight - 10, 0));
+        labelHeight -= labelReduction;
+        deficit -= labelReduction;
+        int valueReduction = std::min(deficit, std::max(valueHeight - 10, 0));
+        valueHeight -= valueReduction;
+        available = height - labelHeight - valueHeight - spacing * 2;
+        if (available < minimumTrackHeight)
+            available = minimumTrackHeight;
+    }
+
     RECT labelRect = area;
-    labelRect.bottom = std::min(labelRect.top + 18, area.bottom);
+    labelRect.bottom = std::min(labelRect.top + labelHeight, area.bottom);
     drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT valueRect = area;
-    // Cast for consistent LONG type usage
-    valueRect.top = std::max<LONG>(valueRect.bottom - 18, area.top);
+    valueRect.top = std::max<LONG>(valueRect.bottom - valueHeight, area.top);
     drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
     RECT trackRect = area;
-    trackRect.top = labelRect.bottom + 6;
-    trackRect.bottom = valueRect.top - 6;
-    if (trackRect.bottom <= trackRect.top)
-    {
-        int mid = (area.top + area.bottom) / 2;
-        trackRect.top = mid - 4;
-        trackRect.bottom = mid + 4;
-    }
-    trackRect.left += 10;
-    trackRect.right -= 10;
+    trackRect.top = std::min<LONG>(labelRect.bottom + spacing, area.bottom);
+    trackRect.bottom = std::max<LONG>(valueRect.top - spacing, trackRect.top + minimumTrackHeight);
+
+    int horizontalPadding = std::min(10, std::max(4, width / 6));
+    trackRect.left += horizontalPadding;
+    trackRect.right -= horizontalPadding;
     if (trackRect.right <= trackRect.left)
     {
-        trackRect.right = trackRect.left + 20;
+        int mid = (trackRect.left + trackRect.right) / 2;
+        trackRect.left = mid - 10;
+        trackRect.right = mid + 10;
     }
 
-    // Cast for consistent LONG type usage
-    int trackHeight = static_cast<int>(std::max<LONG>(4, trackRect.bottom - trackRect.top));
-    int trackTop = trackRect.top;
-    int trackWidth = trackRect.right - trackRect.left;
-    LICE_FillRect(&surface, trackRect.left, trackTop, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(55, 55, 55)));
-    LICE_DrawRect(&surface, trackRect.left, trackTop, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(90, 90, 90)));
+    int trackHeight = std::max(trackRect.bottom - trackRect.top, minimumTrackHeight);
+    int trackWidth = std::max(trackRect.right - trackRect.left, 1);
+    trackRect.bottom = trackRect.top + trackHeight;
+    LICE_FillRect(&surface, trackRect.left, trackRect.top, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(55, 55, 55)));
+    LICE_DrawRect(&surface, trackRect.left, trackRect.top, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(90, 90, 90)));
 
     double clampedNorm = std::clamp(normalizedValue, 0.0, 1.0);
     int handleWidth = 12;
     int handleRange = std::max(trackWidth - handleWidth, 1);
     int handleX = trackRect.left + static_cast<int>(std::round(clampedNorm * handleRange));
-    RECT handleRect {handleX, trackTop - 4, handleX + handleWidth, trackTop + trackHeight + 4};
+    RECT handleRect {handleX, trackRect.top - 4, handleX + handleWidth, trackRect.bottom + 4};
     LICE_FillRect(&surface, handleRect.left, handleRect.top, handleRect.right - handleRect.left,
                   handleRect.bottom - handleRect.top, LICE_ColorFromCOLORREF(RGB(0, 120, 200)));
     LICE_DrawRect(&surface, handleRect.left, handleRect.top, handleRect.right - handleRect.left,
@@ -1394,49 +1448,46 @@ void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
 
 void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
 {
-    int panelLeft = 40;
-    int panelRight = client.right - 40;
-    if (panelRight <= panelLeft)
+    constexpr int kPanelWidth = 80;
+    constexpr int kPanelHeight = 160;
+    constexpr int kPanelMargin = 20;
+
+    RECT lastStepRect = stepRects.back();
+    int referenceRight = lastStepRect.right;
+    if (referenceRight <= lastStepRect.left)
     {
-        mixerPanelRect = {0, 0, 0, 0};
-        gVolumeSliderControl = {};
-        gPanSliderControl = {};
-        for (auto& knob : gEqKnobControls)
-            knob = {};
-        return;
+        referenceRight = std::max(client.right - kPanelMargin, kPanelWidth);
     }
 
-    int panelTop = stepRects[0].bottom + 40;
-    int panelPadding = 20;
-    int headerHeight = 24;
-    int sliderHeight = 70;
-    int horizontalSpacing = 30;
-    int verticalSpacing = 24;
-    int knobHeight = 110;
+    int panelRight = std::min(referenceRight, client.right);
+    int panelLeft = panelRight - kPanelWidth;
+    if (panelLeft < 0)
+    {
+        panelLeft = 0;
+        panelRight = panelLeft + kPanelWidth;
+    }
 
-    RECT headerRect {panelLeft + panelPadding, panelTop + panelPadding,
-                     panelRight - panelPadding, panelTop + panelPadding + headerHeight};
+    int stepBottom = stepRects.front().bottom;
+    if (stepBottom <= stepRects.front().top)
+    {
+        stepBottom = kTrackTabsTop + kTrackTabHeight + kTrackTabsToGridMargin + 35;
+    }
 
-    int sliderRowTop = headerRect.bottom + 10;
-    RECT volumeRect {panelLeft + panelPadding, sliderRowTop,
-                     panelLeft + panelPadding + 220, sliderRowTop + sliderHeight};
-    RECT panRect {volumeRect.right + horizontalSpacing, sliderRowTop,
-                  volumeRect.right + horizontalSpacing + 220, sliderRowTop + sliderHeight};
+    int panelTop = stepBottom + 10;
+    int panelBottom = panelTop + kPanelHeight;
+    int maxBottom = client.bottom - kPanelMargin;
+    if (panelBottom > maxBottom)
+    {
+        int delta = panelBottom - maxBottom;
+        panelTop = std::max(panelTop - delta, stepBottom + 10);
+        panelBottom = panelTop + kPanelHeight;
+    }
+    if (panelBottom > client.bottom)
+    {
+        panelTop = std::max(client.bottom - kPanelHeight, stepBottom + 10);
+        panelBottom = std::min(panelTop + kPanelHeight, client.bottom);
+    }
 
-    int eqAvailableWidth = panelRight - panelLeft - panelPadding * 2;
-    int eqSpacing = horizontalSpacing;
-    int eqWidth = (eqAvailableWidth - eqSpacing * 2) / 3;
-    if (eqWidth < 100)
-        eqWidth = 100;
-    int eqRowTop = volumeRect.bottom + verticalSpacing;
-    RECT eqRect0 {panelLeft + panelPadding, eqRowTop,
-                  panelLeft + panelPadding + eqWidth, eqRowTop + knobHeight};
-    RECT eqRect1 {eqRect0.right + eqSpacing, eqRowTop,
-                  eqRect0.right + eqSpacing + eqWidth, eqRowTop + knobHeight};
-    RECT eqRect2 {eqRect1.right + eqSpacing, eqRowTop,
-                  eqRect1.right + eqSpacing + eqWidth, eqRowTop + knobHeight};
-
-    int panelBottom = eqRect0.bottom + panelPadding;
     mixerPanelRect = {panelLeft, panelTop, panelRight, panelBottom};
 
     int width = mixerPanelRect.right - mixerPanelRect.left;
@@ -1449,11 +1500,30 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     LICE_DrawRect(&surface, mixerPanelRect.left, mixerPanelRect.top, width, height,
                   LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
 
+    int panelPadding = 6;
+    int headerHeight = 18;
+    int sliderHeight = 40;
+    int sliderSpacing = 6;
+
+    RECT headerRect {panelLeft + panelPadding, panelTop + panelPadding,
+                     panelRight - panelPadding, panelTop + panelPadding + headerHeight};
     drawText(surface, headerRect, "Mixer", RGB(230, 230, 230), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    int currentTop = headerRect.bottom + sliderSpacing;
+    RECT volumeRect {panelLeft + panelPadding, currentTop,
+                     panelRight - panelPadding, currentTop + sliderHeight};
+    currentTop = volumeRect.bottom + sliderSpacing;
+
+    RECT panRect {panelLeft + panelPadding, currentTop,
+                  panelRight - panelPadding, currentTop + sliderHeight};
+    currentTop = panRect.bottom + sliderSpacing;
+
+    RECT eqArea {panelLeft + panelPadding, currentTop,
+                 panelRight - panelPadding, panelBottom - panelPadding};
 
     if (!activeTrack)
     {
-        RECT messageRect {headerRect.left, headerRect.bottom + 20, headerRect.right, headerRect.bottom + 60};
+        RECT messageRect {headerRect.left, headerRect.bottom + 10, headerRect.right, panelBottom - panelPadding};
         drawText(surface, messageRect, "Select a track to adjust mixer settings.", RGB(200, 200, 200),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         gVolumeSliderControl = {};
@@ -1473,6 +1543,27 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
                       "Volume", formatVolumeValue(activeTrack->volume));
     drawSliderControl(surface, gPanSliderControl, panRect, panNorm,
                       "Pan", formatPanValue(activeTrack->pan));
+
+    int eqWidth = eqArea.right - eqArea.left;
+    int eqHeight = eqArea.bottom - eqArea.top;
+    int eqSpacing = std::min(4, std::max(2, eqWidth / 12));
+    if (eqWidth <= 0 || eqHeight <= 0)
+    {
+        for (auto& knob : gEqKnobControls)
+            knob = {};
+        return;
+    }
+
+    int eqColumnWidth = std::max((eqWidth - eqSpacing * 2) / 3, 8);
+    RECT eqRect0 {eqArea.left, eqArea.top, eqArea.left + eqColumnWidth, eqArea.bottom};
+    RECT eqRect1 {std::min(eqRect0.right + eqSpacing, eqArea.right), eqArea.top,
+                  std::min(eqRect0.right + eqSpacing + eqColumnWidth, eqArea.right), eqArea.bottom};
+    RECT eqRect2 {std::min(eqRect1.right + eqSpacing, eqArea.right), eqArea.top, eqArea.right, eqArea.bottom};
+
+    if (eqRect1.left > eqRect1.right)
+        eqRect1.left = eqRect1.right;
+    if (eqRect2.left > eqRect2.right)
+        eqRect2.left = eqRect2.right;
 
     drawKnobControl(surface, gEqKnobControls[0], eqRect0, lowNorm,
                     kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
