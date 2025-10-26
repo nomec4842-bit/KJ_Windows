@@ -43,6 +43,27 @@ std::string FromWideString(const std::wstring& value)
     return result;
 }
 
+std::string formatVolumeValue(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2) << value << " dB";
+    return stream.str();
+}
+
+std::string formatPanValue(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2) << value << " L/R";
+    return stream.str();
+}
+
+std::string formatEqValue(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2) << value << " dB";
+    return stream.str();
+}
+
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
