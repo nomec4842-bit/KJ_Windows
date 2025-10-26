@@ -1216,11 +1216,11 @@ void drawKnobControl(LICE_SysBitmap& surface, KnobControlRects& knobRects, const
     {
         int centerY = area.top + height / 2;
         int halfSpace = std::max(minimumKnobSpace / 2, 1);
-        knobRect.top = std::max(centerY - halfSpace, area.top);
-        knobRect.bottom = std::min(centerY + halfSpace, area.bottom);
+        knobRect.top = std::max(static_cast<LONG>(centerY - halfSpace), area.top);
+        knobRect.bottom = std::min(static_cast<LONG>(centerY + halfSpace), area.bottom);
 
         int centerX = area.left + width / 2;
-        knobRect.left = std::max(centerX - halfSpace, area.left);
+        knobRect.left = std::max(static_cast<LONG>(centerX - halfSpace), area.left);
         knobRect.right = knobRect.left + minimumKnobSpace;
         if (knobRect.right > area.right)
         {
@@ -1364,8 +1364,8 @@ void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects,
         trackRect.right = mid + 10;
     }
 
-    int trackHeight = std::max(trackRect.bottom - trackRect.top, minimumTrackHeight);
-    int trackWidth = std::max(trackRect.right - trackRect.left, 1);
+    int trackHeight = std::max(static_cast<int>(trackRect.bottom - trackRect.top), minimumTrackHeight);
+    int trackWidth = std::max(static_cast<int>(trackRect.right - trackRect.left), 1);
     trackRect.bottom = trackRect.top + trackHeight;
     LICE_FillRect(&surface, trackRect.left, trackRect.top, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(55, 55, 55)));
     LICE_DrawRect(&surface, trackRect.left, trackRect.top, trackWidth, trackHeight, LICE_ColorFromCOLORREF(RGB(90, 90, 90)));
@@ -1456,10 +1456,10 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     int referenceRight = lastStepRect.right;
     if (referenceRight <= lastStepRect.left)
     {
-        referenceRight = std::max(client.right - kPanelMargin, kPanelWidth);
+        referenceRight = std::max(static_cast<int>(client.right - kPanelMargin), kPanelWidth);
     }
 
-    int panelRight = std::min(referenceRight, client.right);
+    int panelRight = std::min(referenceRight, static_cast<int>(client.right));
     int panelLeft = panelRight - kPanelWidth;
     if (panelLeft < 0)
     {
@@ -1484,8 +1484,8 @@ void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track*
     }
     if (panelBottom > client.bottom)
     {
-        panelTop = std::max(client.bottom - kPanelHeight, stepBottom + 10);
-        panelBottom = std::min(panelTop + kPanelHeight, client.bottom);
+        panelTop = std::max(static_cast<int>(client.bottom - kPanelHeight), stepBottom + 10);
+        panelBottom = std::min(panelTop + kPanelHeight, static_cast<int>(client.bottom));
     }
 
     mixerPanelRect = {panelLeft, panelTop, panelRight, panelBottom};
