@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 #include <chrono>
 
@@ -89,6 +90,20 @@ int waveDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
+
+struct PianoRollDragState
+{
+    bool active = false;
+    bool startedOnExistingNote = false;
+    bool columnChanged = false;
+    int trackId = 0;
+    int startStep = -1;
+    int midiNote = -1;
+    int currentEndStep = -1;
+    std::vector<int> appliedSteps;
+};
+
+PianoRollDragState gPianoRollDrag;
 
 constexpr wchar_t kPianoRollWindowClassName[] = L"KJPianoRollWindow";
 constexpr int kPianoRollWindowWidth = 640;
@@ -210,6 +225,81 @@ void invalidatePianoRollWindow()
         InvalidateRect(gPianoRollWindow, nullptr, FALSE);
     }
 }
+
+namespace
+{
+
+bool stepContainsMidiNote(int trackId, int stepIndex, int midiNote)
+{
+    auto notes = trackGetStepNotes(trackId, stepIndex);
+    return std::find(notes.begin(), notes.end(), midiNote) != notes.end();
+}
+
+void pianoRollApplyDragRange(int newEndStep)
+{
+    if (!gPianoRollDrag.active)
+        return;
+
+    int trackId = gPianoRollDrag.trackId;
+    if (trackId <= 0)
+        return;
+
+    int totalSteps = getSequencerStepCount(trackId);
+    if (totalSteps <= 0)
+        return;
+
+    newEndStep = std::clamp(newEndStep, gPianoRollDrag.startStep, totalSteps - 1);
+
+    if (newEndStep == gPianoRollDrag.currentEndStep)
+        return;
+
+    gPianoRollDrag.columnChanged = true;
+
+    std::vector<int> newRange;
+    newRange.reserve(newEndStep - gPianoRollDrag.startStep + 1);
+    for (int step = gPianoRollDrag.startStep; step <= newEndStep; ++step)
+    {
+        newRange.push_back(step);
+        if (!stepContainsMidiNote(trackId, step, gPianoRollDrag.midiNote))
+        {
+            trackToggleStepNote(trackId, step, gPianoRollDrag.midiNote);
+        }
+    }
+
+    for (int step : gPianoRollDrag.appliedSteps)
+    {
+        if (std::find(newRange.begin(), newRange.end(), step) == newRange.end())
+        {
+            if (stepContainsMidiNote(trackId, step, gPianoRollDrag.midiNote))
+            {
+                trackToggleStepNote(trackId, step, gPianoRollDrag.midiNote);
+            }
+        }
+    }
+
+    gPianoRollDrag.appliedSteps = std::move(newRange);
+    gPianoRollDrag.currentEndStep = newEndStep;
+
+    invalidatePianoRollWindow();
+    if (gMainWindow && IsWindow(gMainWindow))
+    {
+        InvalidateRect(gMainWindow, nullptr, FALSE);
+    }
+}
+
+void pianoRollResetDrag()
+{
+    gPianoRollDrag.active = false;
+    gPianoRollDrag.startedOnExistingNote = false;
+    gPianoRollDrag.columnChanged = false;
+    gPianoRollDrag.trackId = 0;
+    gPianoRollDrag.startStep = -1;
+    gPianoRollDrag.midiNote = -1;
+    gPianoRollDrag.currentEndStep = -1;
+    gPianoRollDrag.appliedSteps.clear();
+}
+
+} // namespace
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
 
@@ -580,6 +670,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, 1);
+        pianoRollResetDrag();
         if (hwnd == gPianoRollWindow)
         {
             gPianoRollWindow = nullptr;
@@ -635,15 +726,114 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     if (stepIndex < totalSteps)
                     {
                         int midiNote = kPianoRollHighestNote - row;
-                        trackToggleStepNote(trackId, stepIndex, midiNote);
-
-                        invalidatePianoRollWindow();
-                        if (gMainWindow && IsWindow(gMainWindow))
+                        std::vector<int> existingRange;
+                        bool notePresent = stepContainsMidiNote(trackId, stepIndex, midiNote);
+                        if (notePresent)
                         {
-                            InvalidateRect(gMainWindow, nullptr, FALSE);
+                            existingRange.push_back(stepIndex);
+                            for (int step = stepIndex + 1; step < totalSteps; ++step)
+                            {
+                                if (stepContainsMidiNote(trackId, step, midiNote))
+                                {
+                                    existingRange.push_back(step);
+                                }
+                                else
+                                {
+                                    break;
+                                }
+                            }
                         }
+
+                        gPianoRollDrag.active = true;
+                        gPianoRollDrag.startedOnExistingNote = notePresent;
+                        gPianoRollDrag.columnChanged = false;
+                        gPianoRollDrag.trackId = trackId;
+                        gPianoRollDrag.startStep = stepIndex;
+                        gPianoRollDrag.midiNote = midiNote;
+                        gPianoRollDrag.currentEndStep = stepIndex;
+                        gPianoRollDrag.appliedSteps = std::move(existingRange);
+
+                        SetCapture(hwnd);
                     }
                 }
+            }
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+    {
+        if (!gPianoRollDrag.active)
+            break;
+
+        RECT client;
+        GetClientRect(hwnd, &client);
+        PianoRollLayout layout = computePianoRollLayout(client);
+        if (layout.grid.right <= layout.grid.left)
+            return 0;
+
+        int x = GET_X_LPARAM(lParam);
+        if (x < layout.grid.left)
+            x = layout.grid.left;
+        if (x >= layout.grid.right)
+            x = layout.grid.right - 1;
+
+        int column = 0;
+        for (int i = 0; i < kSequencerStepsPerPage; ++i)
+        {
+            if (x >= layout.columnX[i] && x < layout.columnX[i + 1])
+            {
+                column = i;
+                break;
+            }
+        }
+
+        int trackId = gPianoRollDrag.trackId;
+        if (trackId > 0)
+        {
+            int totalSteps = getSequencerStepCount(trackId);
+            if (totalSteps > 0)
+            {
+                int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
+                if (stepIndex >= totalSteps)
+                    stepIndex = totalSteps - 1;
+                if (stepIndex >= gPianoRollDrag.startStep)
+                {
+                    pianoRollApplyDragRange(stepIndex);
+                }
+            }
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP:
+    {
+        if (gPianoRollDrag.active)
+        {
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+
+            int trackId = gPianoRollDrag.trackId;
+            int stepIndex = gPianoRollDrag.startStep;
+            int midiNote = gPianoRollDrag.midiNote;
+            bool columnChanged = gPianoRollDrag.columnChanged;
+            bool startedOnExisting = gPianoRollDrag.startedOnExistingNote;
+
+            if (!columnChanged && trackId > 0 && stepIndex >= 0)
+            {
+                if (startedOnExisting)
+                {
+                    trackToggleStepNote(trackId, stepIndex, midiNote);
+                }
+                else if (!stepContainsMidiNote(trackId, stepIndex, midiNote))
+                {
+                    trackToggleStepNote(trackId, stepIndex, midiNote);
+                }
+            }
+
+            pianoRollResetDrag();
+            invalidatePianoRollWindow();
+            if (gMainWindow && IsWindow(gMainWindow))
+            {
+                InvalidateRect(gMainWindow, nullptr, FALSE);
             }
         }
         return 0;
@@ -703,6 +893,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             DeleteObject(playingBrush);
         }
 
+        std::array<std::vector<int>, kSequencerStepsPerPage> columnNotes;
         if (trackId > 0)
         {
             for (int column = 0; column < kSequencerStepsPerPage; ++column)
@@ -714,17 +905,49 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 auto notes = trackGetStepNotes(trackId, stepIndex);
                 if (notes.empty() && getTrackStepState(trackId, stepIndex))
                 {
-                    notes.push_back(trackGetStepNote(trackId, stepIndex));
+                    int fallback = trackGetStepNote(trackId, stepIndex);
+                    if (fallback >= 0)
+                        notes.push_back(fallback);
                 }
-                for (int midiNote : notes)
+                columnNotes[column] = std::move(notes);
+            }
+
+            for (int row = 0; row < kPianoRollNoteRows; ++row)
+            {
+                int midiNote = kPianoRollHighestNote - row;
+                int column = 0;
+                while (column < kSequencerStepsPerPage)
                 {
-                    int row = midiNoteToRow(midiNote);
-                    if (row >= 0 && row < kPianoRollNoteRows)
+                    int stepIndex = startStep + column;
+                    if (stepIndex >= totalSteps)
+                        break;
+
+                    const auto& notes = columnNotes[column];
+                    bool active = std::find(notes.begin(), notes.end(), midiNote) != notes.end();
+                    if (active)
                     {
-                        RECT cellRect {layout.columnX[column], layout.rowY[row], layout.columnX[column + 1], layout.rowY[row + 1]};
+                        int endColumn = column + 1;
+                        while (endColumn < kSequencerStepsPerPage)
+                        {
+                            int nextStep = startStep + endColumn;
+                            if (nextStep >= totalSteps)
+                                break;
+
+                            const auto& nextNotes = columnNotes[endColumn];
+                            if (std::find(nextNotes.begin(), nextNotes.end(), midiNote) == nextNotes.end())
+                                break;
+                            ++endColumn;
+                        }
+
+                        RECT cellRect {layout.columnX[column], layout.rowY[row], layout.columnX[endColumn], layout.rowY[row + 1]};
                         HBRUSH noteBrush = CreateSolidBrush(kPianoRollActiveNote);
                         FillRect(hdc, &cellRect, noteBrush);
                         DeleteObject(noteBrush);
+                        column = endColumn;
+                    }
+                    else
+                    {
+                        ++column;
                     }
                 }
             }
