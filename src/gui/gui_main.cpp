@@ -1273,27 +1273,37 @@ enum
     kEffectsLowEqSliderId = 1004,
     kEffectsMidEqSliderId = 1005,
     kEffectsHighEqSliderId = 1006,
+    kEffectsVolumeToggleId = 1010,
+    kEffectsPanToggleId = 1011,
+    kEffectsLowEqToggleId = 1012,
+    kEffectsMidEqToggleId = 1013,
+    kEffectsHighEqToggleId = 1014,
 };
 
 struct EffectsWindowState
 {
     HWND trackList = nullptr;
     HWND trackLabel = nullptr;
-    HWND volumeLabel = nullptr;
+    HWND volumeHeader = nullptr;
     HWND volumeSlider = nullptr;
     HWND volumeValueLabel = nullptr;
-    HWND panLabel = nullptr;
+    HWND panHeader = nullptr;
     HWND panSlider = nullptr;
     HWND panValueLabel = nullptr;
-    HWND lowEqLabel = nullptr;
+    HWND lowEqHeader = nullptr;
     HWND lowEqSlider = nullptr;
     HWND lowEqValueLabel = nullptr;
-    HWND midEqLabel = nullptr;
+    HWND midEqHeader = nullptr;
     HWND midEqSlider = nullptr;
     HWND midEqValueLabel = nullptr;
-    HWND highEqLabel = nullptr;
+    HWND highEqHeader = nullptr;
     HWND highEqSlider = nullptr;
     HWND highEqValueLabel = nullptr;
+    bool volumeExpanded = true;
+    bool panExpanded = true;
+    bool lowEqExpanded = true;
+    bool midEqExpanded = true;
+    bool highEqExpanded = true;
     int selectedTrackId = 0;
 };
 
@@ -1307,19 +1317,19 @@ void effectsWindowApplyFont(const EffectsWindowState& state, HFONT font)
     const HWND controls[] = {
         state.trackList,
         state.trackLabel,
-        state.volumeLabel,
+        state.volumeHeader,
         state.volumeSlider,
         state.volumeValueLabel,
-        state.panLabel,
+        state.panHeader,
         state.panSlider,
         state.panValueLabel,
-        state.lowEqLabel,
+        state.lowEqHeader,
         state.lowEqSlider,
         state.lowEqValueLabel,
-        state.midEqLabel,
+        state.midEqHeader,
         state.midEqSlider,
         state.midEqValueLabel,
-        state.highEqLabel,
+        state.highEqHeader,
         state.highEqSlider,
         state.highEqValueLabel,
     };
@@ -1333,6 +1343,16 @@ void effectsWindowApplyFont(const EffectsWindowState& state, HFONT font)
     }
 }
 
+void effectsWindowUpdateSectionHeader(HWND header, const wchar_t* text, bool expanded)
+{
+    if (!header || !text)
+        return;
+
+    std::wstring displayText = expanded ? L"\u25BC " : L"\u25B6 ";
+    displayText += text;
+    SetWindowTextW(header, displayText.c_str());
+}
+
 void effectsWindowLayout(HWND hwnd, EffectsWindowState* state, int width, int height)
 {
     if (!state)
@@ -1340,7 +1360,7 @@ void effectsWindowLayout(HWND hwnd, EffectsWindowState* state, int width, int he
 
     const int padding = 12;
     const int listWidth = 180;
-    const int labelHeight = 18;
+    const int headerHeight = 18;
     const int sliderHeight = 32;
     const int controlSpacing = 10;
     const int labelToSliderSpacing = 4;
@@ -1364,27 +1384,41 @@ void effectsWindowLayout(HWND hwnd, EffectsWindowState* state, int width, int he
 
     if (state->trackLabel)
     {
-        MoveWindow(state->trackLabel, rightLeft, currentY, usableWidth, labelHeight, TRUE);
-        currentY += labelHeight + controlSpacing;
+        MoveWindow(state->trackLabel, rightLeft, currentY, usableWidth, headerHeight, TRUE);
+        currentY += headerHeight + controlSpacing;
     }
 
-    auto layoutRow = [&](HWND label, HWND slider, HWND valueLabel)
+    auto layoutSection = [&](HWND header, HWND slider, HWND valueLabel, bool expanded)
     {
-        if (!label || !slider || !valueLabel)
+        if (!header || !valueLabel)
             return;
 
-        MoveWindow(label, rightLeft, currentY, usableWidth - valueLabelWidth, labelHeight, TRUE);
-        MoveWindow(valueLabel, rightLeft + usableWidth - valueLabelWidth, currentY, valueLabelWidth, labelHeight, TRUE);
-        currentY += labelHeight + labelToSliderSpacing;
-        MoveWindow(slider, rightLeft, currentY, usableWidth, sliderHeight, TRUE);
-        currentY += sliderHeight + controlSpacing;
+        ShowWindow(header, SW_SHOW);
+        ShowWindow(valueLabel, SW_SHOW);
+        if (slider)
+            ShowWindow(slider, expanded ? SW_SHOW : SW_HIDE);
+
+        MoveWindow(header, rightLeft, currentY, usableWidth - valueLabelWidth, headerHeight, TRUE);
+        MoveWindow(valueLabel, rightLeft + usableWidth - valueLabelWidth, currentY, valueLabelWidth, headerHeight, TRUE);
+        currentY += headerHeight;
+
+        if (expanded && slider)
+        {
+            currentY += labelToSliderSpacing;
+            MoveWindow(slider, rightLeft, currentY, usableWidth, sliderHeight, TRUE);
+            currentY += sliderHeight + controlSpacing;
+        }
+        else
+        {
+            currentY += controlSpacing;
+        }
     };
 
-    layoutRow(state->volumeLabel, state->volumeSlider, state->volumeValueLabel);
-    layoutRow(state->panLabel, state->panSlider, state->panValueLabel);
-    layoutRow(state->lowEqLabel, state->lowEqSlider, state->lowEqValueLabel);
-    layoutRow(state->midEqLabel, state->midEqSlider, state->midEqValueLabel);
-    layoutRow(state->highEqLabel, state->highEqSlider, state->highEqValueLabel);
+    layoutSection(state->volumeHeader, state->volumeSlider, state->volumeValueLabel, state->volumeExpanded);
+    layoutSection(state->panHeader, state->panSlider, state->panValueLabel, state->panExpanded);
+    layoutSection(state->lowEqHeader, state->lowEqSlider, state->lowEqValueLabel, state->lowEqExpanded);
+    layoutSection(state->midEqHeader, state->midEqSlider, state->midEqValueLabel, state->midEqExpanded);
+    layoutSection(state->highEqHeader, state->highEqSlider, state->highEqValueLabel, state->highEqExpanded);
 }
 
 void effectsWindowSetValueText(HWND control, const std::string& text)
@@ -1703,11 +1737,43 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         DWORD staticStyle = WS_CHILD | WS_VISIBLE;
         newState->trackLabel = CreateWindowExW(0, L"STATIC", L"", staticStyle, 0, 0, 100, 20, hwnd, nullptr, instance, nullptr);
 
-        auto createLabeledSlider = [&](const wchar_t* labelText, INT_PTR controlId, HWND& labelOut, HWND& sliderOut, HWND& valueOut,
-                                       int rangeMin, int rangeMax, int ticFreq)
+        DWORD headerStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
+
+        auto createCollapsibleSlider = [&](const wchar_t* labelText,
+                                           INT_PTR toggleId,
+                                           INT_PTR sliderId,
+                                           HWND& headerOut,
+                                           HWND& sliderOut,
+                                           HWND& valueOut,
+                                           bool& expandedFlag,
+                                           int rangeMin,
+                                           int rangeMax,
+                                           int ticFreq)
         {
-            labelOut = CreateWindowExW(0, L"STATIC", labelText, staticStyle, 0, 0, 100, 20, hwnd, nullptr, instance, nullptr);
-            valueOut = CreateWindowExW(0, L"STATIC", L"-", staticStyle | SS_RIGHT, 0, 0, 80, 20, hwnd, nullptr, instance, nullptr);
+            headerOut = CreateWindowExW(0,
+                                         L"BUTTON",
+                                         L"",
+                                         headerStyle,
+                                         0,
+                                         0,
+                                         100,
+                                         20,
+                                         hwnd,
+                                         reinterpret_cast<HMENU>(toggleId),
+                                         instance,
+                                         nullptr);
+            valueOut = CreateWindowExW(0,
+                                       L"STATIC",
+                                       L"-",
+                                       staticStyle | SS_RIGHT,
+                                       0,
+                                       0,
+                                       80,
+                                       20,
+                                       hwnd,
+                                       nullptr,
+                                       instance,
+                                       nullptr);
             sliderOut = CreateWindowExW(0,
                                         TRACKBAR_CLASSW,
                                         L"",
@@ -1717,18 +1783,65 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                         100,
                                         30,
                                         hwnd,
-                                        reinterpret_cast<HMENU>(controlId),
+                                        reinterpret_cast<HMENU>(sliderId),
                                         instance,
                                         nullptr);
             SendMessageW(sliderOut, TBM_SETRANGE, TRUE, MAKELPARAM(rangeMin, rangeMax));
             SendMessageW(sliderOut, TBM_SETTICFREQ, ticFreq, 0);
+            expandedFlag = true;
+            effectsWindowUpdateSectionHeader(headerOut, labelText, expandedFlag);
         };
 
-        createLabeledSlider(L"Volume", kEffectsVolumeSliderId, newState->volumeLabel, newState->volumeSlider, newState->volumeValueLabel, 0, 100, 10);
-        createLabeledSlider(L"Pan", kEffectsPanSliderId, newState->panLabel, newState->panSlider, newState->panValueLabel, 0, 200, 20);
-        createLabeledSlider(L"Low EQ", kEffectsLowEqSliderId, newState->lowEqLabel, newState->lowEqSlider, newState->lowEqValueLabel, 0, 240, 20);
-        createLabeledSlider(L"Mid EQ", kEffectsMidEqSliderId, newState->midEqLabel, newState->midEqSlider, newState->midEqValueLabel, 0, 240, 20);
-        createLabeledSlider(L"High EQ", kEffectsHighEqSliderId, newState->highEqLabel, newState->highEqSlider, newState->highEqValueLabel, 0, 240, 20);
+        createCollapsibleSlider(L"Volume",
+                                kEffectsVolumeToggleId,
+                                kEffectsVolumeSliderId,
+                                newState->volumeHeader,
+                                newState->volumeSlider,
+                                newState->volumeValueLabel,
+                                newState->volumeExpanded,
+                                0,
+                                100,
+                                10);
+        createCollapsibleSlider(L"Pan",
+                                kEffectsPanToggleId,
+                                kEffectsPanSliderId,
+                                newState->panHeader,
+                                newState->panSlider,
+                                newState->panValueLabel,
+                                newState->panExpanded,
+                                0,
+                                200,
+                                20);
+        createCollapsibleSlider(L"Low EQ",
+                                kEffectsLowEqToggleId,
+                                kEffectsLowEqSliderId,
+                                newState->lowEqHeader,
+                                newState->lowEqSlider,
+                                newState->lowEqValueLabel,
+                                newState->lowEqExpanded,
+                                0,
+                                240,
+                                20);
+        createCollapsibleSlider(L"Mid EQ",
+                                kEffectsMidEqToggleId,
+                                kEffectsMidEqSliderId,
+                                newState->midEqHeader,
+                                newState->midEqSlider,
+                                newState->midEqValueLabel,
+                                newState->midEqExpanded,
+                                0,
+                                240,
+                                20);
+        createCollapsibleSlider(L"High EQ",
+                                kEffectsHighEqToggleId,
+                                kEffectsHighEqSliderId,
+                                newState->highEqHeader,
+                                newState->highEqSlider,
+                                newState->highEqValueLabel,
+                                newState->highEqExpanded,
+                                0,
+                                240,
+                                20);
 
         HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         effectsWindowApplyFont(*newState, font);
@@ -1751,7 +1864,37 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_COMMAND:
     {
-        if (LOWORD(wParam) == kEffectsTrackListId && HIWORD(wParam) == LBN_SELCHANGE && state && state->trackList)
+        if (!state)
+            break;
+
+        auto handleToggle = [&](int controlId, HWND header, const wchar_t* labelText, bool& expanded, HWND slider)
+        {
+            if (LOWORD(wParam) != controlId || HIWORD(wParam) != BN_CLICKED)
+                return false;
+
+            expanded = !expanded;
+            effectsWindowUpdateSectionHeader(header, labelText, expanded);
+            if (slider)
+                ShowWindow(slider, expanded ? SW_SHOW : SW_HIDE);
+
+            RECT client {0, 0, 0, 0};
+            GetClientRect(hwnd, &client);
+            effectsWindowLayout(hwnd, state, client.right - client.left, client.bottom - client.top);
+            return true;
+        };
+
+        if (handleToggle(kEffectsVolumeToggleId, state->volumeHeader, L"Volume", state->volumeExpanded, state->volumeSlider))
+            return 0;
+        if (handleToggle(kEffectsPanToggleId, state->panHeader, L"Pan", state->panExpanded, state->panSlider))
+            return 0;
+        if (handleToggle(kEffectsLowEqToggleId, state->lowEqHeader, L"Low EQ", state->lowEqExpanded, state->lowEqSlider))
+            return 0;
+        if (handleToggle(kEffectsMidEqToggleId, state->midEqHeader, L"Mid EQ", state->midEqExpanded, state->midEqSlider))
+            return 0;
+        if (handleToggle(kEffectsHighEqToggleId, state->highEqHeader, L"High EQ", state->highEqExpanded, state->highEqSlider))
+            return 0;
+
+        if (LOWORD(wParam) == kEffectsTrackListId && HIWORD(wParam) == LBN_SELCHANGE && state->trackList)
         {
             int selection = static_cast<int>(SendMessageW(state->trackList, LB_GETCURSEL, 0, 0));
             if (selection != LB_ERR)
