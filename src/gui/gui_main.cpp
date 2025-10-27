@@ -64,6 +64,29 @@ std::string formatEqValue(float value)
     return stream.str();
 }
 
+std::string formatNormalizedValue(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2) << value;
+    return stream.str();
+}
+
+std::string formatPitchValue(float value)
+{
+    int semitones = static_cast<int>(std::lround(value));
+    std::ostringstream stream;
+    stream << std::showpos << semitones << " st";
+    return stream.str();
+}
+
+std::string formatPitchRangeValue(float value)
+{
+    int semitones = static_cast<int>(std::lround(value));
+    std::ostringstream stream;
+    stream << semitones << " st";
+    return stream.str();
+}
+
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
@@ -420,6 +443,14 @@ constexpr float kMixerPanMin = -1.0f;
 constexpr float kMixerPanMax = 1.0f;
 constexpr float kMixerEqMin = -12.0f;
 constexpr float kMixerEqMax = 12.0f;
+constexpr float kSynthFormantMin = 0.0f;
+constexpr float kSynthFormantMax = 1.0f;
+constexpr float kSynthFeedbackMin = 0.0f;
+constexpr float kSynthFeedbackMax = 1.0f;
+constexpr float kSynthPitchMin = -24.0f;
+constexpr float kSynthPitchMax = 24.0f;
+constexpr float kSynthPitchRangeMin = 1.0f;
+constexpr float kSynthPitchRangeMax = 24.0f;
 
 struct SliderControlRects
 {
@@ -437,6 +468,10 @@ struct KnobControlRects
 SliderControlRects gMainVolumeSliderControl{};
 SliderControlRects gMainPanSliderControl{};
 std::array<KnobControlRects, 3> gMainEqKnobControls{};
+SliderControlRects gSynthFormantSliderControl{};
+SliderControlRects gSynthFeedbackSliderControl{};
+SliderControlRects gSynthPitchSliderControl{};
+SliderControlRects gSynthPitchRangeSliderControl{};
 
 const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
 
@@ -1493,6 +1528,10 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
             fallbackTrack.lowGainDb = trackGetEqLowGain(state->selectedTrackId);
             fallbackTrack.midGainDb = trackGetEqMidGain(state->selectedTrackId);
             fallbackTrack.highGainDb = trackGetEqHighGain(state->selectedTrackId);
+            fallbackTrack.formant = trackGetSynthFormant(state->selectedTrackId);
+            fallbackTrack.feedback = trackGetSynthFeedback(state->selectedTrackId);
+            fallbackTrack.pitch = trackGetSynthPitch(state->selectedTrackId);
+            fallbackTrack.pitchRange = trackGetSynthPitchRange(state->selectedTrackId);
             trackPtr = &fallbackTrack;
         }
     }
@@ -2391,6 +2430,76 @@ void drawSequencer(LICE_SysBitmap& surface, int activeTrackId)
     }
 }
 
+void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
+{
+    gSynthFormantSliderControl = {};
+    gSynthFeedbackSliderControl = {};
+    gSynthPitchSliderControl = {};
+    gSynthPitchRangeSliderControl = {};
+
+    if (!activeTrack || activeTrack->type != TrackType::Synth)
+        return;
+
+    const RECT& firstStep = stepRects.front();
+    const RECT& lastStep = stepRects.back();
+    int areaLeft = firstStep.left;
+    int areaRight = lastStep.right;
+    if (areaRight <= areaLeft)
+        return;
+
+    int topSpacing = 12;
+    int sliderHeight = 70;
+    int areaTop = firstStep.bottom + topSpacing;
+    int areaBottom = areaTop + sliderHeight;
+    if (areaBottom > client.bottom)
+    {
+        areaBottom = client.bottom;
+        if (areaBottom - areaTop < 32)
+            areaTop = std::max(areaBottom - 32, firstStep.bottom + 2);
+    }
+    if (areaBottom <= areaTop)
+        return;
+
+    int totalWidth = areaRight - areaLeft;
+    int sliderSpacing = 12;
+    int sliderCount = 4;
+    int totalSpacing = sliderSpacing * (sliderCount - 1);
+    int sliderWidth = totalWidth - totalSpacing;
+    if (sliderWidth <= 0)
+        return;
+    sliderWidth /= sliderCount;
+    if (sliderWidth <= 0)
+        return;
+
+    auto makeSliderRect = [&](int index) {
+        int left = areaLeft + index * (sliderWidth + sliderSpacing);
+        RECT rect {left, areaTop, left + sliderWidth, areaBottom};
+        if (rect.right > areaRight)
+            rect.right = areaRight;
+        return rect;
+    };
+
+    double formantNorm = computeNormalized(activeTrack->formant, kSynthFormantMin, kSynthFormantMax);
+    RECT formantRect = makeSliderRect(0);
+    drawSliderControl(surface, gSynthFormantSliderControl, formantRect, formantNorm,
+                      "Formant", formatNormalizedValue(activeTrack->formant));
+
+    double feedbackNorm = computeNormalized(activeTrack->feedback, kSynthFeedbackMin, kSynthFeedbackMax);
+    RECT feedbackRect = makeSliderRect(1);
+    drawSliderControl(surface, gSynthFeedbackSliderControl, feedbackRect, feedbackNorm,
+                      "Feedback", formatNormalizedValue(activeTrack->feedback));
+
+    double pitchNorm = computeNormalized(activeTrack->pitch, kSynthPitchMin, kSynthPitchMax);
+    RECT pitchRect = makeSliderRect(2);
+    drawSliderControl(surface, gSynthPitchSliderControl, pitchRect, pitchNorm,
+                      "Pitch", formatPitchValue(activeTrack->pitch));
+
+    double pitchRangeNorm = computeNormalized(activeTrack->pitchRange, kSynthPitchRangeMin, kSynthPitchRangeMax);
+    RECT pitchRangeRect = makeSliderRect(3);
+    drawSliderControl(surface, gSynthPitchRangeSliderControl, pitchRangeRect, pitchRangeNorm,
+                      "Pitch Range", formatPitchRangeValue(activeTrack->pitchRange));
+}
+
 void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
 {
     constexpr int kPanelWidth = 80;
@@ -2551,6 +2660,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         fallbackTrack.lowGainDb = trackGetEqLowGain(activeTrackId);
         fallbackTrack.midGainDb = trackGetEqMidGain(activeTrackId);
         fallbackTrack.highGainDb = trackGetEqHighGain(activeTrackId);
+        fallbackTrack.formant = trackGetSynthFormant(activeTrackId);
+        fallbackTrack.feedback = trackGetSynthFeedback(activeTrackId);
+        fallbackTrack.pitch = trackGetSynthPitch(activeTrackId);
+        fallbackTrack.pitchRange = trackGetSynthPitchRange(activeTrackId);
         activeTrackPtr = &fallbackTrack;
     }
 
@@ -2788,6 +2901,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     drawSequencer(surface, activeTrackId);
 
+    drawSynthTrackControls(surface, client, activeTrackPtr);
+
     drawMixerControls(surface, client, activeTrackPtr);
 
     for (const auto& option : dropdownOptions)
@@ -2960,6 +3075,53 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 InvalidateRect(hwnd, nullptr, FALSE);
                 notifyEffectsWindowTrackValuesChanged(activeTrackId);
                 return 0;
+            }
+
+            if (showWaveSelector)
+            {
+                if (pointInRect(gSynthFormantSliderControl.control, x, y))
+                {
+                    float newFormant = sliderValueFromPosition(gSynthFormantSliderControl, x, kSynthFormantMin, kSynthFormantMax);
+                    trackSetSynthFormant(activeTrackId, newFormant);
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthFeedbackSliderControl.control, x, y))
+                {
+                    float newFeedback = sliderValueFromPosition(gSynthFeedbackSliderControl, x, kSynthFeedbackMin, kSynthFeedbackMax);
+                    trackSetSynthFeedback(activeTrackId, newFeedback);
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthPitchSliderControl.control, x, y))
+                {
+                    float newPitch = sliderValueFromPosition(gSynthPitchSliderControl, x, kSynthPitchMin, kSynthPitchMax);
+                    trackSetSynthPitch(activeTrackId, newPitch);
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthPitchRangeSliderControl.control, x, y))
+                {
+                    float newPitchRange = sliderValueFromPosition(gSynthPitchRangeSliderControl, x, kSynthPitchRangeMin, kSynthPitchRangeMax);
+                    trackSetSynthPitchRange(activeTrackId, newPitchRange);
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
             }
 
             for (size_t eqIndex = 0; eqIndex < gMainEqKnobControls.size(); ++eqIndex)

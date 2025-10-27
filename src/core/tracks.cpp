@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -21,6 +22,18 @@ constexpr float kMinPan = -1.0f;
 constexpr float kMaxPan = 1.0f;
 constexpr float kMinEqGainDb = -12.0f;
 constexpr float kMaxEqGainDb = 12.0f;
+constexpr float kMinFormant = 0.0f;
+constexpr float kMaxFormant = 1.0f;
+constexpr float kDefaultFormant = 0.5f;
+constexpr float kMinFeedback = 0.0f;
+constexpr float kMaxFeedback = 1.0f;
+constexpr float kDefaultFeedback = 0.0f;
+constexpr float kMinPitch = -24.0f;
+constexpr float kMaxPitch = 24.0f;
+constexpr float kDefaultPitch = 0.0f;
+constexpr float kMinPitchRange = 1.0f;
+constexpr float kMaxPitchRange = 24.0f;
+constexpr float kDefaultPitchRange = 12.0f;
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
 constexpr int kDefaultMidiNote = 69; // A4
@@ -47,6 +60,10 @@ struct TrackData
         track.lowGainDb = 0.0f;
         track.midGainDb = 0.0f;
         track.highGainDb = 0.0f;
+        track.formant = kDefaultFormant;
+        track.feedback = kDefaultFeedback;
+        track.pitch = kDefaultPitch;
+        track.pitchRange = kDefaultPitchRange;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
@@ -69,6 +86,10 @@ struct TrackData
     std::atomic<float> lowGainDb{0.0f};
     std::atomic<float> midGainDb{0.0f};
     std::atomic<float> highGainDb{0.0f};
+    std::atomic<float> formant{kDefaultFormant};
+    std::atomic<float> feedback{kDefaultFeedback};
+    std::atomic<float> pitch{kDefaultPitch};
+    std::atomic<float> pitchRange{kDefaultPitchRange};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
     std::array<std::vector<int>, kMaxSequencerSteps> stepNotes{};
@@ -93,6 +114,10 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.lowGainDb = 0.0f;
     baseTrack.midGainDb = 0.0f;
     baseTrack.highGainDb = 0.0f;
+    baseTrack.formant = kDefaultFormant;
+    baseTrack.feedback = kDefaultFeedback;
+    baseTrack.pitch = kDefaultPitch;
+    baseTrack.pitchRange = kDefaultPitchRange;
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -153,6 +178,10 @@ std::vector<Track> getTracks()
         info.lowGainDb = track->lowGainDb.load(std::memory_order_relaxed);
         info.midGainDb = track->midGainDb.load(std::memory_order_relaxed);
         info.highGainDb = track->highGainDb.load(std::memory_order_relaxed);
+        info.formant = track->formant.load(std::memory_order_relaxed);
+        info.feedback = track->feedback.load(std::memory_order_relaxed);
+        info.pitch = track->pitch.load(std::memory_order_relaxed);
+        info.pitchRange = track->pitchRange.load(std::memory_order_relaxed);
         result.push_back(std::move(info));
     }
     return result;
@@ -522,6 +551,90 @@ void trackSetEqHighGain(int trackId, float gainDb)
 
     float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
     track->highGainDb.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthFormant(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultFormant;
+
+    float value = track->formant.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinFormant, kMaxFormant);
+}
+
+void trackSetSynthFormant(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinFormant, kMaxFormant);
+    track->formant.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthFeedback(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultFeedback;
+
+    float value = track->feedback.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinFeedback, kMaxFeedback);
+}
+
+void trackSetSynthFeedback(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinFeedback, kMaxFeedback);
+    track->feedback.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthPitch(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultPitch;
+
+    float value = track->pitch.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinPitch, kMaxPitch);
+}
+
+void trackSetSynthPitch(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinPitch, kMaxPitch);
+    float quantized = static_cast<float>(std::lround(clamped));
+    track->pitch.store(quantized, std::memory_order_relaxed);
+}
+
+float trackGetSynthPitchRange(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultPitchRange;
+
+    float value = track->pitchRange.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinPitchRange, kMaxPitchRange);
+}
+
+void trackSetSynthPitchRange(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinPitchRange, kMaxPitchRange);
+    float quantized = static_cast<float>(std::lround(clamped));
+    if (quantized < kMinPitchRange)
+        quantized = kMinPitchRange;
+    track->pitchRange.store(quantized, std::memory_order_relaxed);
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)

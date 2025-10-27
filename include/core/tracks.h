@@ -32,6 +32,10 @@ struct Track
     float lowGainDb = 0.0f;
     float midGainDb = 0.0f;
     float highGainDb = 0.0f;
+    float formant = 0.5f;
+    float feedback = 0.0f;
+    float pitch = 0.0f;
+    float pitchRange = 12.0f;
 };
 
 void initTracks();
@@ -58,6 +62,18 @@ float trackGetEqHighGain(int trackId);
 void trackSetEqLowGain(int trackId, float gainDb);
 void trackSetEqMidGain(int trackId, float gainDb);
 void trackSetEqHighGain(int trackId, float gainDb);
+
+float trackGetSynthFormant(int trackId);
+void trackSetSynthFormant(int trackId, float value);
+
+float trackGetSynthFeedback(int trackId);
+void trackSetSynthFeedback(int trackId, float value);
+
+float trackGetSynthPitch(int trackId);
+void trackSetSynthPitch(int trackId, float value);
+
+float trackGetSynthPitchRange(int trackId);
+void trackSetSynthPitchRange(int trackId, float value);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);
