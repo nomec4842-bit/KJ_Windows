@@ -2455,7 +2455,7 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
     {
         areaBottom = client.bottom;
         if (areaBottom - areaTop < 32)
-            areaTop = std::max(areaBottom - 32, firstStep.bottom + 2);
+            areaTop = std::max<int>(areaBottom - 32, static_cast<int>(firstStep.bottom + 2));
     }
     if (areaBottom <= areaTop)
         return;
