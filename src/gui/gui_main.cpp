@@ -130,6 +130,9 @@ struct PianoRollDragState
 
 PianoRollDragState gPianoRollDrag;
 
+constexpr UINT kPianoRollContextDeleteNoteId = 5001;
+constexpr UINT kPianoRollContextDeleteRangeId = 5002;
+
 constexpr wchar_t kPianoRollWindowClassName[] = L"KJPianoRollWindow";
 constexpr int kPianoRollWindowWidth = 640;
 constexpr int kPianoRollWindowHeight = 360;
@@ -317,6 +320,60 @@ void pianoRollApplyDragRange(int newEndStep)
     if (gMainWindow && IsWindow(gMainWindow))
     {
         InvalidateRect(gMainWindow, nullptr, FALSE);
+    }
+}
+
+void pianoRollInvalidateAfterEdit()
+{
+    invalidatePianoRollWindow();
+    if (gMainWindow && IsWindow(gMainWindow))
+    {
+        InvalidateRect(gMainWindow, nullptr, FALSE);
+    }
+}
+
+void pianoRollDeleteNoteRange(int trackId, int stepIndex, int midiNote)
+{
+    if (trackId <= 0 || stepIndex < 0)
+        return;
+
+    int totalSteps = getSequencerStepCount(trackId);
+    if (totalSteps <= 0)
+        return;
+
+    std::vector<int> steps;
+    for (int step = stepIndex; step >= 0; --step)
+    {
+        if (stepContainsMidiNote(trackId, step, midiNote))
+        {
+            steps.push_back(step);
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    std::reverse(steps.begin(), steps.end());
+
+    for (int step = stepIndex + 1; step < totalSteps; ++step)
+    {
+        if (stepContainsMidiNote(trackId, step, midiNote))
+        {
+            steps.push_back(step);
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    for (int step : steps)
+    {
+        if (stepContainsMidiNote(trackId, step, midiNote))
+        {
+            trackToggleStepNote(trackId, step, midiNote);
+        }
     }
 }
 
@@ -798,6 +855,106 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                 }
             }
+        }
+        return 0;
+    }
+    case WM_RBUTTONUP:
+    {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        PianoRollLayout layout = computePianoRollLayout(client);
+
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        if (x < layout.grid.left || x >= layout.grid.right || y < layout.grid.top || y >= layout.grid.bottom)
+            return 0;
+
+        int column = -1;
+        for (int i = 0; i < kSequencerStepsPerPage; ++i)
+        {
+            if (x >= layout.columnX[i] && x < layout.columnX[i + 1])
+            {
+                column = i;
+                break;
+            }
+        }
+
+        int row = -1;
+        for (int i = 0; i < kPianoRollNoteRows; ++i)
+        {
+            if (y >= layout.rowY[i] && y < layout.rowY[i + 1])
+            {
+                row = i;
+                break;
+            }
+        }
+
+        if (column < 0 || row < 0)
+            return 0;
+
+        int trackId = getActiveSequencerTrackId();
+        if (trackId <= 0)
+            return 0;
+
+        int actualStepCount = getSequencerStepCount(trackId);
+        int totalSteps = actualStepCount < 1 ? kSequencerStepsPerPage : actualStepCount;
+
+        int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
+        if (stepIndex >= totalSteps)
+            return 0;
+
+        int midiNote = kPianoRollHighestNote - row;
+        if (!stepContainsMidiNote(trackId, stepIndex, midiNote))
+            return 0;
+
+        int contiguousCount = 1;
+        for (int step = stepIndex - 1; step >= 0; --step)
+        {
+            if (stepContainsMidiNote(trackId, step, midiNote))
+                ++contiguousCount;
+            else
+                break;
+        }
+        for (int step = stepIndex + 1; step < actualStepCount; ++step)
+        {
+            if (stepContainsMidiNote(trackId, step, midiNote))
+                ++contiguousCount;
+            else
+                break;
+        }
+
+        HMENU menu = CreatePopupMenu();
+        if (!menu)
+            return 0;
+
+        AppendMenuW(menu, MF_STRING, kPianoRollContextDeleteNoteId, L"Delete Note");
+        if (contiguousCount > 1)
+        {
+            AppendMenuW(menu, MF_STRING, kPianoRollContextDeleteRangeId, L"Delete Note Range");
+        }
+
+        POINT screenPoint {x, y};
+        ClientToScreen(hwnd, &screenPoint);
+        SetForegroundWindow(hwnd);
+        UINT command = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, screenPoint.x, screenPoint.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+
+        switch (command)
+        {
+        case kPianoRollContextDeleteNoteId:
+            if (stepContainsMidiNote(trackId, stepIndex, midiNote))
+            {
+                trackToggleStepNote(trackId, stepIndex, midiNote);
+                pianoRollInvalidateAfterEdit();
+            }
+            break;
+        case kPianoRollContextDeleteRangeId:
+            pianoRollDeleteNoteRange(trackId, stepIndex, midiNote);
+            pianoRollInvalidateAfterEdit();
+            break;
+        default:
+            break;
         }
         return 0;
     }
