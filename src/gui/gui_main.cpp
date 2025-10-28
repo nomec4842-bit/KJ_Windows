@@ -136,6 +136,7 @@ int waveDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
+int gPianoRollSelectedMenuTab = 0;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
 
@@ -161,6 +162,9 @@ constexpr int kPianoRollWindowWidth = 640;
 constexpr int kPianoRollWindowHeight = 360;
 constexpr int kPianoRollMargin = 10;
 constexpr int kPianoRollKeyboardWidth = 80;
+constexpr int kPianoRollMenuSpacing = 8;
+constexpr int kPianoRollMenuAreaHeight = 140;
+constexpr int kPianoRollTabBarHeight = 28;
 constexpr int kPianoRollNoteRows = 24;
 constexpr int kPianoRollLowestNote = 48; // C3
 constexpr int kPianoRollHighestNote = kPianoRollLowestNote + kPianoRollNoteRows - 1;
@@ -170,6 +174,15 @@ constexpr COLORREF kPianoRollActiveNote = RGB(0, 140, 220);
 constexpr COLORREF kPianoRollPlayingColumn = RGB(50, 50, 50);
 constexpr COLORREF kPianoRollKeyboardLight = RGB(80, 80, 80);
 constexpr COLORREF kPianoRollKeyboardDark = RGB(45, 45, 45);
+constexpr COLORREF kPianoRollMenuBackground = RGB(26, 26, 26);
+constexpr COLORREF kPianoRollMenuContentBackground = RGB(32, 32, 32);
+constexpr COLORREF kPianoRollMenuTabActive = RGB(65, 90, 130);
+constexpr COLORREF kPianoRollMenuTabInactive = RGB(45, 45, 45);
+
+constexpr int kPianoRollMenuTabCount = 4;
+const std::array<const wchar_t*, kPianoRollMenuTabCount> kPianoRollMenuTabLabels = {
+    L"Velocity", L"Pan", L"Pitch", L"Effect"
+};
 
 constexpr wchar_t kEffectsWindowClassName[] = L"KJEffectsWindow";
 constexpr int kEffectsWindowWidth = 520;
@@ -184,8 +197,12 @@ struct PianoRollLayout
     RECT client{};
     RECT grid{};
     RECT keyboard{};
+    RECT menuArea{};
+    RECT menuTabBar{};
+    RECT menuContent{};
     std::array<int, kSequencerStepsPerPage + 1> columnX{};
     std::array<int, kPianoRollNoteRows + 1> rowY{};
+    std::array<RECT, kPianoRollMenuTabCount> tabRects{};
 };
 
 PianoRollLayout computePianoRollLayout(const RECT& client)
@@ -203,15 +220,72 @@ PianoRollLayout computePianoRollLayout(const RECT& client)
     if (clientBottom < clientTop)
         std::swap(clientBottom, clientTop);
 
-    layout.grid.left = static_cast<LONG>(clientLeft + kPianoRollMargin + kPianoRollKeyboardWidth);
-    layout.grid.top = static_cast<LONG>(clientTop + kPianoRollMargin);
-    layout.grid.right = static_cast<LONG>(std::max(layout.grid.left, clientRight - kPianoRollMargin));
-    layout.grid.bottom = static_cast<LONG>(std::max(layout.grid.top, clientBottom - kPianoRollMargin));
+    LONG innerLeft = clientLeft + kPianoRollMargin;
+    LONG innerTop = clientTop + kPianoRollMargin;
+    LONG innerRight = std::max(innerLeft, clientRight - kPianoRollMargin);
+    LONG innerBottom = std::max(innerTop, clientBottom - kPianoRollMargin);
 
-    layout.keyboard.left = static_cast<LONG>(clientLeft + kPianoRollMargin);
-    layout.keyboard.top = layout.grid.top;
-    layout.keyboard.right = layout.grid.left;
-    layout.keyboard.bottom = layout.grid.bottom;
+    LONG menuHeight = std::min<LONG>(kPianoRollMenuAreaHeight, innerBottom - innerTop);
+    if (menuHeight > 0)
+    {
+        layout.menuArea.left = innerLeft;
+        layout.menuArea.right = innerRight;
+        layout.menuArea.bottom = innerBottom;
+        layout.menuArea.top = innerBottom - menuHeight;
+
+        layout.menuTabBar = layout.menuArea;
+        layout.menuTabBar.bottom = std::min(layout.menuArea.bottom, layout.menuArea.top + kPianoRollTabBarHeight);
+
+        layout.menuContent = layout.menuArea;
+        layout.menuContent.top = layout.menuTabBar.bottom;
+    }
+
+    LONG gridBottom = menuHeight > 0 ? layout.menuArea.top - kPianoRollMenuSpacing : innerBottom;
+    if (gridBottom < innerTop)
+        gridBottom = innerTop;
+
+    LONG keyboardRight = std::min(innerRight, innerLeft + kPianoRollKeyboardWidth);
+
+    layout.grid.left = keyboardRight;
+    layout.grid.top = innerTop;
+    layout.grid.right = innerRight;
+    layout.grid.bottom = gridBottom;
+
+    layout.keyboard.left = innerLeft;
+    layout.keyboard.top = innerTop;
+    layout.keyboard.right = keyboardRight;
+    layout.keyboard.bottom = gridBottom;
+
+    if (layout.grid.bottom < layout.grid.top)
+        layout.grid.bottom = layout.grid.top;
+    if (layout.grid.right < layout.grid.left)
+        layout.grid.right = layout.grid.left;
+    if (layout.keyboard.bottom < layout.keyboard.top)
+        layout.keyboard.bottom = layout.keyboard.top;
+    if (layout.keyboard.right < layout.keyboard.left)
+        layout.keyboard.right = layout.keyboard.left;
+
+    if (layout.menuTabBar.right < layout.menuTabBar.left)
+        layout.menuTabBar.right = layout.menuTabBar.left;
+    if (layout.menuTabBar.bottom < layout.menuTabBar.top)
+        layout.menuTabBar.bottom = layout.menuTabBar.top;
+    if (layout.menuContent.right < layout.menuContent.left)
+        layout.menuContent.right = layout.menuContent.left;
+    if (layout.menuContent.bottom < layout.menuContent.top)
+        layout.menuContent.bottom = layout.menuContent.top;
+
+    LONG tabWidth = (layout.menuTabBar.bottom > layout.menuTabBar.top)
+                        ? std::max<LONG>(0, layout.menuTabBar.right - layout.menuTabBar.left)
+                        : 0;
+    int baseTabWidth = kPianoRollMenuTabCount > 0 ? tabWidth / kPianoRollMenuTabCount : 0;
+    int tabRemainder = kPianoRollMenuTabCount > 0 ? tabWidth % kPianoRollMenuTabCount : 0;
+    LONG tabX = layout.menuTabBar.left;
+    for (int i = 0; i < kPianoRollMenuTabCount; ++i)
+    {
+        LONG increment = baseTabWidth + (i < tabRemainder ? 1 : 0);
+        layout.tabRects[static_cast<size_t>(i)] = RECT{tabX, layout.menuTabBar.top, tabX + increment, layout.menuTabBar.bottom};
+        tabX += increment;
+    }
 
     int gridWidth = std::max<LONG>(0, layout.grid.right - layout.grid.left);
     int gridHeight = std::max<LONG>(0, layout.grid.bottom - layout.grid.top);
@@ -843,6 +917,25 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
+        if (x >= layout.menuTabBar.left && x < layout.menuTabBar.right && y >= layout.menuTabBar.top &&
+            y < layout.menuTabBar.bottom)
+        {
+            for (int i = 0; i < kPianoRollMenuTabCount; ++i)
+            {
+                const RECT& tabRect = layout.tabRects[static_cast<size_t>(i)];
+                if (x >= tabRect.left && x < tabRect.right)
+                {
+                    if (gPianoRollSelectedMenuTab != i)
+                    {
+                        gPianoRollSelectedMenuTab = i;
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                    }
+                    break;
+                }
+            }
+            return 0;
+        }
+
         if (x >= layout.grid.left && x < layout.grid.right && y >= layout.grid.top && y < layout.grid.bottom)
         {
             int column = -1;
@@ -1235,9 +1328,160 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         SelectObject(hdc, oldPen);
         DeleteObject(gridPen);
 
+        if (layout.menuArea.right > layout.menuArea.left && layout.menuArea.bottom > layout.menuArea.top)
+        {
+            HBRUSH menuBackground = CreateSolidBrush(kPianoRollMenuBackground);
+            FillRect(hdc, &layout.menuArea, menuBackground);
+            DeleteObject(menuBackground);
+
+            if (layout.menuContent.right > layout.menuContent.left && layout.menuContent.bottom > layout.menuContent.top)
+            {
+                HBRUSH contentBackground = CreateSolidBrush(kPianoRollMenuContentBackground);
+                FillRect(hdc, &layout.menuContent, contentBackground);
+                DeleteObject(contentBackground);
+            }
+
+            if (layout.menuTabBar.right > layout.menuTabBar.left && layout.menuTabBar.bottom > layout.menuTabBar.top)
+            {
+                HBRUSH tabBarBackground = CreateSolidBrush(kPianoRollMenuBackground);
+                FillRect(hdc, &layout.menuTabBar, tabBarBackground);
+                DeleteObject(tabBarBackground);
+
+                HBRUSH activeTabBrush = CreateSolidBrush(kPianoRollMenuTabActive);
+                HBRUSH inactiveTabBrush = CreateSolidBrush(kPianoRollMenuTabInactive);
+                for (int i = 0; i < kPianoRollMenuTabCount; ++i)
+                {
+                    const RECT& tabRect = layout.tabRects[static_cast<size_t>(i)];
+                    if (tabRect.right <= tabRect.left || tabRect.bottom <= tabRect.top)
+                        continue;
+
+                    HBRUSH brush = (gPianoRollSelectedMenuTab == i) ? activeTabBrush : inactiveTabBrush;
+                    FillRect(hdc, &tabRect, brush);
+
+                    RECT textRect = tabRect;
+                    textRect.left += 10;
+                    textRect.right -= 10;
+                    textRect.top += 6;
+                    DrawTextW(hdc, kPianoRollMenuTabLabels[static_cast<size_t>(i)], -1, &textRect,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                }
+                DeleteObject(activeTabBrush);
+                DeleteObject(inactiveTabBrush);
+            }
+
+            RECT headingRect = layout.menuContent;
+            headingRect.left += 12;
+            headingRect.right -= 12;
+            headingRect.top += 10;
+            headingRect.bottom = headingRect.top + 24;
+
+            if (headingRect.right > headingRect.left)
+            {
+                std::wstring heading = std::wstring(kPianoRollMenuTabLabels[static_cast<size_t>(gPianoRollSelectedMenuTab)]) +
+                                       L" Controls";
+                DrawTextW(hdc, heading.c_str(), -1, &headingRect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+
+            RECT descriptionRect = headingRect;
+            descriptionRect.top = headingRect.bottom + 4;
+            descriptionRect.bottom = descriptionRect.top + 48;
+
+            if (descriptionRect.right > descriptionRect.left)
+            {
+                std::wstring description;
+                switch (gPianoRollSelectedMenuTab)
+                {
+                case 0:
+                    description = L"Shape the intensity of each note. Drag a step to set its velocity envelope.";
+                    break;
+                case 1:
+                    description = L"Position notes across the stereo field. Use left/right drags to pan per step.";
+                    break;
+                case 2:
+                    description = L"Fine-tune note pitch in semitones or cents for expressive runs.";
+                    break;
+                case 3:
+                default:
+                    description = L"Route per-note modulation and effects such as filters or delays.";
+                    break;
+                }
+                DrawTextW(hdc, description.c_str(), -1, &descriptionRect, DT_LEFT | DT_TOP | DT_WORDBREAK);
+            }
+
+            RECT laneRect = layout.menuContent;
+            laneRect.left += 12;
+            laneRect.right -= 12;
+            laneRect.top = descriptionRect.bottom + 8;
+            laneRect.bottom -= 12;
+
+            if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top)
+            {
+                HBRUSH laneBackground = CreateSolidBrush(RGB(40, 40, 40));
+                FillRect(hdc, &laneRect, laneBackground);
+                DeleteObject(laneBackground);
+
+                int stepCount = kSequencerStepsPerPage;
+                int laneWidth = laneRect.right - laneRect.left;
+                int laneHeight = laneRect.bottom - laneRect.top;
+                if (stepCount > 0 && laneWidth > 0 && laneHeight > 0)
+                {
+                    int baseWidth = laneWidth / stepCount;
+                    int remainder = laneWidth % stepCount;
+                    HPEN lanePen = CreatePen(PS_SOLID, 1, RGB(55, 55, 55));
+                    HPEN oldLanePen = static_cast<HPEN>(SelectObject(hdc, lanePen));
+                    MoveToEx(hdc, laneRect.left, laneRect.top, nullptr);
+                    LineTo(hdc, laneRect.left, laneRect.bottom);
+
+                    int x = laneRect.left;
+                    HBRUSH barBrush = CreateSolidBrush(kPianoRollActiveNote);
+                    for (int i = 0; i < stepCount; ++i)
+                    {
+                        int width = baseWidth + (i < remainder ? 1 : 0);
+                        int nextX = x + width;
+                        if (i == stepCount - 1)
+                            nextX = laneRect.right;
+                        if (nextX < x)
+                            nextX = x;
+
+                        MoveToEx(hdc, nextX, laneRect.top, nullptr);
+                        LineTo(hdc, nextX, laneRect.bottom);
+
+                        int columnWidth = nextX - x;
+                        if (columnWidth > 2)
+                        {
+                            int availableHeight = std::max(0, laneHeight - 4);
+                            int value = (i * 27 + gPianoRollSelectedMenuTab * 19) % 100;
+                            int filled = (availableHeight * value) / 100;
+                            LONG barLeft = x + 2;
+                            LONG barRight = nextX - 2;
+                            if (barRight < barLeft)
+                                barRight = barLeft;
+                            LONG barBottom = laneRect.bottom - 2;
+                            LONG barTop = barBottom - static_cast<LONG>(filled);
+                            LONG minBarTop = laneRect.top + 2;
+                            if (barTop < minBarTop)
+                                barTop = minBarTop;
+                            if (barBottom > barTop && barRight > barLeft)
+                            {
+                                RECT barRect{barLeft, barTop, barRight, barBottom};
+                                FillRect(hdc, &barRect, barBrush);
+                            }
+                        }
+
+                        x = nextX;
+                    }
+                    SelectObject(hdc, oldLanePen);
+                    DeleteObject(lanePen);
+                    DeleteObject(barBrush);
+                }
+            }
+        }
+
         HBRUSH borderBrush = CreateSolidBrush(RGB(15, 15, 15));
         FrameRect(hdc, &layout.keyboard, borderBrush);
         FrameRect(hdc, &layout.grid, borderBrush);
+        if (layout.menuArea.right > layout.menuArea.left && layout.menuArea.bottom > layout.menuArea.top)
+            FrameRect(hdc, &layout.menuArea, borderBrush);
         DeleteObject(borderBrush);
 
         if (trackId <= 0)
