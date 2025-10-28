@@ -173,10 +173,38 @@ void configurePeaking(BiquadFilter& filter, double sampleRate, double frequency,
     setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
 }
 
-double midiNoteToFrequency(int midiNote)
+double midiNoteToFrequency(double midiNote)
 {
-    int clamped = std::clamp(midiNote, 0, 127);
-    return 440.0 * std::pow(2.0, (static_cast<double>(clamped) - 69.0) / 12.0);
+    double clamped = std::clamp(midiNote, 0.0, 127.0);
+    return 440.0 * std::pow(2.0, (clamped - 69.0) / 12.0);
+}
+
+double computeFormantAlpha(double sampleRate, double normalizedFormant)
+{
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double safeNorm = std::clamp(normalizedFormant, 0.0, 1.0);
+    constexpr double kMinFormantFreq = 200.0;
+    constexpr double kMaxFormantFreq = 8000.0;
+    double maxAllowed = std::max(kMinFormantFreq, std::min(sr * 0.45, kMaxFormantFreq));
+    double targetFreq = kMinFormantFreq * std::pow(maxAllowed / kMinFormantFreq, safeNorm);
+    double rc = 1.0 / (2.0 * kPi * targetFreq);
+    double dt = 1.0 / sr;
+    double alpha = dt / (rc + dt);
+    if (alpha < 0.0)
+        alpha = 0.0;
+    if (alpha > 1.0)
+        alpha = 1.0;
+    return alpha;
+}
+
+double computePitchEnvelopeStep(double sampleRate, double rangeSemitones)
+{
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double normalized = std::clamp(rangeSemitones / 23.0, 0.0, 1.0);
+    double envelopeTime = 0.04 + normalized * 0.26; // seconds
+    if (envelopeTime <= 0.0 || !std::isfinite(envelopeTime))
+        return 1.0;
+    return 1.0 / (envelopeTime * sr);
 }
 
 struct TrackPlaybackState {
@@ -195,6 +223,16 @@ struct TrackPlaybackState {
     double midGain = 0.0;
     double highGain = 0.0;
     double lastSampleRate = 0.0;
+    double feedbackAmount = 0.0;
+    double formantNormalized = 0.5;
+    double formantAlpha = 1.0;
+    double formantBlend = 1.0;
+    double formantStateL = 0.0;
+    double formantStateR = 0.0;
+    double pitchBaseOffset = 0.0;
+    double pitchRangeSemitones = 0.0;
+    double pitchEnvelope = 0.0;
+    double pitchEnvelopeStep = 1.0;
     BiquadFilter lowShelf;
     BiquadFilter midPeak;
     BiquadFilter highShelf;
@@ -202,6 +240,7 @@ struct TrackPlaybackState {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
         double phase = 0.0;
+        double lastOutput = 0.0;
     };
     std::vector<SynthVoice> voices;
 };
@@ -215,11 +254,17 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newLow = static_cast<double>(track.lowGainDb);
     double newMid = static_cast<double>(track.midGainDb);
     double newHigh = static_cast<double>(track.highGainDb);
+    double newFormant = std::clamp(static_cast<double>(track.formant), 0.0, 1.0);
+    double newFeedback = std::clamp(static_cast<double>(track.feedback), 0.0, 1.0);
+    double newPitch = static_cast<double>(track.pitch);
+    double newPitchRange = std::max(0.0, static_cast<double>(track.pitchRange) - 1.0);
 
     bool sampleRateChanged = std::abs(state.lastSampleRate - sr) > 1e-6;
     bool lowChanged = sampleRateChanged || std::abs(state.lowGain - newLow) > 1e-6;
     bool midChanged = sampleRateChanged || std::abs(state.midGain - newMid) > 1e-6;
     bool highChanged = sampleRateChanged || std::abs(state.highGain - newHigh) > 1e-6;
+    bool formantChanged = sampleRateChanged || std::abs(state.formantNormalized - newFormant) > 1e-6;
+    bool pitchRangeChanged = sampleRateChanged || std::abs(state.pitchRangeSemitones - newPitchRange) > 1e-6;
 
     if (lowChanged)
     {
@@ -236,6 +281,19 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
         configureHighShelf(state.highShelf, sr, kHighShelfFrequency, newHigh);
         state.highGain = newHigh;
     }
+    if (formantChanged)
+    {
+        state.formantNormalized = newFormant;
+        state.formantAlpha = computeFormantAlpha(sr, newFormant);
+        state.formantBlend = newFormant;
+        state.formantStateL = 0.0;
+        state.formantStateR = 0.0;
+    }
+    if (pitchRangeChanged)
+    {
+        state.pitchRangeSemitones = newPitchRange;
+        state.pitchEnvelopeStep = computePitchEnvelopeStep(sr, newPitchRange);
+    }
 
     if (sampleRateChanged || lowChanged || midChanged || highChanged)
     {
@@ -246,7 +304,13 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
 
     state.volume = newVolume;
     state.pan = newPan;
+    state.feedbackAmount = newFeedback;
+    state.pitchBaseOffset = newPitch;
     state.lastSampleRate = sr;
+    if (!sampleRateChanged && !formantChanged)
+    {
+        state.formantAlpha = computeFormantAlpha(sr, state.formantNormalized);
+    }
 }
 
 } // namespace
@@ -459,6 +523,7 @@ void audioLoop() {
                             state.envelope = 0.0;
                         state.samplePlaying = false;
                         state.samplePosition = 0.0;
+                        state.pitchEnvelope = 0.0;
                     }
                 } else {
                     if (!previousPlaying) {
@@ -594,8 +659,9 @@ void audioLoop() {
                                     } else {
                                         TrackPlaybackState::SynthVoice voice{};
                                         voice.midiNote = note;
-                                        voice.frequency = midiNoteToFrequency(note);
+                                        voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset);
                                         voice.phase = 0.0;
+                                        voice.lastOutput = 0.0;
                                         updatedVoices.push_back(voice);
                                         createdNewVoice = true;
                                     }
@@ -614,6 +680,8 @@ void audioLoop() {
                                 if (createdNewVoice) {
                                     state.envelope = 0.9;
                                 }
+
+                                state.pitchEnvelope = 1.0;
                             }
 
                             if (state.envelope < target) {
@@ -628,9 +696,15 @@ void audioLoop() {
 
                             double sampleValue = 0.0;
                             if (!state.voices.empty()) {
+                                double pitchOffset = state.pitchBaseOffset + state.pitchEnvelope * state.pitchRangeSemitones;
+                                double feedbackMix = std::clamp(state.feedbackAmount, 0.0, 0.99);
+                                SynthWaveType waveType = trackInfo.synthWaveType;
                                 for (auto& voice : state.voices) {
+                                    double noteWithPitch = static_cast<double>(voice.midiNote) + pitchOffset;
+                                    double frequency = midiNoteToFrequency(noteWithPitch);
+                                    voice.frequency = frequency;
                                     double waveform = 0.0;
-                                    switch (trackInfo.synthWaveType)
+                                    switch (waveType)
                                     {
                                     case SynthWaveType::Sine:
                                         waveform = std::sin(voice.phase);
@@ -652,13 +726,25 @@ void audioLoop() {
                                         break;
                                     }
                                     }
+                                    if (feedbackMix > 0.0)
+                                    {
+                                        waveform = waveform * (1.0 - feedbackMix) + voice.lastOutput * feedbackMix;
+                                    }
+                                    waveform = std::clamp(waveform, -1.0, 1.0);
+                                    voice.lastOutput = waveform;
                                     sampleValue += waveform;
-                                    double increment = twoPi * voice.frequency / sampleRate;
+                                    double increment = twoPi * frequency / sampleRate;
                                     voice.phase += increment;
                                     if (voice.phase >= twoPi)
                                     {
                                         voice.phase = std::fmod(voice.phase, twoPi);
                                     }
+                                }
+                                if (state.pitchEnvelope > 0.0)
+                                {
+                                    state.pitchEnvelope = std::max(0.0, state.pitchEnvelope - state.pitchEnvelopeStep);
+                                    if (state.pitchEnvelope < 1e-6)
+                                        state.pitchEnvelope = 0.0;
                                 }
                                 sampleValue /= static_cast<double>(state.voices.size());
                             }
@@ -668,6 +754,15 @@ void audioLoop() {
                             }
                             trackLeft = sampleValue;
                             trackRight = sampleValue;
+
+                            if (state.formantBlend < 1.0 || state.formantAlpha < 1.0) {
+                                double filteredLeft = state.formantStateL + state.formantAlpha * (trackLeft - state.formantStateL);
+                                double filteredRight = state.formantStateR + state.formantAlpha * (trackRight - state.formantStateR);
+                                trackLeft = filteredLeft * (1.0 - state.formantBlend) + trackLeft * state.formantBlend;
+                                trackRight = filteredRight * (1.0 - state.formantBlend) + trackRight * state.formantBlend;
+                                state.formantStateL = filteredLeft;
+                                state.formantStateR = filteredRight;
+                            }
                         }
 
                         double processedLeft = processBiquadSample(state.lowShelf, trackLeft, false);
