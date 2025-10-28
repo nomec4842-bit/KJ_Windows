@@ -473,6 +473,25 @@ SliderControlRects gSynthFeedbackSliderControl{};
 SliderControlRects gSynthPitchSliderControl{};
 SliderControlRects gSynthPitchRangeSliderControl{};
 
+enum class SliderDragTarget
+{
+    None,
+    MainVolume,
+    MainPan,
+    SynthFormant,
+    SynthFeedback,
+    SynthPitch,
+    SynthPitchRange,
+};
+
+struct SliderDragState
+{
+    SliderDragTarget target = SliderDragTarget::None;
+    int trackId = 0;
+};
+
+SliderDragState gSliderDrag{};
+
 const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
 
 constexpr double kPi = 3.14159265358979323846;
@@ -2113,6 +2132,92 @@ float sliderValueFromPosition(const SliderControlRects& slider, int x, float min
     return std::clamp(result, minValue, maxValue);
 }
 
+void beginSliderDrag(HWND hwnd, SliderDragTarget target, int trackId)
+{
+    gSliderDrag.target = target;
+    gSliderDrag.trackId = trackId;
+    if (hwnd && GetCapture() != hwnd)
+    {
+        SetCapture(hwnd);
+    }
+}
+
+void endSliderDrag(HWND hwnd)
+{
+    if (gSliderDrag.target == SliderDragTarget::None)
+        return;
+
+    gSliderDrag.target = SliderDragTarget::None;
+    gSliderDrag.trackId = 0;
+    if (hwnd && GetCapture() == hwnd)
+    {
+        ReleaseCapture();
+    }
+}
+
+void updateSliderDrag(HWND hwnd, int x)
+{
+    if (gSliderDrag.target == SliderDragTarget::None)
+        return;
+
+    int trackId = gSliderDrag.trackId;
+    if (trackId <= 0)
+    {
+        endSliderDrag(hwnd);
+        return;
+    }
+
+    auto applySliderChange = [&](const SliderControlRects& slider, float minValue, float maxValue, auto&& setter) {
+        if (slider.track.right <= slider.track.left)
+        {
+            endSliderDrag(hwnd);
+            return false;
+        }
+
+        float newValue = sliderValueFromPosition(slider, x, minValue, maxValue);
+        setter(newValue);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    };
+
+    switch (gSliderDrag.target)
+    {
+    case SliderDragTarget::MainVolume:
+        if (applySliderChange(gMainVolumeSliderControl, kMixerVolumeMin, kMixerVolumeMax,
+                              [trackId](float value) { trackSetVolume(trackId, value); }))
+        {
+            notifyEffectsWindowTrackValuesChanged(trackId);
+        }
+        break;
+    case SliderDragTarget::MainPan:
+        if (applySliderChange(gMainPanSliderControl, kMixerPanMin, kMixerPanMax,
+                              [trackId](float value) { trackSetPan(trackId, value); }))
+        {
+            notifyEffectsWindowTrackValuesChanged(trackId);
+        }
+        break;
+    case SliderDragTarget::SynthFormant:
+        applySliderChange(gSynthFormantSliderControl, kSynthFormantMin, kSynthFormantMax,
+                          [trackId](float value) { trackSetSynthFormant(trackId, value); });
+        break;
+    case SliderDragTarget::SynthFeedback:
+        applySliderChange(gSynthFeedbackSliderControl, kSynthFeedbackMin, kSynthFeedbackMax,
+                          [trackId](float value) { trackSetSynthFeedback(trackId, value); });
+        break;
+    case SliderDragTarget::SynthPitch:
+        applySliderChange(gSynthPitchSliderControl, kSynthPitchMin, kSynthPitchMax,
+                          [trackId](float value) { trackSetSynthPitch(trackId, value); });
+        break;
+    case SliderDragTarget::SynthPitchRange:
+        applySliderChange(gSynthPitchRangeSliderControl, kSynthPitchRangeMin, kSynthPitchRangeMax,
+                          [trackId](float value) { trackSetSynthPitchRange(trackId, value); });
+        break;
+    case SliderDragTarget::None:
+    default:
+        break;
+    }
+}
+
 void fillCircle(LICE_SysBitmap& surface, int centerX, int centerY, int radius, COLORREF color)
 {
     if (radius <= 0)
@@ -2929,6 +3034,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         int x = LOWORD(lParam);
         int y = HIWORD(lParam);
+        endSliderDrag(hwnd);
         if (audioDeviceDropdownOpen)
         {
             for (const auto& option : gAudioDeviceOptions)
@@ -3055,25 +3161,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             if (pointInRect(gMainVolumeSliderControl.control, x, y))
             {
-                float newVolume = sliderValueFromPosition(gMainVolumeSliderControl, x, kMixerVolumeMin, kMixerVolumeMax);
-                trackSetVolume(activeTrackId, newVolume);
                 openTrackTypeTrackId = 0;
                 waveDropdownOpen = false;
                 audioDeviceDropdownOpen = false;
-                InvalidateRect(hwnd, nullptr, FALSE);
-                notifyEffectsWindowTrackValuesChanged(activeTrackId);
+                beginSliderDrag(hwnd, SliderDragTarget::MainVolume, activeTrackId);
+                updateSliderDrag(hwnd, x);
                 return 0;
             }
 
             if (pointInRect(gMainPanSliderControl.control, x, y))
             {
-                float newPan = sliderValueFromPosition(gMainPanSliderControl, x, kMixerPanMin, kMixerPanMax);
-                trackSetPan(activeTrackId, newPan);
                 openTrackTypeTrackId = 0;
                 waveDropdownOpen = false;
                 audioDeviceDropdownOpen = false;
-                InvalidateRect(hwnd, nullptr, FALSE);
-                notifyEffectsWindowTrackValuesChanged(activeTrackId);
+                beginSliderDrag(hwnd, SliderDragTarget::MainPan, activeTrackId);
+                updateSliderDrag(hwnd, x);
                 return 0;
             }
 
@@ -3081,45 +3183,41 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 if (pointInRect(gSynthFormantSliderControl.control, x, y))
                 {
-                    float newFormant = sliderValueFromPosition(gSynthFormantSliderControl, x, kSynthFormantMin, kSynthFormantMax);
-                    trackSetSynthFormant(activeTrackId, newFormant);
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
-                    InvalidateRect(hwnd, nullptr, FALSE);
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthFormant, activeTrackId);
+                    updateSliderDrag(hwnd, x);
                     return 0;
                 }
 
                 if (pointInRect(gSynthFeedbackSliderControl.control, x, y))
                 {
-                    float newFeedback = sliderValueFromPosition(gSynthFeedbackSliderControl, x, kSynthFeedbackMin, kSynthFeedbackMax);
-                    trackSetSynthFeedback(activeTrackId, newFeedback);
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
-                    InvalidateRect(hwnd, nullptr, FALSE);
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthFeedback, activeTrackId);
+                    updateSliderDrag(hwnd, x);
                     return 0;
                 }
 
                 if (pointInRect(gSynthPitchSliderControl.control, x, y))
                 {
-                    float newPitch = sliderValueFromPosition(gSynthPitchSliderControl, x, kSynthPitchMin, kSynthPitchMax);
-                    trackSetSynthPitch(activeTrackId, newPitch);
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
-                    InvalidateRect(hwnd, nullptr, FALSE);
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthPitch, activeTrackId);
+                    updateSliderDrag(hwnd, x);
                     return 0;
                 }
 
                 if (pointInRect(gSynthPitchRangeSliderControl.control, x, y))
                 {
-                    float newPitchRange = sliderValueFromPosition(gSynthPitchRangeSliderControl, x, kSynthPitchRangeMin, kSynthPitchRangeMax);
-                    trackSetSynthPitchRange(activeTrackId, newPitchRange);
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
-                    InvalidateRect(hwnd, nullptr, FALSE);
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthPitchRange, activeTrackId);
+                    updateSliderDrag(hwnd, x);
                     return 0;
                 }
             }
@@ -3406,6 +3504,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         return 0;
     }
+    case WM_MOUSEMOVE:
+    {
+        if (gSliderDrag.target != SliderDragTarget::None)
+        {
+            int x = GET_X_LPARAM(lParam);
+            updateSliderDrag(hwnd, x);
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONUP:
+        if (gSliderDrag.target != SliderDragTarget::None)
+        {
+            endSliderDrag(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CAPTURECHANGED:
+        if (gSliderDrag.target != SliderDragTarget::None && reinterpret_cast<HWND>(lParam) != hwnd)
+        {
+            gSliderDrag.target = SliderDragTarget::None;
+            gSliderDrag.trackId = 0;
+        }
+        break;
     case WM_TIMER:
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
