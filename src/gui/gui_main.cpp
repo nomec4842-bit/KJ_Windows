@@ -137,6 +137,7 @@ HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
 int gPianoRollSelectedMenuTab = 0;
+bool gPianoRollMenuCollapsed = false;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
 
@@ -180,6 +181,9 @@ constexpr COLORREF kPianoRollMenuTabActive = RGB(65, 90, 130);
 constexpr COLORREF kPianoRollMenuTabInactive = RGB(45, 45, 45);
 
 constexpr int kPianoRollMenuTabCount = 4;
+constexpr int kPianoRollCollapseBarHeight = 28;
+constexpr int kPianoRollCollapseButtonSize = 20;
+constexpr int kPianoRollCollapseButtonPadding = 8;
 const std::array<const wchar_t*, kPianoRollMenuTabCount> kPianoRollMenuTabLabels = {
     L"Velocity", L"Pan", L"Pitch", L"Effect"
 };
@@ -200,15 +204,19 @@ struct PianoRollLayout
     RECT menuArea{};
     RECT menuTabBar{};
     RECT menuContent{};
+    RECT collapseBar{};
+    RECT collapseButton{};
     std::array<int, kSequencerStepsPerPage + 1> columnX{};
     std::array<int, kPianoRollNoteRows + 1> rowY{};
     std::array<RECT, kPianoRollMenuTabCount> tabRects{};
+    bool menuCollapsed = false;
 };
 
 PianoRollLayout computePianoRollLayout(const RECT& client)
 {
     PianoRollLayout layout{};
     layout.client = client;
+    layout.menuCollapsed = gPianoRollMenuCollapsed;
 
     LONG clientLeft = client.left;
     LONG clientTop = client.top;
@@ -225,7 +233,13 @@ PianoRollLayout computePianoRollLayout(const RECT& client)
     LONG innerRight = std::max(innerLeft, clientRight - kPianoRollMargin);
     LONG innerBottom = std::max(innerTop, clientBottom - kPianoRollMargin);
 
-    LONG menuHeight = std::min<LONG>(kPianoRollMenuAreaHeight, innerBottom - innerTop);
+    LONG collapseBarTop = std::max(innerTop, innerBottom - kPianoRollCollapseBarHeight);
+    layout.collapseBar.left = innerLeft;
+    layout.collapseBar.right = innerRight;
+    layout.collapseBar.bottom = innerBottom;
+    layout.collapseBar.top = collapseBarTop;
+
+    LONG menuHeight = layout.menuCollapsed ? 0 : std::min<LONG>(kPianoRollMenuAreaHeight, innerBottom - innerTop);
     if (menuHeight > 0)
     {
         layout.menuArea.left = innerLeft;
@@ -238,9 +252,17 @@ PianoRollLayout computePianoRollLayout(const RECT& client)
 
         layout.menuContent = layout.menuArea;
         layout.menuContent.top = layout.menuTabBar.bottom;
+
+        layout.collapseBar = layout.menuTabBar;
+    }
+    else
+    {
+        layout.menuArea = RECT{innerLeft, innerBottom, innerLeft, innerBottom};
+        layout.menuTabBar = layout.menuArea;
+        layout.menuContent = layout.menuArea;
     }
 
-    LONG gridBottom = menuHeight > 0 ? layout.menuArea.top - kPianoRollMenuSpacing : innerBottom;
+    LONG gridBottom = menuHeight > 0 ? layout.menuArea.top - kPianoRollMenuSpacing : layout.collapseBar.top - kPianoRollMenuSpacing;
     if (gridBottom < innerTop)
         gridBottom = innerTop;
 
@@ -274,8 +296,18 @@ PianoRollLayout computePianoRollLayout(const RECT& client)
     if (layout.menuContent.bottom < layout.menuContent.top)
         layout.menuContent.bottom = layout.menuContent.top;
 
+    LONG tabRightLimit = layout.menuTabBar.right;
+    if (!layout.menuCollapsed)
+    {
+        LONG reserved = kPianoRollCollapseButtonSize + 2 * kPianoRollCollapseButtonPadding;
+        if (tabRightLimit - reserved > layout.menuTabBar.left)
+            tabRightLimit -= reserved;
+        else
+            tabRightLimit = layout.menuTabBar.left;
+    }
+
     LONG tabWidth = (layout.menuTabBar.bottom > layout.menuTabBar.top)
-                        ? std::max<LONG>(0, layout.menuTabBar.right - layout.menuTabBar.left)
+                        ? std::max<LONG>(0, tabRightLimit - layout.menuTabBar.left)
                         : 0;
     int baseTabWidth = kPianoRollMenuTabCount > 0 ? tabWidth / kPianoRollMenuTabCount : 0;
     int tabRemainder = kPianoRollMenuTabCount > 0 ? tabWidth % kPianoRollMenuTabCount : 0;
@@ -283,9 +315,26 @@ PianoRollLayout computePianoRollLayout(const RECT& client)
     for (int i = 0; i < kPianoRollMenuTabCount; ++i)
     {
         LONG increment = baseTabWidth + (i < tabRemainder ? 1 : 0);
-        layout.tabRects[static_cast<size_t>(i)] = RECT{tabX, layout.menuTabBar.top, tabX + increment, layout.menuTabBar.bottom};
-        tabX += increment;
+        LONG nextTabX = tabX + increment;
+        if (nextTabX > tabRightLimit)
+            nextTabX = tabRightLimit;
+        layout.tabRects[static_cast<size_t>(i)] = RECT{tabX, layout.menuTabBar.top, nextTabX, layout.menuTabBar.bottom};
+        tabX = nextTabX;
     }
+
+    LONG buttonRight = layout.collapseBar.right - kPianoRollCollapseButtonPadding;
+    LONG buttonLeft = std::max(layout.collapseBar.left + kPianoRollCollapseButtonPadding,
+                               buttonRight - kPianoRollCollapseButtonSize);
+    if (buttonLeft > buttonRight)
+        buttonLeft = buttonRight;
+    LONG buttonHeight = std::min<LONG>(kPianoRollCollapseButtonSize, layout.collapseBar.bottom - layout.collapseBar.top);
+    LONG buttonTop = layout.collapseBar.top + ((layout.collapseBar.bottom - layout.collapseBar.top - buttonHeight) / 2);
+    if (buttonTop < layout.collapseBar.top)
+        buttonTop = layout.collapseBar.top;
+    LONG buttonBottom = buttonTop + buttonHeight;
+    if (buttonBottom > layout.collapseBar.bottom)
+        buttonBottom = layout.collapseBar.bottom;
+    layout.collapseButton = RECT{buttonLeft, buttonTop, buttonRight, buttonBottom};
 
     int gridWidth = std::max<LONG>(0, layout.grid.right - layout.grid.left);
     int gridHeight = std::max<LONG>(0, layout.grid.bottom - layout.grid.top);
@@ -917,6 +966,22 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
+        if (x >= layout.collapseButton.left && x < layout.collapseButton.right && y >= layout.collapseButton.top &&
+            y < layout.collapseButton.bottom)
+        {
+            gPianoRollMenuCollapsed = !gPianoRollMenuCollapsed;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        if (layout.menuCollapsed && x >= layout.collapseBar.left && x < layout.collapseBar.right &&
+            y >= layout.collapseBar.top && y < layout.collapseBar.bottom)
+        {
+            gPianoRollMenuCollapsed = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
         if (x >= layout.menuTabBar.left && x < layout.menuTabBar.right && y >= layout.menuTabBar.top &&
             y < layout.menuTabBar.bottom)
         {
@@ -1477,11 +1542,72 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             }
         }
 
+        if (layout.collapseBar.right > layout.collapseBar.left && layout.collapseBar.bottom > layout.collapseBar.top)
+        {
+            if (layout.menuCollapsed)
+            {
+                HBRUSH collapseBrush = CreateSolidBrush(kPianoRollMenuBackground);
+                FillRect(hdc, &layout.collapseBar, collapseBrush);
+                DeleteObject(collapseBrush);
+
+                RECT labelRect = layout.collapseBar;
+                labelRect.left += 12;
+                labelRect.right = layout.collapseButton.left - 8;
+                if (labelRect.right > labelRect.left)
+                {
+                    DrawTextW(hdc, L"Note Editor", -1, &labelRect,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                }
+            }
+
+            if (layout.collapseButton.right > layout.collapseButton.left &&
+                layout.collapseButton.bottom > layout.collapseButton.top)
+            {
+                HBRUSH buttonBrush = CreateSolidBrush(layout.menuCollapsed ? kPianoRollMenuTabActive
+                                                                           : kPianoRollMenuTabInactive);
+                FillRect(hdc, &layout.collapseButton, buttonBrush);
+                DeleteObject(buttonBrush);
+
+                HBRUSH buttonBorder = CreateSolidBrush(RGB(80, 80, 80));
+                FrameRect(hdc, &layout.collapseButton, buttonBorder);
+                DeleteObject(buttonBorder);
+
+                HBRUSH arrowBrush = CreateSolidBrush(RGB(230, 230, 230));
+                HGDIOBJ oldBrush = SelectObject(hdc, arrowBrush);
+                HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+
+                int centerX = (layout.collapseButton.left + layout.collapseButton.right) / 2;
+                int centerY = (layout.collapseButton.top + layout.collapseButton.bottom) / 2;
+                int halfWidth = 6;
+                int halfHeight = 4;
+                POINT arrow[3];
+                if (layout.menuCollapsed)
+                {
+                    arrow[0] = {centerX - halfWidth, centerY + halfHeight};
+                    arrow[1] = {centerX + halfWidth, centerY + halfHeight};
+                    arrow[2] = {centerX, centerY - halfHeight};
+                }
+                else
+                {
+                    arrow[0] = {centerX - halfWidth, centerY - halfHeight};
+                    arrow[1] = {centerX + halfWidth, centerY - halfHeight};
+                    arrow[2] = {centerX, centerY + halfHeight};
+                }
+                Polygon(hdc, arrow, 3);
+
+                SelectObject(hdc, oldPen);
+                SelectObject(hdc, oldBrush);
+                DeleteObject(arrowBrush);
+            }
+        }
+
         HBRUSH borderBrush = CreateSolidBrush(RGB(15, 15, 15));
         FrameRect(hdc, &layout.keyboard, borderBrush);
         FrameRect(hdc, &layout.grid, borderBrush);
         if (layout.menuArea.right > layout.menuArea.left && layout.menuArea.bottom > layout.menuArea.top)
             FrameRect(hdc, &layout.menuArea, borderBrush);
+        else if (layout.collapseBar.right > layout.collapseBar.left && layout.collapseBar.bottom > layout.collapseBar.top)
+            FrameRect(hdc, &layout.collapseBar, borderBrush);
         DeleteObject(borderBrush);
 
         if (trackId <= 0)
