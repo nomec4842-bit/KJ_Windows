@@ -38,6 +38,13 @@ struct Track
     float pitchRange = 12.0f;
 };
 
+constexpr float kTrackStepVelocityMin = 0.0f;
+constexpr float kTrackStepVelocityMax = 1.0f;
+constexpr float kTrackStepPanMin = -1.0f;
+constexpr float kTrackStepPanMax = 1.0f;
+constexpr float kTrackStepPitchMin = -12.0f;
+constexpr float kTrackStepPitchMax = 12.0f;
+
 void initTracks();
 Track addTrack(const std::string& name = {});
 std::vector<Track> getTracks();
@@ -85,6 +92,15 @@ int trackGetStepNote(int trackId, int stepIndex);
 void trackSetStepNote(int trackId, int stepIndex, int midiNote);
 std::vector<int> trackGetStepNotes(int trackId, int stepIndex);
 void trackToggleStepNote(int trackId, int stepIndex, int midiNote);
+
+float trackGetStepVelocity(int trackId, int stepIndex);
+void trackSetStepVelocity(int trackId, int stepIndex, float value);
+
+float trackGetStepPan(int trackId, int stepIndex);
+void trackSetStepPan(int trackId, int stepIndex, float value);
+
+float trackGetStepPitchOffset(int trackId, int stepIndex);
+void trackSetStepPitchOffset(int trackId, int stepIndex, float value);
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId);
 void trackSetSampleBuffer(int trackId, std::shared_ptr<const SampleBuffer> buffer);

@@ -75,6 +75,9 @@ struct TrackData
             {
                 stepNotes[i].push_back(kDefaultMidiNote);
             }
+            stepVelocity[i].store(kTrackStepVelocityMax, std::memory_order_relaxed);
+            stepPan[i].store(0.0f, std::memory_order_relaxed);
+            stepPitch[i].store(0.0f, std::memory_order_relaxed);
         }
     }
 
@@ -93,6 +96,9 @@ struct TrackData
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
     std::array<std::vector<int>, kMaxSequencerSteps> stepNotes{};
+    std::array<std::atomic<float>, kMaxSequencerSteps> stepVelocity{};
+    std::array<std::atomic<float>, kMaxSequencerSteps> stepPan{};
+    std::array<std::atomic<float>, kMaxSequencerSteps> stepPitch{};
     std::atomic<int> stepCount{1};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
     std::mutex noteMutex;
@@ -372,6 +378,84 @@ void trackToggleStepNote(int trackId, int stepIndex, int midiNote)
     }
 }
 
+float trackGetStepVelocity(int trackId, int stepIndex)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return kTrackStepVelocityMax;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kTrackStepVelocityMax;
+
+    float value = track->stepVelocity[stepIndex].load(std::memory_order_relaxed);
+    return std::clamp(value, kTrackStepVelocityMin, kTrackStepVelocityMax);
+}
+
+void trackSetStepVelocity(int trackId, int stepIndex, float value)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kTrackStepVelocityMin, kTrackStepVelocityMax);
+    track->stepVelocity[stepIndex].store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetStepPan(int trackId, int stepIndex)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return 0.0f;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float value = track->stepPan[stepIndex].load(std::memory_order_relaxed);
+    return std::clamp(value, kTrackStepPanMin, kTrackStepPanMax);
+}
+
+void trackSetStepPan(int trackId, int stepIndex, float value)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kTrackStepPanMin, kTrackStepPanMax);
+    track->stepPan[stepIndex].store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetStepPitchOffset(int trackId, int stepIndex)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return 0.0f;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return 0.0f;
+
+    float value = track->stepPitch[stepIndex].load(std::memory_order_relaxed);
+    return std::clamp(value, kTrackStepPitchMin, kTrackStepPitchMax);
+}
+
+void trackSetStepPitchOffset(int trackId, int stepIndex, float value)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kTrackStepPitchMin, kTrackStepPitchMax);
+    track->stepPitch[stepIndex].store(clamped, std::memory_order_relaxed);
+}
+
 int trackGetStepCount(int trackId)
 {
     auto track = findTrackData(trackId);
@@ -401,6 +485,9 @@ void trackSetStepCount(int trackId, int count)
             track->steps[i].store(false, std::memory_order_relaxed);
             track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
             track->stepNotes[i].clear();
+            track->stepVelocity[i].store(kTrackStepVelocityMax, std::memory_order_relaxed);
+            track->stepPan[i].store(0.0f, std::memory_order_relaxed);
+            track->stepPitch[i].store(0.0f, std::memory_order_relaxed);
         }
     }
     else
@@ -411,6 +498,9 @@ void trackSetStepCount(int trackId, int count)
             track->steps[i].store(false, std::memory_order_relaxed);
             track->notes[i].store(kDefaultMidiNote, std::memory_order_relaxed);
             track->stepNotes[i].clear();
+            track->stepVelocity[i].store(kTrackStepVelocityMax, std::memory_order_relaxed);
+            track->stepPan[i].store(0.0f, std::memory_order_relaxed);
+            track->stepPitch[i].store(0.0f, std::memory_order_relaxed);
         }
     }
 
