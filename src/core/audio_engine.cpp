@@ -234,6 +234,10 @@ struct TrackPlaybackState {
     double pitchRangeSemitones = 0.0;
     double pitchEnvelope = 0.0;
     double pitchEnvelopeStep = 1.0;
+    double stepVelocity = 1.0;
+    double stepPan = 0.0;
+    double stepPitchOffset = 0.0;
+    int lastParameterStep = -1;
     BiquadFilter lowShelf;
     BiquadFilter midPeak;
     BiquadFilter highShelf;
@@ -512,6 +516,10 @@ void audioLoop() {
                         state.samplePlaying = false;
                         state.samplePosition = 0.0;
                         state.pitchEnvelope = 0.0;
+                        state.lastParameterStep = -1;
+                        state.stepVelocity = 1.0;
+                        state.stepPan = 0.0;
+                        state.stepPitchOffset = 0.0;
                     }
                 } else {
                     if (!previousPlaying) {
@@ -519,16 +527,20 @@ void audioLoop() {
                     }
                     previousPlaying = true;
 
-                    if (sequencerResetRequested.exchange(false, std::memory_order_acq_rel)) {
-                        sequencerCurrentStep.store(0, std::memory_order_relaxed);
-                        stepSampleCounter = 0.0;
-                        for (auto& [_, state] : playbackStates) {
-                            state.envelope = 0.0;
-                            state.samplePlaying = false;
-                            state.samplePosition = 0.0;
-                            state.currentStep = 0;
+                        if (sequencerResetRequested.exchange(false, std::memory_order_acq_rel)) {
+                            sequencerCurrentStep.store(0, std::memory_order_relaxed);
+                            stepSampleCounter = 0.0;
+                            for (auto& [_, state] : playbackStates) {
+                                state.envelope = 0.0;
+                                state.samplePlaying = false;
+                                state.samplePosition = 0.0;
+                                state.currentStep = 0;
+                                state.lastParameterStep = -1;
+                                state.stepVelocity = 1.0;
+                                state.stepPan = 0.0;
+                                state.stepPitchOffset = 0.0;
+                            }
                         }
-                    }
 
                     stepSampleCounter += 1.0;
                     if (stepSampleCounter >= stepDurationSamples) {
@@ -591,6 +603,27 @@ void audioLoop() {
                         }
 
                         int stepIndex = state.currentStep;
+
+                        int parameterStep = (trackStepCount > 0 && stepIndex < trackStepCount) ? stepIndex : -1;
+                        if (parameterStep >= 0) {
+                            if (state.lastParameterStep != parameterStep) {
+                                state.stepVelocity = std::clamp(static_cast<double>(trackGetStepVelocity(trackInfo.id, parameterStep)),
+                                                                static_cast<double>(kTrackStepVelocityMin),
+                                                                static_cast<double>(kTrackStepVelocityMax));
+                                state.stepPan = std::clamp(static_cast<double>(trackGetStepPan(trackInfo.id, parameterStep)),
+                                                           static_cast<double>(kTrackStepPanMin),
+                                                           static_cast<double>(kTrackStepPanMax));
+                                state.stepPitchOffset = std::clamp(static_cast<double>(trackGetStepPitchOffset(trackInfo.id, parameterStep)),
+                                                                   static_cast<double>(kTrackStepPitchMin),
+                                                                   static_cast<double>(kTrackStepPitchMax));
+                                state.lastParameterStep = parameterStep;
+                            }
+                        } else {
+                            state.stepVelocity = 1.0;
+                            state.stepPan = 0.0;
+                            state.stepPitchOffset = 0.0;
+                            state.lastParameterStep = -1;
+                        }
 
                         bool gate = false;
                         bool triggered = false;
@@ -677,7 +710,7 @@ void audioLoop() {
                                     } else {
                                         TrackPlaybackState::SynthVoice voice{};
                                         voice.midiNote = note;
-                                        voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset);
+                                        voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset + state.stepPitchOffset);
                                         voice.phase = 0.0;
                                         voice.lastOutput = 0.0;
                                         updatedVoices.push_back(voice);
@@ -714,7 +747,8 @@ void audioLoop() {
 
                             double sampleValue = 0.0;
                             if (!state.voices.empty()) {
-                                double pitchOffset = state.pitchBaseOffset + state.pitchEnvelope * state.pitchRangeSemitones;
+                                double pitchOffset = state.pitchBaseOffset + state.stepPitchOffset +
+                                                     state.pitchEnvelope * state.pitchRangeSemitones;
                                 double feedbackMix = std::clamp(state.feedbackAmount, 0.0, 0.99);
                                 SynthWaveType waveType = trackInfo.synthWaveType;
                                 for (auto& voice : state.voices) {
@@ -791,10 +825,11 @@ void audioLoop() {
                         processedRight = processBiquadSample(state.midPeak, processedRight, true);
                         processedRight = processBiquadSample(state.highShelf, processedRight, true);
 
-                        double panAmount = std::clamp((state.pan + 1.0) * 0.5, 0.0, 1.0);
+                        double combinedPan = std::clamp(state.pan + state.stepPan, -1.0, 1.0);
+                        double panAmount = std::clamp((combinedPan + 1.0) * 0.5, 0.0, 1.0);
                         double leftPanGain = std::cos(panAmount * (kPi * 0.5));
                         double rightPanGain = std::sin(panAmount * (kPi * 0.5));
-                        double volumeGain = state.volume;
+                        double volumeGain = state.volume * state.stepVelocity;
 
                         leftValue += processedLeft * volumeGain * leftPanGain;
                         rightValue += processedRight * volumeGain * rightPanGain;

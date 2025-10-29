@@ -155,6 +155,18 @@ struct PianoRollDragState
 
 PianoRollDragState gPianoRollDrag;
 
+struct PianoRollParamDragState
+{
+    bool active = false;
+    int parameterIndex = 0;
+    int trackId = 0;
+    int lastStepIndex = -1;
+    RECT laneRect{};
+    std::array<LONG, kSequencerStepsPerPage + 1> columnX{};
+};
+
+PianoRollParamDragState gPianoRollParamDrag;
+
 constexpr UINT kPianoRollContextDeleteNoteId = 5001;
 constexpr UINT kPianoRollContextDeleteRangeId = 5002;
 
@@ -533,6 +545,147 @@ void pianoRollResetDrag()
     gPianoRollDrag.midiNote = -1;
     gPianoRollDrag.currentEndStep = -1;
     gPianoRollDrag.appliedSteps.clear();
+}
+
+RECT computePianoRollMenuLaneRect(const PianoRollLayout& layout)
+{
+    RECT laneRect {0, 0, 0, 0};
+    if (layout.menuCollapsed)
+        return laneRect;
+
+    if (layout.menuContent.right <= layout.menuContent.left || layout.menuContent.bottom <= layout.menuContent.top)
+        return laneRect;
+
+    LONG top = layout.menuContent.top + 10; // heading top offset
+    top += 24; // heading height
+    top += 4;  // spacing to description
+    top += 48; // description height
+    top += 8;  // spacing to lane
+
+    laneRect.left = layout.menuContent.left + 12;
+    laneRect.right = layout.menuContent.right - 12;
+    laneRect.top = top;
+    laneRect.bottom = layout.menuContent.bottom - 12;
+
+    if (laneRect.right < laneRect.left)
+        laneRect.right = laneRect.left;
+    if (laneRect.bottom < laneRect.top)
+        laneRect.bottom = laneRect.top;
+
+    return laneRect;
+}
+
+void computePianoRollLaneColumns(const RECT& laneRect, std::array<LONG, kSequencerStepsPerPage + 1>& columns)
+{
+    LONG left = laneRect.left;
+    LONG right = laneRect.right;
+    if (right < left)
+        right = left;
+
+    int stepCount = kSequencerStepsPerPage;
+    int totalWidth = static_cast<int>(std::max<LONG>(0, right - left));
+    int baseWidth = stepCount > 0 ? totalWidth / stepCount : 0;
+    int remainder = stepCount > 0 ? totalWidth % stepCount : 0;
+    LONG x = left;
+    for (int i = 0; i < stepCount; ++i)
+    {
+        columns[static_cast<size_t>(i)] = x;
+        int increment = baseWidth + (i < remainder ? 1 : 0);
+        LONG nextX = x + increment;
+        if (i == stepCount - 1)
+            nextX = right;
+        if (nextX < x)
+            nextX = x;
+        x = nextX;
+    }
+    columns[static_cast<size_t>(stepCount)] = right;
+}
+
+int pianoRollLaneColumnFromX(const std::array<LONG, kSequencerStepsPerPage + 1>& columns, int x)
+{
+    for (int i = 0; i < kSequencerStepsPerPage; ++i)
+    {
+        LONG left = columns[static_cast<size_t>(i)];
+        LONG right = columns[static_cast<size_t>(i + 1)];
+        if (right < left)
+            right = left;
+        if (x >= left && x < right)
+            return i;
+    }
+    return (x >= columns.back()) ? (kSequencerStepsPerPage - 1) : 0;
+}
+
+void pianoRollResetParamDrag()
+{
+    gPianoRollParamDrag.active = false;
+    gPianoRollParamDrag.parameterIndex = 0;
+    gPianoRollParamDrag.trackId = 0;
+    gPianoRollParamDrag.lastStepIndex = -1;
+    gPianoRollParamDrag.laneRect = RECT{0, 0, 0, 0};
+    gPianoRollParamDrag.columnX.fill(0);
+}
+
+void pianoRollApplyMenuParameter(int parameterIndex,
+                                 int trackId,
+                                 int stepIndex,
+                                 int pointerX,
+                                 int pointerY,
+                                 const RECT& laneRect,
+                                 LONG columnLeft,
+                                 LONG columnRight)
+{
+    if (trackId <= 0 || stepIndex < 0)
+        return;
+
+    LONG innerLeft = columnLeft + 2;
+    LONG innerRight = columnRight - 2;
+    LONG innerTop = laneRect.top + 2;
+    LONG innerBottom = laneRect.bottom - 2;
+    if (innerRight <= innerLeft || innerBottom <= innerTop)
+        return;
+
+    switch (parameterIndex)
+    {
+    case 0:
+    {
+        LONG clampedY = std::clamp(pointerY, static_cast<int>(innerTop), static_cast<int>(innerBottom));
+        int height = static_cast<int>(innerBottom - innerTop);
+        float normalized = (height > 0)
+                               ? 1.0f - static_cast<float>(clampedY - innerTop) / static_cast<float>(height)
+                               : kTrackStepVelocityMax;
+        normalized = std::clamp(normalized, kTrackStepVelocityMin, kTrackStepVelocityMax);
+        trackSetStepVelocity(trackId, stepIndex, normalized);
+        break;
+    }
+    case 1:
+    {
+        LONG clampedX = std::clamp(pointerX, static_cast<int>(innerLeft), static_cast<int>(innerRight));
+        double range = static_cast<double>(kTrackStepPanMax) - static_cast<double>(kTrackStepPanMin);
+        double normalized = range > 0.0
+                                ? (static_cast<double>(clampedX - innerLeft) / static_cast<double>(innerRight - innerLeft))
+                                : 0.5;
+        normalized = std::clamp(normalized, 0.0, 1.0);
+        double panValue = static_cast<double>(kTrackStepPanMin) + normalized * range;
+        trackSetStepPan(trackId, stepIndex, static_cast<float>(panValue));
+        break;
+    }
+    case 2:
+    {
+        LONG clampedY = std::clamp(pointerY, static_cast<int>(innerTop), static_cast<int>(innerBottom));
+        int height = static_cast<int>(innerBottom - innerTop);
+        float normalized = (height > 0)
+                               ? 1.0f - static_cast<float>(clampedY - innerTop) / static_cast<float>(height)
+                               : 0.5f;
+        double maxAbs = std::max(std::abs(static_cast<double>(kTrackStepPitchMin)),
+                                 std::abs(static_cast<double>(kTrackStepPitchMax)));
+        double pitch = (normalized - 0.5) * 2.0 * maxAbs;
+        pitch = std::clamp(pitch, static_cast<double>(kTrackStepPitchMin), static_cast<double>(kTrackStepPitchMax));
+        trackSetStepPitchOffset(trackId, stepIndex, static_cast<float>(pitch));
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 } // namespace
@@ -946,6 +1099,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_DESTROY:
         KillTimer(hwnd, 1);
         pianoRollResetDrag();
+        pianoRollResetParamDrag();
         if (hwnd == gPianoRollWindow)
         {
             gPianoRollWindow = nullptr;
@@ -970,6 +1124,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             y < layout.collapseButton.bottom)
         {
             gPianoRollMenuCollapsed = !gPianoRollMenuCollapsed;
+            pianoRollResetParamDrag();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -978,6 +1133,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             y >= layout.collapseBar.top && y < layout.collapseBar.bottom)
         {
             gPianoRollMenuCollapsed = false;
+            pianoRollResetParamDrag();
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -999,6 +1155,48 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
             }
             return 0;
+        }
+
+        if (!layout.menuCollapsed && gPianoRollSelectedMenuTab < 3)
+        {
+            RECT laneRect = computePianoRollMenuLaneRect(layout);
+            if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top && x >= laneRect.left && x < laneRect.right &&
+                y >= laneRect.top && y < laneRect.bottom)
+            {
+                int trackId = getActiveSequencerTrackId();
+                if (trackId > 0)
+                {
+                    std::array<LONG, kSequencerStepsPerPage + 1> laneColumns {};
+                    computePianoRollLaneColumns(laneRect, laneColumns);
+                    int column = pianoRollLaneColumnFromX(laneColumns, x);
+                    if (column >= 0)
+                    {
+                        int totalSteps = getSequencerStepCount(trackId);
+                        int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
+                        if (stepIndex >= 0 && stepIndex < totalSteps)
+                        {
+                            gPianoRollParamDrag.active = true;
+                            gPianoRollParamDrag.parameterIndex = gPianoRollSelectedMenuTab;
+                            gPianoRollParamDrag.trackId = trackId;
+                            gPianoRollParamDrag.lastStepIndex = stepIndex;
+                            gPianoRollParamDrag.laneRect = laneRect;
+                            gPianoRollParamDrag.columnX = laneColumns;
+                            if (GetCapture() != hwnd)
+                                SetCapture(hwnd);
+                            pianoRollApplyMenuParameter(gPianoRollParamDrag.parameterIndex,
+                                                        trackId,
+                                                        stepIndex,
+                                                        x,
+                                                        y,
+                                                        laneRect,
+                                                        laneColumns[static_cast<size_t>(column)],
+                                                        laneColumns[static_cast<size_t>(column + 1)]);
+                            pianoRollInvalidateAfterEdit();
+                        }
+                    }
+                }
+                return 0;
+            }
         }
 
         if (x >= layout.grid.left && x < layout.grid.right && y >= layout.grid.top && y < layout.grid.bottom)
@@ -1172,6 +1370,50 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
     case WM_MOUSEMOVE:
     {
+        if (gPianoRollParamDrag.active)
+        {
+            RECT laneRect = gPianoRollParamDrag.laneRect;
+            if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top)
+            {
+                int pointerX = GET_X_LPARAM(lParam);
+                int pointerY = GET_Y_LPARAM(lParam);
+                if (pointerX < laneRect.left)
+                    pointerX = laneRect.left;
+                if (pointerX >= laneRect.right)
+                    pointerX = laneRect.right - 1;
+                if (pointerY < laneRect.top)
+                    pointerY = laneRect.top;
+                if (pointerY >= laneRect.bottom)
+                    pointerY = laneRect.bottom - 1;
+
+                int column = pianoRollLaneColumnFromX(gPianoRollParamDrag.columnX, pointerX);
+                if (column < 0)
+                    column = 0;
+                if (column >= kSequencerStepsPerPage)
+                    column = kSequencerStepsPerPage - 1;
+
+                int trackId = gPianoRollParamDrag.trackId;
+                if (trackId > 0)
+                {
+                    int totalSteps = getSequencerStepCount(trackId);
+                    int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
+                    if (stepIndex >= 0 && stepIndex < totalSteps)
+                    {
+                        gPianoRollParamDrag.lastStepIndex = stepIndex;
+                        pianoRollApplyMenuParameter(gPianoRollParamDrag.parameterIndex,
+                                                    trackId,
+                                                    stepIndex,
+                                                    pointerX,
+                                                    pointerY,
+                                                    laneRect,
+                                                    gPianoRollParamDrag.columnX[static_cast<size_t>(column)],
+                                                    gPianoRollParamDrag.columnX[static_cast<size_t>(column + 1)]);
+                        pianoRollInvalidateAfterEdit();
+                    }
+                }
+            }
+        }
+
         if (!gPianoRollDrag.active)
             break;
 
@@ -1216,6 +1458,18 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
     case WM_LBUTTONUP:
     {
+        if (gPianoRollParamDrag.active)
+        {
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+            pianoRollResetParamDrag();
+            invalidatePianoRollWindow();
+            if (gMainWindow && IsWindow(gMainWindow))
+            {
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            }
+        }
+
         if (gPianoRollDrag.active)
         {
             if (GetCapture() == hwnd)
@@ -1473,72 +1727,162 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 DrawTextW(hdc, description.c_str(), -1, &descriptionRect, DT_LEFT | DT_TOP | DT_WORDBREAK);
             }
 
-            RECT laneRect = layout.menuContent;
-            laneRect.left += 12;
-            laneRect.right -= 12;
-            laneRect.top = descriptionRect.bottom + 8;
-            laneRect.bottom -= 12;
-
+            RECT laneRect = computePianoRollMenuLaneRect(layout);
             if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top)
             {
                 HBRUSH laneBackground = CreateSolidBrush(RGB(40, 40, 40));
                 FillRect(hdc, &laneRect, laneBackground);
                 DeleteObject(laneBackground);
 
-                int stepCount = kSequencerStepsPerPage;
-                int laneWidth = laneRect.right - laneRect.left;
-                int laneHeight = laneRect.bottom - laneRect.top;
-                if (stepCount > 0 && laneWidth > 0 && laneHeight > 0)
+                std::array<LONG, kSequencerStepsPerPage + 1> laneColumns {};
+                computePianoRollLaneColumns(laneRect, laneColumns);
+
+                HPEN lanePen = CreatePen(PS_SOLID, 1, RGB(55, 55, 55));
+                HPEN oldLanePen = static_cast<HPEN>(SelectObject(hdc, lanePen));
+                for (int i = 0; i <= kSequencerStepsPerPage; ++i)
                 {
-                    int baseWidth = laneWidth / stepCount;
-                    int remainder = laneWidth % stepCount;
-                    HPEN lanePen = CreatePen(PS_SOLID, 1, RGB(55, 55, 55));
-                    HPEN oldLanePen = static_cast<HPEN>(SelectObject(hdc, lanePen));
-                    MoveToEx(hdc, laneRect.left, laneRect.top, nullptr);
-                    LineTo(hdc, laneRect.left, laneRect.bottom);
-
-                    int x = laneRect.left;
-                    HBRUSH barBrush = CreateSolidBrush(kPianoRollActiveNote);
-                    for (int i = 0; i < stepCount; ++i)
-                    {
-                        int width = baseWidth + (i < remainder ? 1 : 0);
-                        int nextX = x + width;
-                        if (i == stepCount - 1)
-                            nextX = laneRect.right;
-                        if (nextX < x)
-                            nextX = x;
-
-                        MoveToEx(hdc, nextX, laneRect.top, nullptr);
-                        LineTo(hdc, nextX, laneRect.bottom);
-
-                        int columnWidth = nextX - x;
-                        if (columnWidth > 2)
-                        {
-                            int availableHeight = std::max(0, laneHeight - 4);
-                            int value = (i * 27 + gPianoRollSelectedMenuTab * 19) % 100;
-                            int filled = (availableHeight * value) / 100;
-                            LONG barLeft = x + 2;
-                            LONG barRight = nextX - 2;
-                            if (barRight < barLeft)
-                                barRight = barLeft;
-                            LONG barBottom = laneRect.bottom - 2;
-                            LONG barTop = barBottom - static_cast<LONG>(filled);
-                            LONG minBarTop = laneRect.top + 2;
-                            if (barTop < minBarTop)
-                                barTop = minBarTop;
-                            if (barBottom > barTop && barRight > barLeft)
-                            {
-                                RECT barRect{barLeft, barTop, barRight, barBottom};
-                                FillRect(hdc, &barRect, barBrush);
-                            }
-                        }
-
-                        x = nextX;
-                    }
-                    SelectObject(hdc, oldLanePen);
-                    DeleteObject(lanePen);
-                    DeleteObject(barBrush);
+                    LONG lineX = laneColumns[static_cast<size_t>(i)];
+                    MoveToEx(hdc, lineX, laneRect.top, nullptr);
+                    LineTo(hdc, lineX, laneRect.bottom);
                 }
+                SelectObject(hdc, oldLanePen);
+                DeleteObject(lanePen);
+
+                if (gPianoRollSelectedMenuTab == 2)
+                {
+                    HPEN centerPen = CreatePen(PS_SOLID, 1, RGB(75, 75, 75));
+                    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, centerPen));
+                    LONG midY = (laneRect.top + laneRect.bottom) / 2;
+                    MoveToEx(hdc, laneRect.left, midY, nullptr);
+                    LineTo(hdc, laneRect.right, midY);
+                    SelectObject(hdc, oldPen);
+                    DeleteObject(centerPen);
+                }
+
+                HBRUSH barBrush = CreateSolidBrush(kPianoRollActiveNote);
+                HBRUSH disabledBrush = CreateSolidBrush(RGB(30, 30, 30));
+                HPEN panCenterPen = nullptr;
+                if (gPianoRollSelectedMenuTab == 1)
+                {
+                    panCenterPen = CreatePen(PS_SOLID, 1, RGB(75, 75, 75));
+                }
+
+                for (int column = 0; column < kSequencerStepsPerPage; ++column)
+                {
+                    LONG columnLeft = laneColumns[static_cast<size_t>(column)];
+                    LONG columnRight = laneColumns[static_cast<size_t>(column + 1)];
+                    if (columnRight < columnLeft)
+                        columnRight = columnLeft;
+
+                    RECT columnRect {columnLeft, laneRect.top, columnRight, laneRect.bottom};
+                    int stepIndex = startStep + column;
+                    bool validStep = trackId > 0 && stepIndex < totalSteps;
+
+                    if (!validStep)
+                    {
+                        FillRect(hdc, &columnRect, disabledBrush);
+                        continue;
+                    }
+
+                    LONG innerLeft = columnLeft + 2;
+                    LONG innerRight = columnRight - 2;
+                    LONG innerTop = laneRect.top + 2;
+                    LONG innerBottom = laneRect.bottom - 2;
+                    if (innerRight <= innerLeft || innerBottom <= innerTop)
+                        continue;
+
+                    switch (gPianoRollSelectedMenuTab)
+                    {
+                    case 0:
+                    {
+                        float velocity = trackGetStepVelocity(trackId, stepIndex);
+                        double range = static_cast<double>(kTrackStepVelocityMax) - static_cast<double>(kTrackStepVelocityMin);
+                        double normalized = range > 0.0
+                                               ? (static_cast<double>(velocity) - static_cast<double>(kTrackStepVelocityMin)) /
+                                                     range
+                                               : 0.0;
+                        normalized = std::clamp(normalized, 0.0, 1.0);
+                        LONG barBottom = innerBottom;
+                        LONG barTop = barBottom - static_cast<LONG>(std::round(normalized * (innerBottom - innerTop)));
+                        if (barTop < innerTop)
+                            barTop = innerTop;
+                        RECT barRect {innerLeft, barTop, innerRight, barBottom};
+                        if (barRect.bottom > barRect.top && barRect.right > barRect.left)
+                            FillRect(hdc, &barRect, barBrush);
+                        break;
+                    }
+                    case 1:
+                    {
+                        float pan = trackGetStepPan(trackId, stepIndex);
+                        double range = static_cast<double>(kTrackStepPanMax) - static_cast<double>(kTrackStepPanMin);
+                        double normalized = range > 0.0
+                                               ? (static_cast<double>(pan) - static_cast<double>(kTrackStepPanMin)) / range
+                                               : 0.5;
+                        normalized = std::clamp(normalized, 0.0, 1.0);
+                        LONG indicatorX = innerLeft +
+                                          static_cast<LONG>(std::round(normalized * (innerRight - innerLeft)));
+                        if (indicatorX < innerLeft)
+                            indicatorX = innerLeft;
+                        if (indicatorX > innerRight)
+                            indicatorX = innerRight;
+                        RECT indicatorRect {indicatorX - 1, innerTop, indicatorX + 1, innerBottom};
+                        if (indicatorRect.left < innerLeft)
+                            indicatorRect.left = innerLeft;
+                        if (indicatorRect.right > innerRight)
+                            indicatorRect.right = innerRight;
+                        if (indicatorRect.right <= indicatorRect.left)
+                            indicatorRect.right = indicatorRect.left + 1;
+                        FillRect(hdc, &indicatorRect, barBrush);
+
+                        if (panCenterPen)
+                        {
+                            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, panCenterPen));
+                            LONG centerX = (innerLeft + innerRight) / 2;
+                            MoveToEx(hdc, centerX, innerTop, nullptr);
+                            LineTo(hdc, centerX, innerBottom);
+                            SelectObject(hdc, oldPen);
+                        }
+                        break;
+                    }
+                    case 2:
+                    {
+                        float pitch = trackGetStepPitchOffset(trackId, stepIndex);
+                        double maxAbs = std::max(std::abs(static_cast<double>(kTrackStepPitchMin)),
+                                                 std::abs(static_cast<double>(kTrackStepPitchMax)));
+                        double normalized = maxAbs > 0.0 ? static_cast<double>(pitch) / maxAbs : 0.0;
+                        normalized = std::clamp(normalized, -1.0, 1.0);
+                        LONG centerY = (innerTop + innerBottom) / 2;
+                        if (normalized >= 0.0)
+                        {
+                            LONG barTop = centerY - static_cast<LONG>(std::round(normalized * (innerBottom - innerTop) * 0.5));
+                            if (barTop < innerTop)
+                                barTop = innerTop;
+                            RECT barRect {innerLeft, barTop, innerRight, centerY};
+                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
+                                FillRect(hdc, &barRect, barBrush);
+                        }
+                        else
+                        {
+                            LONG barBottom = centerY + static_cast<LONG>(std::round(-normalized * (innerBottom - innerTop) * 0.5));
+                            if (barBottom > innerBottom)
+                                barBottom = innerBottom;
+                            RECT barRect {innerLeft, centerY, innerRight, barBottom};
+                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
+                                FillRect(hdc, &barRect, barBrush);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                }
+
+                if (panCenterPen)
+                {
+                    DeleteObject(panCenterPen);
+                }
+                DeleteObject(disabledBrush);
+                DeleteObject(barBrush);
             }
         }
 
