@@ -212,6 +212,7 @@ struct TrackPlaybackState {
     double envelope = 0.0;
     int currentMidiNote = 69;
     double currentFrequency = midiNoteToFrequency(69);
+    int currentStep = 0;
     bool samplePlaying = false;
     double samplePosition = 0.0;
     double sampleIncrement = 1.0;
@@ -442,23 +443,10 @@ void audioLoop() {
             trackStepCounts.reserve(trackInfos.size());
 
             int activeTrackId = getActiveSequencerTrackId();
-            int activeTrackStepCount = 0;
 
             for (const auto& trackInfo : trackInfos) {
                 int count = getSequencerStepCount(trackInfo.id);
                 trackStepCounts.push_back(count);
-                if (trackInfo.id == activeTrackId) {
-                    activeTrackStepCount = count;
-                }
-            }
-
-            if (activeTrackStepCount <= 0) {
-                if (!trackInfos.empty()) {
-                    activeTrackStepCount = trackStepCounts.front();
-                    activeTrackId = trackInfos.front().id;
-                } else {
-                    activeTrackStepCount = kSequencerStepsPerPage;
-                }
             }
 
             for (auto it = playbackStates.begin(); it != playbackStates.end(); ) {
@@ -538,24 +526,14 @@ void audioLoop() {
                             state.envelope = 0.0;
                             state.samplePlaying = false;
                             state.samplePosition = 0.0;
+                            state.currentStep = 0;
                         }
                     }
 
                     stepSampleCounter += 1.0;
                     if (stepSampleCounter >= stepDurationSamples) {
                         stepSampleCounter -= stepDurationSamples;
-                        int stepCount = activeTrackStepCount > 0 ? activeTrackStepCount : kSequencerStepsPerPage;
-                        int nextStep = sequencerCurrentStep.load(std::memory_order_relaxed) + 1;
-                        if (nextStep >= stepCount) nextStep = 0;
-                        sequencerCurrentStep.store(nextStep, std::memory_order_relaxed);
                         stepAdvanced = true;
-                    }
-
-                    int stepCount = activeTrackStepCount > 0 ? activeTrackStepCount : kSequencerStepsPerPage;
-                    int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
-                    if (currentStep >= stepCount) {
-                        currentStep = 0;
-                        sequencerCurrentStep.store(currentStep, std::memory_order_relaxed);
                     }
 
                     double leftValue = 0.0;
@@ -571,6 +549,31 @@ void audioLoop() {
                         return notes;
                     };
 
+                    if (stepAdvanced) {
+                        for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
+                            const auto& trackInfo = trackInfos[trackIndex];
+                            auto stateIt = playbackStates.find(trackInfo.id);
+                            if (stateIt == playbackStates.end())
+                                continue;
+                            auto& state = stateIt->second;
+                            int trackStepCount = trackStepCounts[trackIndex];
+                            if (trackStepCount <= 0) {
+                                state.currentStep = 0;
+                                continue;
+                            }
+                            if (state.currentStep < 0 || state.currentStep >= trackStepCount) {
+                                state.currentStep = 0;
+                            }
+                            int nextStep = state.currentStep + 1;
+                            if (nextStep >= trackStepCount)
+                                nextStep = 0;
+                            state.currentStep = nextStep;
+                        }
+                    }
+
+                    int activeTrackStep = 0;
+                    bool activeTrackHasSteps = false;
+
                     for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
                         const auto& trackInfo = trackInfos[trackIndex];
                         int trackStepCount = trackStepCounts[trackIndex];
@@ -579,21 +582,36 @@ void audioLoop() {
                             continue;
                         auto& state = stateIt->second;
 
+                        if (trackStepCount <= 0) {
+                            state.currentStep = 0;
+                        } else if (state.currentStep < 0 || state.currentStep >= trackStepCount) {
+                            state.currentStep = state.currentStep % trackStepCount;
+                            if (state.currentStep < 0)
+                                state.currentStep += trackStepCount;
+                        }
+
+                        int stepIndex = state.currentStep;
+
                         bool gate = false;
                         bool triggered = false;
                         std::vector<int> triggeredNotes;
-                        if (trackStepCount > 0 && currentStep < trackStepCount) {
-                            if (getTrackStepState(trackInfo.id, currentStep)) {
+                        if (trackStepCount > 0 && stepIndex < trackStepCount) {
+                            if (getTrackStepState(trackInfo.id, stepIndex)) {
                                 gate = true;
                                 if (stepAdvanced) {
                                     if (trackInfo.type == TrackType::Synth) {
-                                        triggeredNotes = getNotesForStep(trackInfo.id, currentStep);
+                                        triggeredNotes = getNotesForStep(trackInfo.id, stepIndex);
                                         triggered = !triggeredNotes.empty();
                                     } else {
                                         triggered = true;
                                     }
                                 }
                             }
+                        }
+
+                        if (trackInfo.id == activeTrackId && trackStepCount > 0) {
+                            activeTrackStep = stepIndex;
+                            activeTrackHasSteps = true;
                         }
 
                         double trackLeft = 0.0;
@@ -629,10 +647,10 @@ void audioLoop() {
                             if (triggered) {
                                 std::vector<int> sustainedNotes;
                                 if (trackStepCount > 0) {
-                                    int previousStep = currentStep - 1;
+                                    int previousStep = stepIndex - 1;
                                     if (previousStep < 0)
                                         previousStep = trackStepCount - 1;
-                                    if (previousStep >= 0 && previousStep < trackStepCount && previousStep != currentStep &&
+                                    if (previousStep >= 0 && previousStep < trackStepCount && previousStep != stepIndex &&
                                         getTrackStepState(trackInfo.id, previousStep)) {
                                         auto previousNotes = getNotesForStep(trackInfo.id, previousStep);
                                         for (int note : triggeredNotes) {
@@ -780,6 +798,12 @@ void audioLoop() {
 
                         leftValue += processedLeft * volumeGain * leftPanGain;
                         rightValue += processedRight * volumeGain * rightPanGain;
+                    }
+
+                    if (activeTrackHasSteps) {
+                        sequencerCurrentStep.store(activeTrackStep, std::memory_order_relaxed);
+                    } else {
+                        sequencerCurrentStep.store(0, std::memory_order_relaxed);
                     }
 
                     leftValue = std::clamp(leftValue, -1.0, 1.0);
