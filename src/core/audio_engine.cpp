@@ -14,6 +14,9 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#ifdef DEBUG_AUDIO
+#include <iostream>
+#endif
 
 #include "core/tracks.h"
 #include "core/sample_loader.h"
@@ -497,6 +500,12 @@ void audioLoop() {
             previousPlaying = false;
             playbackStates.clear();
 
+#ifdef DEBUG_AUDIO
+            std::cout << "[AudioEngine] Initialized device with sampleRate="
+                      << sampleRate
+                      << " Hz, blockSize=" << bufferFrameCount << std::endl;
+#endif
+
             {
                 std::lock_guard<std::mutex> lock(deviceMutex);
                 activeDeviceId = deviceHandler.deviceId();
@@ -556,6 +565,10 @@ void audioLoop() {
                 continue;
             }
             short* samples = (short*)data;
+#ifdef DEBUG_AUDIO
+            double mixSumAbs = 0.0;
+            double mixPeak = 0.0;
+#endif
             int bpm = std::clamp(sequencerBPM.load(std::memory_order_relaxed), 30, 240);
             double stepDurationSamples = sampleRate * 60.0 / (static_cast<double>(bpm) * 4.0);
             if (stepDurationSamples < 1.0) stepDurationSamples = 1.0;
@@ -805,8 +818,10 @@ void audioLoop() {
                                 state.sampleEnvelopeStage = EnvelopeStage::Release;
                             }
 
+                            size_t playbackFrame = static_cast<size_t>(state.samplePosition);
+
                             if (state.samplePlaying && state.sampleBuffer) {
-                                size_t index = static_cast<size_t>(state.samplePosition);
+                                size_t index = playbackFrame;
                                 if (index < state.sampleFrameCount) {
                                     int channels = std::max(state.sampleBuffer->channels, 1);
                                     const auto& rawSamples = state.sampleBuffer->samples;
@@ -851,6 +866,19 @@ void audioLoop() {
                             double sampleGain = state.sampleEnvelopeSmoothed;
                             trackLeft *= sampleGain;
                             trackRight *= sampleGain;
+
+#ifdef DEBUG_AUDIO
+                            if (i == 0) {
+                                double outputAmplitude = 0.5 * (std::abs(trackLeft) + std::abs(trackRight));
+                                std::cout << "[Sampler] track=" << trackInfo.id
+                                          << " frame=" << playbackFrame
+                                          << " env=" << state.sampleEnvelope
+                                          << " gain=" << sampleGain
+                                          << " amp=" << outputAmplitude
+                                          << " playing=" << (state.samplePlaying ? "true" : "false")
+                                          << std::endl;
+                            }
+#endif
 
                             if (state.sampleEnvelopeStage == EnvelopeStage::Idle) {
                                 state.sampleTailActive = false;
@@ -1029,6 +1057,13 @@ void audioLoop() {
                     leftValue = std::clamp(leftValue, -1.0, 1.0);
                     rightValue = std::clamp(rightValue, -1.0, 1.0);
 
+#ifdef DEBUG_AUDIO
+                    mixSumAbs += std::abs(leftValue) + std::abs(rightValue);
+                    double currentPeak = std::max(std::abs(leftValue), std::abs(rightValue));
+                    if (currentPeak > mixPeak)
+                        mixPeak = currentPeak;
+#endif
+
                     samples[i * 2] = static_cast<short>(leftValue * 32767.0);
                     samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
                     continue;
@@ -1036,6 +1071,16 @@ void audioLoop() {
                 samples[i * 2] = 0;
                 samples[i * 2 + 1] = 0;
             }
+#ifdef DEBUG_AUDIO
+            double averageAmplitude = (available > 0)
+                ? (mixSumAbs / (static_cast<double>(available) * 2.0))
+                : 0.0;
+            std::cout << "[AudioEngine] blockFrames=" << available
+                      << " tracks=" << trackInfos.size()
+                      << " avg=" << averageAmplitude
+                      << " peak=" << mixPeak
+                      << std::endl;
+#endif
             deviceHandler.releaseBuffer(available);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
