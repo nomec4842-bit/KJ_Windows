@@ -1,5 +1,6 @@
 #include "gui/gui_main.h"
 #include "core/audio_engine.h"
+#include "core/project_io.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
 #include "wdl/lice/lice.h"
@@ -112,6 +113,7 @@ const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, Syn
 
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
+RECT saveProjectButton = {360, 115, 520, 145};
 RECT waveSelectButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
@@ -3546,6 +3548,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         }
     }
 
+    drawButton(surface, saveProjectButton, RGB(50, 50, 50), RGB(120, 120, 120), "Save Project");
     drawButton(surface, bpmDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
     drawButton(surface, bpmUpButton, RGB(50, 50, 50), RGB(120, 120, 120), "+");
     drawButton(surface, stepCountDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
@@ -4094,6 +4097,40 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                                 MB_OK | MB_ICONERROR);
                 }
                 InvalidateRect(hwnd, nullptr, FALSE);
+            }
+
+            return 0;
+        }
+
+        if (pointInRect(saveProjectButton, x, y))
+        {
+            wchar_t fileBuffer[MAX_PATH] = {0};
+            OPENFILENAMEW ofn = {0};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"KJ Project Files (*.jik)\0*.jik\0All Files\0*.*\0";
+            ofn.lpstrFile = fileBuffer;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+            ofn.lpstrDefExt = L"jik";
+
+            if (GetSaveFileNameW(&ofn))
+            {
+                std::filesystem::path selectedPath(fileBuffer);
+                if (!saveProjectToFile(selectedPath))
+                {
+                    MessageBoxW(hwnd,
+                                L"Failed to save project.",
+                                L"Save Project",
+                                MB_OK | MB_ICONERROR);
+                }
+                else
+                {
+                    MessageBoxW(hwnd,
+                                L"Project saved successfully.",
+                                L"Save Project",
+                                MB_OK | MB_ICONINFORMATION);
+                }
             }
 
             return 0;
