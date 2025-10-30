@@ -124,7 +124,6 @@ RECT pageUpButton = {630, 55, 670, 95};
 RECT addTrackButton = {690, 40, 780, 110};
 RECT audioDeviceButton = {40, 115, 340, 145};
 RECT pianoRollToggleButton {};
-RECT mixerPanelRect {};
 RECT effectsToggleButton {};
 std::array<RECT, kSequencerStepsPerPage> stepRects;
 int currentStepPage = 0;
@@ -739,16 +738,6 @@ struct SliderControlRects
     RECT track{};
 };
 
-struct KnobControlRects
-{
-    RECT control{};
-    POINT center{};
-    int radius = 0;
-};
-
-SliderControlRects gMainVolumeSliderControl{};
-SliderControlRects gMainPanSliderControl{};
-std::array<KnobControlRects, 3> gMainEqKnobControls{};
 SliderControlRects gSynthFormantSliderControl{};
 SliderControlRects gSynthFeedbackSliderControl{};
 SliderControlRects gSynthPitchSliderControl{};
@@ -757,8 +746,6 @@ SliderControlRects gSynthPitchRangeSliderControl{};
 enum class SliderDragTarget
 {
     None,
-    MainVolume,
-    MainPan,
     SynthFormant,
     SynthFeedback,
     SynthPitch,
@@ -772,13 +759,6 @@ struct SliderDragState
 };
 
 SliderDragState gSliderDrag{};
-
-const std::array<const char*, 3> kEqBandLabels = {"Low EQ", "Mid EQ", "High EQ"};
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kKnobMinAngleDegrees = -135.0;
-constexpr double kKnobMaxAngleDegrees = 135.0;
-constexpr double kKnobSweepDegrees = kKnobMaxAngleDegrees - kKnobMinAngleDegrees;
 
 inline LICE_pixel LICE_ColorFromCOLORREF(COLORREF color, int alpha = 255)
 {
@@ -2954,20 +2934,6 @@ void updateSliderDrag(HWND hwnd, int x)
 
     switch (gSliderDrag.target)
     {
-    case SliderDragTarget::MainVolume:
-        if (applySliderChange(gMainVolumeSliderControl, kMixerVolumeMin, kMixerVolumeMax,
-                              [trackId](float value) { trackSetVolume(trackId, value); }))
-        {
-            notifyEffectsWindowTrackValuesChanged(trackId);
-        }
-        break;
-    case SliderDragTarget::MainPan:
-        if (applySliderChange(gMainPanSliderControl, kMixerPanMin, kMixerPanMax,
-                              [trackId](float value) { trackSetPan(trackId, value); }))
-        {
-            notifyEffectsWindowTrackValuesChanged(trackId);
-        }
-        break;
     case SliderDragTarget::SynthFormant:
         applySliderChange(gSynthFormantSliderControl, kSynthFormantMin, kSynthFormantMax,
                           [trackId](float value) { trackSetSynthFormant(trackId, value); });
@@ -2988,184 +2954,6 @@ void updateSliderDrag(HWND hwnd, int x)
     default:
         break;
     }
-}
-
-void fillCircle(LICE_SysBitmap& surface, int centerX, int centerY, int radius, COLORREF color)
-{
-    if (radius <= 0)
-        return;
-
-    int radiusSquared = radius * radius;
-    LICE_pixel pixelColor = LICE_ColorFromCOLORREF(color);
-    for (int dy = -radius; dy <= radius; ++dy)
-    {
-        int span = static_cast<int>(std::sqrt(static_cast<double>(radiusSquared - dy * dy)));
-        int rowX = centerX - span;
-        int rowWidth = span * 2 + 1;
-        LICE_FillRect(&surface, rowX, centerY + dy, rowWidth, 1, pixelColor);
-    }
-}
-
-void drawLine(LICE_SysBitmap& surface, int x0, int y0, int x1, int y1, COLORREF color)
-{
-    LICE_pixel pixelColor = LICE_ColorFromCOLORREF(color);
-    int dx = std::abs(x1 - x0);
-    int sx = x0 < x1 ? 1 : -1;
-    int dy = -std::abs(y1 - y0);
-    int sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-
-    while (true)
-    {
-        LICE_FillRect(&surface, x0, y0, 1, 1, pixelColor);
-        if (x0 == x1 && y0 == y1)
-            break;
-        int e2 = 2 * err;
-        if (e2 >= dy)
-        {
-            err += dy;
-            x0 += sx;
-        }
-        if (e2 <= dx)
-        {
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
-
-float knobValueFromPosition(const KnobControlRects& knob, int x, int y, float minValue, float maxValue)
-{
-    if (knob.radius <= 0)
-        return std::clamp(minValue, minValue, maxValue);
-
-    double dx = static_cast<double>(x - knob.center.x);
-    double dy = static_cast<double>(knob.center.y - y);
-    double angleDegrees = std::atan2(dy, dx) * (180.0 / kPi);
-    double clampedAngle = std::clamp(angleDegrees, kKnobMinAngleDegrees, kKnobMaxAngleDegrees);
-    double normalized = (clampedAngle - kKnobMinAngleDegrees) / kKnobSweepDegrees;
-    double value = static_cast<double>(minValue) + normalized * (static_cast<double>(maxValue) - static_cast<double>(minValue));
-    float result = static_cast<float>(value);
-    return std::clamp(result, minValue, maxValue);
-}
-
-void drawKnobControl(LICE_SysBitmap& surface, KnobControlRects& knobRects, const RECT& area, double normalizedValue,
-                     const char* label, const std::string& valueText)
-{
-    knobRects.control = area;
-    knobRects.center = {0, 0};
-    knobRects.radius = 0;
-
-    int width = area.right - area.left;
-    int height = area.bottom - area.top;
-    if (width <= 0 || height <= 0)
-        return;
-
-    LICE_FillRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(35, 35, 35)));
-    LICE_DrawRect(&surface, area.left, area.top, width, height, LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
-
-    int spacing = std::min(6, std::max(2, height / 12));
-    int labelHeight = std::min(18, std::max(10, height / 4));
-    int valueHeight = std::min(18, std::max(10, height / 4));
-
-    int minimumKnobSpace = 8;
-    int available = height - labelHeight - valueHeight - spacing * 2;
-    if (available < minimumKnobSpace)
-    {
-        int deficit = minimumKnobSpace - available;
-        int labelReduction = std::min(deficit / 2, std::max(labelHeight - 8, 0));
-        labelHeight -= labelReduction;
-        deficit -= labelReduction;
-        int valueReduction = std::min(deficit, std::max(valueHeight - 8, 0));
-        valueHeight -= valueReduction;
-        available = height - labelHeight - valueHeight - spacing * 2;
-        if (available < minimumKnobSpace)
-            available = minimumKnobSpace;
-    }
-
-    RECT labelRect = area;
-    labelRect.bottom = std::min(labelRect.top + labelHeight, area.bottom);
-    drawText(surface, labelRect, label, RGB(220, 220, 220), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    RECT valueRect = area;
-    valueRect.top = std::max<LONG>(valueRect.bottom - valueHeight, area.top);
-    drawText(surface, valueRect, valueText.c_str(), RGB(200, 200, 200), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-
-    RECT knobRect = area;
-    knobRect.top = std::min<LONG>(labelRect.bottom + spacing, area.bottom);
-    knobRect.bottom = std::max<LONG>(valueRect.top - spacing, knobRect.top);
-
-    int horizontalPadding = std::min(10, std::max(2, width / 5));
-    knobRect.left += horizontalPadding;
-    knobRect.right -= horizontalPadding;
-
-    if (knobRect.bottom <= knobRect.top || knobRect.right <= knobRect.left)
-    {
-        int centerY = area.top + height / 2;
-        int halfSpace = std::max(minimumKnobSpace / 2, 1);
-        knobRect.top = std::max(static_cast<LONG>(centerY - halfSpace), area.top);
-        knobRect.bottom = std::min(static_cast<LONG>(centerY + halfSpace), area.bottom);
-
-        int centerX = area.left + width / 2;
-        knobRect.left = std::max(static_cast<LONG>(centerX - halfSpace), area.left);
-        knobRect.right = knobRect.left + minimumKnobSpace;
-        if (knobRect.right > area.right)
-        {
-            knobRect.right = area.right;
-            knobRect.left = std::max(knobRect.right - minimumKnobSpace, area.left);
-        }
-        if (knobRect.bottom <= knobRect.top)
-        {
-            knobRect.bottom = std::min(knobRect.top + minimumKnobSpace, area.bottom);
-        }
-    }
-
-    int knobWidth = knobRect.right - knobRect.left;
-    int knobHeight = knobRect.bottom - knobRect.top;
-    int diameter = std::min(knobWidth, knobHeight);
-    if (diameter <= 0)
-        return;
-
-    knobRects.center.x = knobRect.left + knobWidth / 2;
-    knobRects.center.y = knobRect.top + knobHeight / 2;
-    int radius = std::max(diameter / 2 - 2, 0);
-    knobRects.radius = radius;
-    if (radius <= 0)
-        return;
-
-    fillCircle(surface, knobRects.center.x, knobRects.center.y, radius, RGB(28, 28, 28));
-    if (radius > 2)
-        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 2, RGB(70, 70, 70));
-    if (radius > 5)
-        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 5, RGB(110, 110, 110));
-    if (radius > 9)
-        fillCircle(surface, knobRects.center.x, knobRects.center.y, radius - 9, RGB(150, 150, 150));
-
-    auto drawTick = [&](double angleDegrees, int thickness, COLORREF color) {
-        double angleRad = angleDegrees * (kPi / 180.0);
-        int outerX = knobRects.center.x + static_cast<int>(std::round(std::cos(angleRad) * static_cast<double>(radius)));
-        int outerY = knobRects.center.y - static_cast<int>(std::round(std::sin(angleRad) * static_cast<double>(radius)));
-        int innerRadius = std::max(radius - thickness, 0);
-        int innerX = knobRects.center.x + static_cast<int>(std::round(std::cos(angleRad) * static_cast<double>(innerRadius)));
-        int innerY = knobRects.center.y - static_cast<int>(std::round(std::sin(angleRad) * static_cast<double>(innerRadius)));
-        drawLine(surface, innerX, innerY, outerX, outerY, color);
-    };
-
-    drawTick(kKnobMinAngleDegrees, 6, RGB(40, 40, 40));
-    drawTick(0.0, 6, RGB(50, 50, 50));
-    drawTick(kKnobMaxAngleDegrees, 6, RGB(40, 40, 40));
-
-    double clampedNorm = std::clamp(normalizedValue, 0.0, 1.0);
-    double indicatorAngleDeg = kKnobMinAngleDegrees + clampedNorm * kKnobSweepDegrees;
-    double indicatorRad = indicatorAngleDeg * (kPi / 180.0);
-
-    int indicatorInner = std::max(radius / 4, 2);
-    int indicatorOuter = std::max(radius - 6, indicatorInner + 1);
-    int startX = knobRects.center.x + static_cast<int>(std::round(std::cos(indicatorRad) * static_cast<double>(indicatorInner)));
-    int startY = knobRects.center.y - static_cast<int>(std::round(std::sin(indicatorRad) * static_cast<double>(indicatorInner)));
-    int endX = knobRects.center.x + static_cast<int>(std::round(std::cos(indicatorRad) * static_cast<double>(indicatorOuter)));
-    int endY = knobRects.center.y - static_cast<int>(std::round(std::sin(indicatorRad) * static_cast<double>(indicatorOuter)));
-    drawLine(surface, startX, startY, endX, endY, RGB(0, 200, 255));
 }
 
 void drawSliderControl(LICE_SysBitmap& surface, SliderControlRects& sliderRects, const RECT& area, double normalizedValue,
@@ -3375,133 +3163,6 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
     RECT pitchRangeRect = makeSliderRect(3);
     drawSliderControl(surface, gSynthPitchRangeSliderControl, pitchRangeRect, pitchRangeNorm,
                       "Pitch Range", formatPitchRangeValue(activeTrack->pitchRange));
-}
-
-void drawMixerControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
-{
-    constexpr int kPanelWidth = 80;
-    constexpr int kPanelHeight = 160;
-    constexpr int kPanelMargin = 20;
-
-    RECT lastStepRect = stepRects.back();
-    int referenceRight = lastStepRect.right;
-    if (referenceRight <= lastStepRect.left)
-    {
-        referenceRight = std::max(static_cast<int>(client.right - kPanelMargin), kPanelWidth);
-    }
-
-    int panelRight = std::min(referenceRight, static_cast<int>(client.right));
-    int panelLeft = panelRight - kPanelWidth;
-    if (panelLeft < 0)
-    {
-        panelLeft = 0;
-        panelRight = panelLeft + kPanelWidth;
-    }
-
-    int stepBottom = stepRects.front().bottom;
-    if (stepBottom <= stepRects.front().top)
-    {
-        stepBottom = kTrackTabsTop + kTrackTabHeight + kTrackTabsToGridMargin + 35;
-    }
-
-    int panelTop = stepBottom + 10;
-    int panelBottom = panelTop + kPanelHeight;
-    int maxBottom = client.bottom - kPanelMargin;
-    if (panelBottom > maxBottom)
-    {
-        int delta = panelBottom - maxBottom;
-        panelTop = std::max(panelTop - delta, stepBottom + 10);
-        panelBottom = panelTop + kPanelHeight;
-    }
-    if (panelBottom > client.bottom)
-    {
-        panelTop = std::max(static_cast<int>(client.bottom - kPanelHeight), stepBottom + 10);
-        panelBottom = std::min(panelTop + kPanelHeight, static_cast<int>(client.bottom));
-    }
-
-    mixerPanelRect = {panelLeft, panelTop, panelRight, panelBottom};
-
-    int width = mixerPanelRect.right - mixerPanelRect.left;
-    int height = mixerPanelRect.bottom - mixerPanelRect.top;
-    if (width <= 0 || height <= 0)
-        return;
-
-    LICE_FillRect(&surface, mixerPanelRect.left, mixerPanelRect.top, width, height,
-                  LICE_ColorFromCOLORREF(RGB(30, 30, 30)));
-    LICE_DrawRect(&surface, mixerPanelRect.left, mixerPanelRect.top, width, height,
-                  LICE_ColorFromCOLORREF(RGB(70, 70, 70)));
-
-    int panelPadding = 6;
-    int headerHeight = 18;
-    int sliderHeight = 40;
-    int sliderSpacing = 6;
-
-    RECT headerRect {panelLeft + panelPadding, panelTop + panelPadding,
-                     panelRight - panelPadding, panelTop + panelPadding + headerHeight};
-    drawText(surface, headerRect, "Mixer", RGB(230, 230, 230), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    int currentTop = headerRect.bottom + sliderSpacing;
-    RECT volumeRect {panelLeft + panelPadding, currentTop,
-                     panelRight - panelPadding, currentTop + sliderHeight};
-    currentTop = volumeRect.bottom + sliderSpacing;
-
-    RECT panRect {panelLeft + panelPadding, currentTop,
-                  panelRight - panelPadding, currentTop + sliderHeight};
-    currentTop = panRect.bottom + sliderSpacing;
-
-    RECT eqArea {panelLeft + panelPadding, currentTop,
-                 panelRight - panelPadding, panelBottom - panelPadding};
-
-    if (!activeTrack)
-    {
-        RECT messageRect {headerRect.left, headerRect.bottom + 10, headerRect.right, panelBottom - panelPadding};
-        drawText(surface, messageRect, "Select a track to adjust mixer settings.", RGB(200, 200, 200),
-                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        gMainVolumeSliderControl = {};
-        gMainPanSliderControl = {};
-        for (auto& knob : gMainEqKnobControls)
-            knob = {};
-        return;
-    }
-
-    double volumeNorm = computeNormalized(activeTrack->volume, kMixerVolumeMin, kMixerVolumeMax);
-    double panNorm = computeNormalized(activeTrack->pan, kMixerPanMin, kMixerPanMax);
-    double lowNorm = computeNormalized(activeTrack->lowGainDb, kMixerEqMin, kMixerEqMax);
-    double midNorm = computeNormalized(activeTrack->midGainDb, kMixerEqMin, kMixerEqMax);
-    double highNorm = computeNormalized(activeTrack->highGainDb, kMixerEqMin, kMixerEqMax);
-
-    drawSliderControl(surface, gMainVolumeSliderControl, volumeRect, volumeNorm,
-                      "Volume", formatVolumeValue(activeTrack->volume));
-    drawSliderControl(surface, gMainPanSliderControl, panRect, panNorm,
-                      "Pan", formatPanValue(activeTrack->pan));
-
-    int eqWidth = eqArea.right - eqArea.left;
-    int eqHeight = eqArea.bottom - eqArea.top;
-    int eqSpacing = std::min(4, std::max(2, eqWidth / 12));
-    if (eqWidth <= 0 || eqHeight <= 0)
-    {
-        for (auto& knob : gMainEqKnobControls)
-            knob = {};
-        return;
-    }
-
-    int eqColumnWidth = std::max((eqWidth - eqSpacing * 2) / 3, 8);
-    RECT eqRect0 {eqArea.left, eqArea.top, eqArea.left + eqColumnWidth, eqArea.bottom};
-    RECT eqRect1 {std::min(eqRect0.right + eqSpacing, eqArea.right), eqArea.top,
-                  std::min(eqRect0.right + eqSpacing + eqColumnWidth, eqArea.right), eqArea.bottom};
-    RECT eqRect2 {std::min(eqRect1.right + eqSpacing, eqArea.right), eqArea.top, eqArea.right, eqArea.bottom};
-
-    if (eqRect1.left > eqRect1.right)
-        eqRect1.left = eqRect1.right;
-    if (eqRect2.left > eqRect2.right)
-        eqRect2.left = eqRect2.right;
-
-    drawKnobControl(surface, gMainEqKnobControls[0], eqRect0, lowNorm,
-                    kEqBandLabels[0], formatEqValue(activeTrack->lowGainDb));
-    drawKnobControl(surface, gMainEqKnobControls[1], eqRect1, midNorm,
-                    kEqBandLabels[1], formatEqValue(activeTrack->midGainDb));
-    drawKnobControl(surface, gMainEqKnobControls[2], eqRect2, highNorm,
-                    kEqBandLabels[2], formatEqValue(activeTrack->highGainDb));
 }
 
 void renderUI(LICE_SysBitmap& surface, const RECT& client)
@@ -3781,8 +3442,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     drawSynthTrackControls(surface, client, activeTrackPtr);
 
-    drawMixerControls(surface, client, activeTrackPtr);
-
     for (const auto& option : dropdownOptions)
     {
         COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
@@ -3962,26 +3621,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (activeTrackId > 0)
         {
-            if (pointInRect(gMainVolumeSliderControl.control, x, y))
-            {
-                openTrackTypeTrackId = 0;
-                waveDropdownOpen = false;
-                audioDeviceDropdownOpen = false;
-                beginSliderDrag(hwnd, SliderDragTarget::MainVolume, activeTrackId);
-                updateSliderDrag(hwnd, x);
-                return 0;
-            }
-
-            if (pointInRect(gMainPanSliderControl.control, x, y))
-            {
-                openTrackTypeTrackId = 0;
-                waveDropdownOpen = false;
-                audioDeviceDropdownOpen = false;
-                beginSliderDrag(hwnd, SliderDragTarget::MainPan, activeTrackId);
-                updateSliderDrag(hwnd, x);
-                return 0;
-            }
-
             if (showWaveSelector)
             {
                 if (pointInRect(gSynthFormantSliderControl.control, x, y))
@@ -4021,34 +3660,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthPitchRange, activeTrackId);
                     updateSliderDrag(hwnd, x);
-                    return 0;
-                }
-            }
-
-            for (size_t eqIndex = 0; eqIndex < gMainEqKnobControls.size(); ++eqIndex)
-            {
-                if (pointInRect(gMainEqKnobControls[eqIndex].control, x, y))
-                {
-                    float newGain = knobValueFromPosition(gMainEqKnobControls[eqIndex], x, y, kMixerEqMin, kMixerEqMax);
-                    switch (eqIndex)
-                    {
-                    case 0:
-                        trackSetEqLowGain(activeTrackId, newGain);
-                        break;
-                    case 1:
-                        trackSetEqMidGain(activeTrackId, newGain);
-                        break;
-                    case 2:
-                        trackSetEqHighGain(activeTrackId, newGain);
-                        break;
-                    default:
-                        break;
-                    }
-                    openTrackTypeTrackId = 0;
-                    waveDropdownOpen = false;
-                    audioDeviceDropdownOpen = false;
-                    InvalidateRect(hwnd, nullptr, FALSE);
-                    notifyEffectsWindowTrackValuesChanged(activeTrackId);
                     return 0;
                 }
             }
