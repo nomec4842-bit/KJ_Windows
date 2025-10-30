@@ -75,6 +75,7 @@ constexpr double kLowShelfFrequency = 200.0;
 constexpr double kMidPeakFrequency = 1000.0;
 constexpr double kHighShelfFrequency = 5000.0;
 constexpr double kMidPeakQ = 1.0;
+constexpr double kSampleEnvelopeSmoothingSeconds = 0.003;
 
 void resetFilterState(BiquadFilter& filter)
 {
@@ -327,9 +328,13 @@ struct TrackPlaybackState {
     double synthSustain = 0.8;
     double synthRelease = 0.3;
     double sampleEnvelope = 0.0;
+    double sampleEnvelopeSmoothed = 0.0;
     EnvelopeStage sampleEnvelopeStage = EnvelopeStage::Idle;
     double sampleAttack = 0.005;
     double sampleRelease = 0.3;
+    double sampleLastLeft = 0.0;
+    double sampleLastRight = 0.0;
+    bool sampleTailActive = false;
     struct SynthVoice {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
@@ -426,8 +431,8 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     }
     if (sampleEnvelopeChanged)
     {
-        state.sampleAttack = newSampleAttack;
-        state.sampleRelease = newSampleRelease;
+        state.sampleAttack = std::max(newSampleAttack, kSampleEnvelopeSmoothingSeconds);
+        state.sampleRelease = std::max(newSampleRelease, kSampleEnvelopeSmoothingSeconds);
     }
 }
 
@@ -774,14 +779,24 @@ void audioLoop() {
 
                         if (trackInfo.type == TrackType::Sample) {
                             if (triggered) {
-                                if (state.sampleBuffer && state.sampleFrameCount > 0) {
-                                    state.samplePlaying = true;
-                                    state.samplePosition = 0.0;
-                                    state.sampleEnvelopeStage = EnvelopeStage::Attack;
-                                } else {
-                                    state.samplePlaying = false;
-                                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
-                                    state.sampleEnvelope = 0.0;
+                                bool allowRetrigger = !state.samplePlaying ||
+                                                       state.sampleEnvelopeStage == EnvelopeStage::Idle ||
+                                                       state.sampleEnvelopeStage == EnvelopeStage::Release;
+                                if (allowRetrigger) {
+                                    if (state.sampleBuffer && state.sampleFrameCount > 0) {
+                                        state.samplePlaying = true;
+                                        state.samplePosition = 0.0;
+                                        state.sampleEnvelopeStage = EnvelopeStage::Attack;
+                                        state.sampleTailActive = false;
+                                    } else {
+                                        state.samplePlaying = false;
+                                        state.sampleEnvelopeStage = EnvelopeStage::Idle;
+                                        state.sampleEnvelope = 0.0;
+                                        state.sampleEnvelopeSmoothed = 0.0;
+                                        state.sampleTailActive = false;
+                                        state.sampleLastLeft = 0.0;
+                                        state.sampleLastRight = 0.0;
+                                    }
                                 }
                             }
 
@@ -799,6 +814,9 @@ void audioLoop() {
                                     float rightSample = channels > 1 ? rawSamples[index * channels + 1] : leftSample;
                                     trackLeft = static_cast<double>(leftSample);
                                     trackRight = static_cast<double>(rightSample);
+                                    state.sampleLastLeft = trackLeft;
+                                    state.sampleLastRight = trackRight;
+                                    state.sampleTailActive = true;
                                     state.samplePosition += state.sampleIncrement;
                                 } else {
                                     state.samplePlaying = false;
@@ -807,15 +825,41 @@ void audioLoop() {
                                 }
                             }
 
+                            if (!state.samplePlaying && state.sampleTailActive &&
+                                state.sampleEnvelopeStage != EnvelopeStage::Idle) {
+                                trackLeft = state.sampleLastLeft;
+                                trackRight = state.sampleLastRight;
+                            }
+
                             state.sampleEnvelope = advanceEnvelope(state.sampleEnvelopeStage, state.sampleEnvelope,
                                                                     state.sampleAttack, 0.0, 1.0, state.sampleRelease,
                                                                     sampleRate);
-                            double sampleGain = state.sampleEnvelope;
+
+                            double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+                            double maxDelta = (kSampleEnvelopeSmoothingSeconds > 0.0)
+                                ? (1.0 / (kSampleEnvelopeSmoothingSeconds * sr))
+                                : 1.0;
+                            if (!std::isfinite(maxDelta) || maxDelta <= 0.0)
+                                maxDelta = 1.0;
+                            double delta = state.sampleEnvelope - state.sampleEnvelopeSmoothed;
+                            if (delta > maxDelta)
+                                delta = maxDelta;
+                            else if (delta < -maxDelta)
+                                delta = -maxDelta;
+                            state.sampleEnvelopeSmoothed += delta;
+
+                            double sampleGain = state.sampleEnvelopeSmoothed;
                             trackLeft *= sampleGain;
                             trackRight *= sampleGain;
 
-                            if (state.sampleEnvelopeStage == EnvelopeStage::Idle && !state.samplePlaying) {
-                                state.sampleEnvelope = 0.0;
+                            if (state.sampleEnvelopeStage == EnvelopeStage::Idle) {
+                                state.sampleTailActive = false;
+                                if (!state.samplePlaying) {
+                                    state.sampleEnvelope = 0.0;
+                                    state.sampleEnvelopeSmoothed = 0.0;
+                                    state.sampleLastLeft = 0.0;
+                                    state.sampleLastRight = 0.0;
+                                }
                             }
                         } else {
                             if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&
