@@ -1,8 +1,32 @@
 #pragma once
 
+#if defined(_WIN32)
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#else
+#include <cstdint>
+
+using BYTE = unsigned char;
+using DWORD = unsigned long;
+using HRESULT = long;
+using UINT32 = unsigned int;
+
+struct IMMDeviceEnumerator;
+struct IMMDevice;
+struct IAudioClient;
+struct IAudioRenderClient;
+
+struct WAVEFORMATEX {
+    std::uint16_t wFormatTag = 0;
+    std::uint16_t nChannels = 0;
+    std::uint32_t nSamplesPerSec = 0;
+    std::uint32_t nAvgBytesPerSec = 0;
+    std::uint16_t nBlockAlign = 0;
+    std::uint16_t wBitsPerSample = 0;
+    std::uint16_t cbSize = 0;
+};
+#endif
 
 #include <memory>
 #include <string>
