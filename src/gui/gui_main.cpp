@@ -142,6 +142,10 @@ bool gPianoRollMenuCollapsed = false;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
 
+void notifyEffectsWindowTrackListChanged();
+void notifyEffectsWindowActiveTrackChanged(int trackId);
+void notifyEffectsWindowTrackValuesChanged(int trackId);
+
 constexpr UINT kMenuCommandLoadProject = 1001;
 constexpr UINT kMenuCommandSaveProject = 1002;
 
