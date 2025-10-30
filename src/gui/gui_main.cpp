@@ -143,6 +143,9 @@ bool gPianoRollMenuCollapsed = false;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
 
+constexpr UINT kMenuCommandLoadProject = 1001;
+constexpr UINT kMenuCommandSaveProject = 1002;
+
 struct PianoRollDragState
 {
     bool active = false;
@@ -1085,6 +1088,59 @@ void closePianoRollWindow()
     {
         DestroyWindow(gPianoRollWindow);
         gPianoRollWindow = nullptr;
+    }
+}
+
+void showLoadProjectDialog(HWND hwnd)
+{
+    wchar_t fileBuffer[MAX_PATH] = {0};
+    OPENFILENAMEW ofn = {0};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = L"KJ Project Files (*.jik)\0*.jik\0All Files\0*.*\0";
+    ofn.lpstrFile = fileBuffer;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrDefExt = L"jik";
+
+    if (GetOpenFileNameW(&ofn))
+    {
+        MessageBoxW(hwnd,
+                    L"Project loading is not yet implemented.",
+                    L"Load Project",
+                    MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+void showSaveProjectDialog(HWND hwnd)
+{
+    wchar_t fileBuffer[MAX_PATH] = {0};
+    OPENFILENAMEW ofn = {0};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = L"KJ Project Files (*.jik)\0*.jik\0All Files\0*.*\0";
+    ofn.lpstrFile = fileBuffer;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    ofn.lpstrDefExt = L"jik";
+
+    if (GetSaveFileNameW(&ofn))
+    {
+        std::filesystem::path selectedPath(fileBuffer);
+        if (!saveProjectToFile(selectedPath))
+        {
+            MessageBoxW(hwnd,
+                        L"Failed to save project.",
+                        L"Save Project",
+                        MB_OK | MB_ICONERROR);
+        }
+        else
+        {
+            MessageBoxW(hwnd,
+                        L"Project saved successfully.",
+                        L"Save Project",
+                        MB_OK | MB_ICONINFORMATION);
+        }
     }
 }
 
@@ -3746,7 +3802,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         gMainWindow = hwnd;
         buildStepRects();
         SetTimer(hwnd, 1, 60, nullptr);
+        {
+            HMENU menuBar = CreateMenu();
+            if (menuBar)
+            {
+                HMENU fileMenu = CreatePopupMenu();
+                if (fileMenu)
+                {
+                    AppendMenuW(fileMenu, MF_STRING, kMenuCommandLoadProject, L"&Load Project...");
+                    AppendMenuW(fileMenu, MF_STRING, kMenuCommandSaveProject, L"&Save Project...");
+                    AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"&File");
+                }
+                SetMenu(hwnd, menuBar);
+                DrawMenuBar(hwnd);
+            }
+        }
         return 0;
+    case WM_COMMAND:
+    {
+        switch (LOWORD(wParam))
+        {
+        case kMenuCommandLoadProject:
+            showLoadProjectDialog(hwnd);
+            return 0;
+        case kMenuCommandSaveProject:
+            showSaveProjectDialog(hwnd);
+            return 0;
+        default:
+            break;
+        }
+        break;
+    }
     case WM_LBUTTONDOWN:
     {
         int x = LOWORD(lParam);
@@ -4104,35 +4190,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (pointInRect(saveProjectButton, x, y))
         {
-            wchar_t fileBuffer[MAX_PATH] = {0};
-            OPENFILENAMEW ofn = {0};
-            ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = hwnd;
-            ofn.lpstrFilter = L"KJ Project Files (*.jik)\0*.jik\0All Files\0*.*\0";
-            ofn.lpstrFile = fileBuffer;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-            ofn.lpstrDefExt = L"jik";
-
-            if (GetSaveFileNameW(&ofn))
-            {
-                std::filesystem::path selectedPath(fileBuffer);
-                if (!saveProjectToFile(selectedPath))
-                {
-                    MessageBoxW(hwnd,
-                                L"Failed to save project.",
-                                L"Save Project",
-                                MB_OK | MB_ICONERROR);
-                }
-                else
-                {
-                    MessageBoxW(hwnd,
-                                L"Project saved successfully.",
-                                L"Save Project",
-                                MB_OK | MB_ICONINFORMATION);
-                }
-            }
-
+            showSaveProjectDialog(hwnd);
             return 0;
         }
 
