@@ -1,5 +1,7 @@
 #include "core/audio_device_handler.h"
 
+#if defined(_WIN32)
+
 #include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
 
@@ -248,4 +250,70 @@ std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderD
     enumerator->Release();
     return devices;
 }
+
+#else  // !_WIN32
+
+AudioDeviceHandler::AudioDeviceHandler() = default;
+
+AudioDeviceHandler::~AudioDeviceHandler() {
+    shutdown();
+}
+
+void AudioDeviceHandler::FormatDeleter::operator()(WAVEFORMATEX* format) const {
+    (void)format;
+}
+
+void AudioDeviceHandler::resetComObjects() {
+    enumerator_ = nullptr;
+    device_ = nullptr;
+    client_ = nullptr;
+    renderClient_ = nullptr;
+}
+
+bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
+    deviceId_ = deviceId;
+    deviceName_.clear();
+    initialized_ = false;
+    bufferFrameCount_ = 0;
+    mixFormat_.reset();
+    resetComObjects();
+    return false;
+}
+
+void AudioDeviceHandler::shutdown() {
+    resetComObjects();
+    mixFormat_.reset();
+    bufferFrameCount_ = 0;
+    initialized_ = false;
+    deviceId_.clear();
+    deviceName_.clear();
+}
+
+bool AudioDeviceHandler::start() {
+    return false;
+}
+
+void AudioDeviceHandler::stop() {}
+
+HRESULT AudioDeviceHandler::currentPadding(UINT32* padding) const {
+    if (padding) {
+        *padding = 0;
+    }
+    return static_cast<HRESULT>(0);
+}
+
+HRESULT AudioDeviceHandler::getBuffer(UINT32 /*frameCount*/, BYTE** data) {
+    if (data) {
+        *data = nullptr;
+    }
+    return static_cast<HRESULT>(0);
+}
+
+void AudioDeviceHandler::releaseBuffer(UINT32 /*frameCount*/) {}
+
+std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderDevices() {
+    return {};
+}
+
+#endif  // _WIN32
 
