@@ -207,9 +207,90 @@ double computePitchEnvelopeStep(double sampleRate, double rangeSemitones)
     return 1.0 / (envelopeTime * sr);
 }
 
+enum class EnvelopeStage
+{
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+};
+
+double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack, double decay, double sustain,
+                       double release, double sampleRate)
+{
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double value = currentValue;
+    double safeSustain = std::clamp(sustain, 0.0, 1.0);
+    auto advanceLinear = [&](double target, double timeSeconds, bool rising) {
+        if (timeSeconds <= 0.0)
+        {
+            value = target;
+            return true;
+        }
+        double step = std::abs(target - value) / (timeSeconds * sr);
+        if (step <= 0.0)
+            step = 1.0 / (timeSeconds * sr);
+        if (rising)
+        {
+            value += step;
+            if (value >= target)
+            {
+                value = target;
+                return true;
+            }
+        }
+        else
+        {
+            value -= step;
+            if (value <= target)
+            {
+                value = target;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    switch (stage)
+    {
+    case EnvelopeStage::Idle:
+        value = 0.0;
+        break;
+    case EnvelopeStage::Attack:
+        if (advanceLinear(1.0, attack, true))
+            stage = EnvelopeStage::Decay;
+        break;
+    case EnvelopeStage::Decay:
+        if (advanceLinear(safeSustain, decay, false))
+            stage = EnvelopeStage::Sustain;
+        break;
+    case EnvelopeStage::Sustain:
+        value = safeSustain;
+        break;
+    case EnvelopeStage::Release:
+        if (advanceLinear(0.0, release, false))
+        {
+            stage = EnvelopeStage::Idle;
+            value = 0.0;
+        }
+        break;
+    }
+
+    if (!std::isfinite(value))
+        value = 0.0;
+    if (value < 0.0)
+        value = 0.0;
+    if (value > 1.0)
+        value = 1.0;
+
+    return value;
+}
+
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     double envelope = 0.0;
+    EnvelopeStage synthEnvelopeStage = EnvelopeStage::Idle;
     int currentMidiNote = 69;
     double currentFrequency = midiNoteToFrequency(69);
     int currentStep = 0;
@@ -241,6 +322,14 @@ struct TrackPlaybackState {
     BiquadFilter lowShelf;
     BiquadFilter midPeak;
     BiquadFilter highShelf;
+    double synthAttack = 0.01;
+    double synthDecay = 0.2;
+    double synthSustain = 0.8;
+    double synthRelease = 0.3;
+    double sampleEnvelope = 0.0;
+    EnvelopeStage sampleEnvelopeStage = EnvelopeStage::Idle;
+    double sampleAttack = 0.005;
+    double sampleRelease = 0.3;
     struct SynthVoice {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
@@ -263,6 +352,12 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newFeedback = std::clamp(static_cast<double>(track.feedback), 0.0, 1.0);
     double newPitch = static_cast<double>(track.pitch);
     double newPitchRange = std::max(0.0, static_cast<double>(track.pitchRange) - 1.0);
+    double newSynthAttack = std::clamp(static_cast<double>(track.synthAttack), 0.0, 4.0);
+    double newSynthDecay = std::clamp(static_cast<double>(track.synthDecay), 0.0, 4.0);
+    double newSynthSustain = std::clamp(static_cast<double>(track.synthSustain), 0.0, 1.0);
+    double newSynthRelease = std::clamp(static_cast<double>(track.synthRelease), 0.0, 4.0);
+    double newSampleAttack = std::clamp(static_cast<double>(track.sampleAttack), 0.0, 4.0);
+    double newSampleRelease = std::clamp(static_cast<double>(track.sampleRelease), 0.0, 4.0);
 
     bool sampleRateChanged = std::abs(state.lastSampleRate - sr) > 1e-6;
     bool lowChanged = sampleRateChanged || std::abs(state.lowGain - newLow) > 1e-6;
@@ -270,6 +365,12 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     bool highChanged = sampleRateChanged || std::abs(state.highGain - newHigh) > 1e-6;
     bool formantChanged = sampleRateChanged || std::abs(state.formantNormalized - newFormant) > 1e-6;
     bool pitchRangeChanged = sampleRateChanged || std::abs(state.pitchRangeSemitones - newPitchRange) > 1e-6;
+    bool synthEnvelopeChanged = std::abs(state.synthAttack - newSynthAttack) > 1e-6 ||
+                                std::abs(state.synthDecay - newSynthDecay) > 1e-6 ||
+                                std::abs(state.synthSustain - newSynthSustain) > 1e-6 ||
+                                std::abs(state.synthRelease - newSynthRelease) > 1e-6;
+    bool sampleEnvelopeChanged = std::abs(state.sampleAttack - newSampleAttack) > 1e-6 ||
+                                 std::abs(state.sampleRelease - newSampleRelease) > 1e-6;
 
     if (lowChanged)
     {
@@ -315,6 +416,18 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     if (!sampleRateChanged && !formantChanged)
     {
         state.formantAlpha = computeFormantAlpha(sr, state.formantNormalized);
+    }
+    if (synthEnvelopeChanged)
+    {
+        state.synthAttack = newSynthAttack;
+        state.synthDecay = newSynthDecay;
+        state.synthSustain = newSynthSustain;
+        state.synthRelease = newSynthRelease;
+    }
+    if (sampleEnvelopeChanged)
+    {
+        state.sampleAttack = newSampleAttack;
+        state.sampleRelease = newSampleRelease;
     }
 }
 
@@ -482,6 +595,9 @@ void audioLoop() {
                         state.samplePosition = 0.0;
                     }
                     state.envelope = 0.0;
+                    state.synthEnvelopeStage = EnvelopeStage::Idle;
+                    state.sampleEnvelope = 0.0;
+                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
                     state.currentMidiNote = 69;
                     state.currentFrequency = midiNoteToFrequency(69);
                     state.voices.clear();
@@ -490,6 +606,8 @@ void audioLoop() {
                     state.sampleFrameCount = 0;
                     state.samplePlaying = false;
                     state.samplePosition = 0.0;
+                    state.sampleEnvelope = 0.0;
+                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
                     if (state.currentMidiNote < 0 || state.currentMidiNote > 127) {
                         state.currentMidiNote = 69;
                     }
@@ -513,8 +631,12 @@ void audioLoop() {
                         state.envelope *= 0.92;
                         if (state.envelope < 0.0001)
                             state.envelope = 0.0;
+                        state.synthEnvelopeStage = EnvelopeStage::Idle;
+                        state.sampleEnvelope = 0.0;
+                        state.sampleEnvelopeStage = EnvelopeStage::Idle;
                         state.samplePlaying = false;
                         state.samplePosition = 0.0;
+                        state.voices.clear();
                         state.pitchEnvelope = 0.0;
                         state.lastParameterStep = -1;
                         state.stepVelocity = 1.0;
@@ -655,9 +777,17 @@ void audioLoop() {
                                 if (state.sampleBuffer && state.sampleFrameCount > 0) {
                                     state.samplePlaying = true;
                                     state.samplePosition = 0.0;
+                                    state.sampleEnvelopeStage = EnvelopeStage::Attack;
                                 } else {
                                     state.samplePlaying = false;
+                                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
+                                    state.sampleEnvelope = 0.0;
                                 }
+                            }
+
+                            if (!gate && state.sampleEnvelopeStage != EnvelopeStage::Idle &&
+                                state.sampleEnvelopeStage != EnvelopeStage::Release) {
+                                state.sampleEnvelopeStage = EnvelopeStage::Release;
                             }
 
                             if (state.samplePlaying && state.sampleBuffer) {
@@ -672,10 +802,26 @@ void audioLoop() {
                                     state.samplePosition += state.sampleIncrement;
                                 } else {
                                     state.samplePlaying = false;
+                                    if (state.sampleEnvelopeStage != EnvelopeStage::Idle)
+                                        state.sampleEnvelopeStage = EnvelopeStage::Release;
                                 }
                             }
+
+                            state.sampleEnvelope = advanceEnvelope(state.sampleEnvelopeStage, state.sampleEnvelope,
+                                                                    state.sampleAttack, 0.0, 1.0, state.sampleRelease,
+                                                                    sampleRate);
+                            double sampleGain = state.sampleEnvelope;
+                            trackLeft *= sampleGain;
+                            trackRight *= sampleGain;
+
+                            if (state.sampleEnvelopeStage == EnvelopeStage::Idle && !state.samplePlaying) {
+                                state.sampleEnvelope = 0.0;
+                            }
                         } else {
-                            double target = gate ? 0.8 : 0.0;
+                            if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&
+                                state.synthEnvelopeStage != EnvelopeStage::Release) {
+                                state.synthEnvelopeStage = EnvelopeStage::Release;
+                            }
 
                             if (triggered) {
                                 std::vector<int> sustainedNotes;
@@ -728,21 +874,11 @@ void audioLoop() {
                                     state.currentFrequency = midiNoteToFrequency(69);
                                 }
 
-                                if (createdNewVoice) {
-                                    state.envelope = 0.9;
+                                if (createdNewVoice || state.synthEnvelopeStage == EnvelopeStage::Idle) {
+                                    state.synthEnvelopeStage = EnvelopeStage::Attack;
                                 }
 
                                 state.pitchEnvelope = 1.0;
-                            }
-
-                            if (state.envelope < target) {
-                                state.envelope += 0.005;
-                                if (state.envelope > target)
-                                    state.envelope = target;
-                            } else {
-                                state.envelope -= 0.003;
-                                if (state.envelope < target)
-                                    state.envelope = target;
                             }
 
                             double sampleValue = 0.0;
@@ -800,9 +936,14 @@ void audioLoop() {
                                 }
                                 sampleValue /= static_cast<double>(state.voices.size());
                             }
+                            state.envelope = advanceEnvelope(state.synthEnvelopeStage, state.envelope,
+                                                             state.synthAttack, state.synthDecay, state.synthSustain,
+                                                             state.synthRelease, sampleRate);
                             sampleValue *= state.envelope;
-                            if (!gate && state.envelope <= 0.0001) {
+                            if (state.synthEnvelopeStage == EnvelopeStage::Idle || state.envelope <= 0.0001) {
                                 state.voices.clear();
+                                if (!gate)
+                                    state.envelope = 0.0;
                             }
                             trackLeft = sampleValue;
                             trackRight = sampleValue;

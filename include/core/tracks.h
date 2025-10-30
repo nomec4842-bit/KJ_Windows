@@ -36,6 +36,12 @@ struct Track
     float feedback = 0.0f;
     float pitch = 0.0f;
     float pitchRange = 12.0f;
+    float synthAttack = 0.01f;
+    float synthDecay = 0.2f;
+    float synthSustain = 0.8f;
+    float synthRelease = 0.3f;
+    float sampleAttack = 0.005f;
+    float sampleRelease = 0.3f;
 };
 
 constexpr float kTrackStepVelocityMin = 0.0f;
@@ -83,6 +89,24 @@ void trackSetSynthPitch(int trackId, float value);
 
 float trackGetSynthPitchRange(int trackId);
 void trackSetSynthPitchRange(int trackId, float value);
+
+float trackGetSynthAttack(int trackId);
+void trackSetSynthAttack(int trackId, float value);
+
+float trackGetSynthDecay(int trackId);
+void trackSetSynthDecay(int trackId, float value);
+
+float trackGetSynthSustain(int trackId);
+void trackSetSynthSustain(int trackId, float value);
+
+float trackGetSynthRelease(int trackId);
+void trackSetSynthRelease(int trackId, float value);
+
+float trackGetSampleAttack(int trackId);
+void trackSetSampleAttack(int trackId, float value);
+
+float trackGetSampleRelease(int trackId);
+void trackSetSampleRelease(int trackId, float value);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);

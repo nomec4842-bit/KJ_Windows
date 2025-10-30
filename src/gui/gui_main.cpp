@@ -88,6 +88,14 @@ std::string formatPitchRangeValue(float value)
     return stream.str();
 }
 
+std::string formatSecondsValue(float value)
+{
+    std::ostringstream stream;
+    int precision = value < 1.0f ? 3 : 2;
+    stream << std::fixed << std::setprecision(precision) << value << " s";
+    return stream.str();
+}
+
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
 
@@ -735,6 +743,18 @@ constexpr float kSynthPitchMin = -24.0f;
 constexpr float kSynthPitchMax = 24.0f;
 constexpr float kSynthPitchRangeMin = 1.0f;
 constexpr float kSynthPitchRangeMax = 24.0f;
+constexpr float kSynthAttackMin = 0.0f;
+constexpr float kSynthAttackMax = 4.0f;
+constexpr float kSynthDecayMin = 0.0f;
+constexpr float kSynthDecayMax = 4.0f;
+constexpr float kSynthSustainMin = 0.0f;
+constexpr float kSynthSustainMax = 1.0f;
+constexpr float kSynthReleaseMin = 0.0f;
+constexpr float kSynthReleaseMax = 4.0f;
+constexpr float kSampleAttackMin = 0.0f;
+constexpr float kSampleAttackMax = 4.0f;
+constexpr float kSampleReleaseMin = 0.0f;
+constexpr float kSampleReleaseMax = 4.0f;
 
 struct SliderControlRects
 {
@@ -746,6 +766,12 @@ SliderControlRects gSynthFormantSliderControl{};
 SliderControlRects gSynthFeedbackSliderControl{};
 SliderControlRects gSynthPitchSliderControl{};
 SliderControlRects gSynthPitchRangeSliderControl{};
+SliderControlRects gSynthAttackSliderControl{};
+SliderControlRects gSynthDecaySliderControl{};
+SliderControlRects gSynthSustainSliderControl{};
+SliderControlRects gSynthReleaseSliderControl{};
+SliderControlRects gSampleAttackSliderControl{};
+SliderControlRects gSampleReleaseSliderControl{};
 
 enum class SliderDragTarget
 {
@@ -754,6 +780,12 @@ enum class SliderDragTarget
     SynthFeedback,
     SynthPitch,
     SynthPitchRange,
+    SynthAttack,
+    SynthDecay,
+    SynthSustain,
+    SynthRelease,
+    SampleAttack,
+    SampleRelease,
 };
 
 struct SliderDragState
@@ -2352,6 +2384,12 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
             fallbackTrack.feedback = trackGetSynthFeedback(state->selectedTrackId);
             fallbackTrack.pitch = trackGetSynthPitch(state->selectedTrackId);
             fallbackTrack.pitchRange = trackGetSynthPitchRange(state->selectedTrackId);
+            fallbackTrack.synthAttack = trackGetSynthAttack(state->selectedTrackId);
+            fallbackTrack.synthDecay = trackGetSynthDecay(state->selectedTrackId);
+            fallbackTrack.synthSustain = trackGetSynthSustain(state->selectedTrackId);
+            fallbackTrack.synthRelease = trackGetSynthRelease(state->selectedTrackId);
+            fallbackTrack.sampleAttack = trackGetSampleAttack(state->selectedTrackId);
+            fallbackTrack.sampleRelease = trackGetSampleRelease(state->selectedTrackId);
             trackPtr = &fallbackTrack;
         }
     }
@@ -2999,6 +3037,30 @@ void updateSliderDrag(HWND hwnd, int x)
         applySliderChange(gSynthPitchRangeSliderControl, kSynthPitchRangeMin, kSynthPitchRangeMax,
                           [trackId](float value) { trackSetSynthPitchRange(trackId, value); });
         break;
+    case SliderDragTarget::SynthAttack:
+        applySliderChange(gSynthAttackSliderControl, kSynthAttackMin, kSynthAttackMax,
+                          [trackId](float value) { trackSetSynthAttack(trackId, value); });
+        break;
+    case SliderDragTarget::SynthDecay:
+        applySliderChange(gSynthDecaySliderControl, kSynthDecayMin, kSynthDecayMax,
+                          [trackId](float value) { trackSetSynthDecay(trackId, value); });
+        break;
+    case SliderDragTarget::SynthSustain:
+        applySliderChange(gSynthSustainSliderControl, kSynthSustainMin, kSynthSustainMax,
+                          [trackId](float value) { trackSetSynthSustain(trackId, value); });
+        break;
+    case SliderDragTarget::SynthRelease:
+        applySliderChange(gSynthReleaseSliderControl, kSynthReleaseMin, kSynthReleaseMax,
+                          [trackId](float value) { trackSetSynthRelease(trackId, value); });
+        break;
+    case SliderDragTarget::SampleAttack:
+        applySliderChange(gSampleAttackSliderControl, kSampleAttackMin, kSampleAttackMax,
+                          [trackId](float value) { trackSetSampleAttack(trackId, value); });
+        break;
+    case SliderDragTarget::SampleRelease:
+        applySliderChange(gSampleReleaseSliderControl, kSampleReleaseMin, kSampleReleaseMax,
+                          [trackId](float value) { trackSetSampleRelease(trackId, value); });
+        break;
     case SliderDragTarget::None:
     default:
         break;
@@ -3150,6 +3212,10 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
     gSynthFeedbackSliderControl = {};
     gSynthPitchSliderControl = {};
     gSynthPitchRangeSliderControl = {};
+    gSynthAttackSliderControl = {};
+    gSynthDecaySliderControl = {};
+    gSynthSustainSliderControl = {};
+    gSynthReleaseSliderControl = {};
 
     if (!activeTrack || activeTrack->type != TrackType::Synth)
         return;
@@ -3162,6 +3228,108 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
         return;
 
     int topSpacing = 12;
+    int rowSpacing = 12;
+    int rows = 2;
+    int slidersPerRow = 4;
+    int sliderSpacing = 12;
+    int sliderHeight = 70;
+    int areaTop = firstStep.bottom + topSpacing;
+    int areaBottom = areaTop + rows * sliderHeight + (rows - 1) * rowSpacing;
+    if (areaBottom > client.bottom)
+    {
+        areaBottom = client.bottom;
+        int availableHeight = areaBottom - areaTop;
+        int minimumHeight = rows * 32 + (rows - 1) * rowSpacing;
+        if (availableHeight < minimumHeight)
+        {
+            areaTop = std::max<int>(areaBottom - minimumHeight, static_cast<int>(firstStep.bottom + 2));
+            availableHeight = areaBottom - areaTop;
+        }
+        sliderHeight = (availableHeight - (rows - 1) * rowSpacing) / rows;
+        if (sliderHeight <= 0)
+            return;
+    }
+    if (areaBottom <= areaTop)
+        return;
+
+    int totalWidth = areaRight - areaLeft;
+    int totalSpacing = sliderSpacing * (slidersPerRow - 1);
+    int sliderWidth = totalWidth - totalSpacing;
+    if (sliderWidth <= 0)
+        return;
+    sliderWidth /= slidersPerRow;
+    if (sliderWidth <= 0)
+        return;
+
+    auto makeSliderRect = [&](int row, int index) {
+        int left = areaLeft + index * (sliderWidth + sliderSpacing);
+        int top = areaTop + row * (sliderHeight + rowSpacing);
+        RECT rect {left, top, left + sliderWidth, top + sliderHeight};
+        if (rect.right > areaRight)
+            rect.right = areaRight;
+        if (rect.bottom > areaBottom)
+            rect.bottom = areaBottom;
+        return rect;
+    };
+
+    double formantNorm = computeNormalized(activeTrack->formant, kSynthFormantMin, kSynthFormantMax);
+    RECT formantRect = makeSliderRect(0, 0);
+    drawSliderControl(surface, gSynthFormantSliderControl, formantRect, formantNorm,
+                      "Formant", formatNormalizedValue(activeTrack->formant));
+
+    double feedbackNorm = computeNormalized(activeTrack->feedback, kSynthFeedbackMin, kSynthFeedbackMax);
+    RECT feedbackRect = makeSliderRect(0, 1);
+    drawSliderControl(surface, gSynthFeedbackSliderControl, feedbackRect, feedbackNorm,
+                      "Feedback", formatNormalizedValue(activeTrack->feedback));
+
+    double pitchNorm = computeNormalized(activeTrack->pitch, kSynthPitchMin, kSynthPitchMax);
+    RECT pitchRect = makeSliderRect(0, 2);
+    drawSliderControl(surface, gSynthPitchSliderControl, pitchRect, pitchNorm,
+                      "Pitch", formatPitchValue(activeTrack->pitch));
+
+    double pitchRangeNorm = computeNormalized(activeTrack->pitchRange, kSynthPitchRangeMin, kSynthPitchRangeMax);
+    RECT pitchRangeRect = makeSliderRect(0, 3);
+    drawSliderControl(surface, gSynthPitchRangeSliderControl, pitchRangeRect, pitchRangeNorm,
+                      "Pitch Range", formatPitchRangeValue(activeTrack->pitchRange));
+
+    double attackNorm = computeNormalized(activeTrack->synthAttack, kSynthAttackMin, kSynthAttackMax);
+    RECT attackRect = makeSliderRect(1, 0);
+    drawSliderControl(surface, gSynthAttackSliderControl, attackRect, attackNorm,
+                      "Attack", formatSecondsValue(activeTrack->synthAttack));
+
+    double decayNorm = computeNormalized(activeTrack->synthDecay, kSynthDecayMin, kSynthDecayMax);
+    RECT decayRect = makeSliderRect(1, 1);
+    drawSliderControl(surface, gSynthDecaySliderControl, decayRect, decayNorm,
+                      "Decay", formatSecondsValue(activeTrack->synthDecay));
+
+    double sustainNorm = computeNormalized(activeTrack->synthSustain, kSynthSustainMin, kSynthSustainMax);
+    RECT sustainRect = makeSliderRect(1, 2);
+    drawSliderControl(surface, gSynthSustainSliderControl, sustainRect, sustainNorm,
+                      "Sustain", formatNormalizedValue(activeTrack->synthSustain));
+
+    double releaseNorm = computeNormalized(activeTrack->synthRelease, kSynthReleaseMin, kSynthReleaseMax);
+    RECT releaseRect = makeSliderRect(1, 3);
+    drawSliderControl(surface, gSynthReleaseSliderControl, releaseRect, releaseNorm,
+                      "Release", formatSecondsValue(activeTrack->synthRelease));
+}
+
+void drawSampleTrackControls(LICE_SysBitmap& surface, const RECT& client, const Track* activeTrack)
+{
+    gSampleAttackSliderControl = {};
+    gSampleReleaseSliderControl = {};
+
+    if (!activeTrack || activeTrack->type != TrackType::Sample)
+        return;
+
+    const RECT& firstStep = stepRects.front();
+    const RECT& lastStep = stepRects.back();
+    int areaLeft = firstStep.left;
+    int areaRight = lastStep.right;
+    if (areaRight <= areaLeft)
+        return;
+
+    int topSpacing = 12;
+    int sliderSpacing = 12;
     int sliderHeight = 70;
     int areaTop = firstStep.bottom + topSpacing;
     int areaBottom = areaTop + sliderHeight;
@@ -3175,8 +3343,7 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
         return;
 
     int totalWidth = areaRight - areaLeft;
-    int sliderSpacing = 12;
-    int sliderCount = 4;
+    int sliderCount = 2;
     int totalSpacing = sliderSpacing * (sliderCount - 1);
     int sliderWidth = totalWidth - totalSpacing;
     if (sliderWidth <= 0)
@@ -3193,25 +3360,15 @@ void drawSynthTrackControls(LICE_SysBitmap& surface, const RECT& client, const T
         return rect;
     };
 
-    double formantNorm = computeNormalized(activeTrack->formant, kSynthFormantMin, kSynthFormantMax);
-    RECT formantRect = makeSliderRect(0);
-    drawSliderControl(surface, gSynthFormantSliderControl, formantRect, formantNorm,
-                      "Formant", formatNormalizedValue(activeTrack->formant));
+    double attackNorm = computeNormalized(activeTrack->sampleAttack, kSampleAttackMin, kSampleAttackMax);
+    RECT attackRect = makeSliderRect(0);
+    drawSliderControl(surface, gSampleAttackSliderControl, attackRect, attackNorm,
+                      "Attack", formatSecondsValue(activeTrack->sampleAttack));
 
-    double feedbackNorm = computeNormalized(activeTrack->feedback, kSynthFeedbackMin, kSynthFeedbackMax);
-    RECT feedbackRect = makeSliderRect(1);
-    drawSliderControl(surface, gSynthFeedbackSliderControl, feedbackRect, feedbackNorm,
-                      "Feedback", formatNormalizedValue(activeTrack->feedback));
-
-    double pitchNorm = computeNormalized(activeTrack->pitch, kSynthPitchMin, kSynthPitchMax);
-    RECT pitchRect = makeSliderRect(2);
-    drawSliderControl(surface, gSynthPitchSliderControl, pitchRect, pitchNorm,
-                      "Pitch", formatPitchValue(activeTrack->pitch));
-
-    double pitchRangeNorm = computeNormalized(activeTrack->pitchRange, kSynthPitchRangeMin, kSynthPitchRangeMax);
-    RECT pitchRangeRect = makeSliderRect(3);
-    drawSliderControl(surface, gSynthPitchRangeSliderControl, pitchRangeRect, pitchRangeNorm,
-                      "Pitch Range", formatPitchRangeValue(activeTrack->pitchRange));
+    double releaseNorm = computeNormalized(activeTrack->sampleRelease, kSampleReleaseMin, kSampleReleaseMax);
+    RECT releaseRect = makeSliderRect(1);
+    drawSliderControl(surface, gSampleReleaseSliderControl, releaseRect, releaseNorm,
+                      "Release", formatSecondsValue(activeTrack->sampleRelease));
 }
 
 void renderUI(LICE_SysBitmap& surface, const RECT& client)
@@ -3251,6 +3408,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         fallbackTrack.feedback = trackGetSynthFeedback(activeTrackId);
         fallbackTrack.pitch = trackGetSynthPitch(activeTrackId);
         fallbackTrack.pitchRange = trackGetSynthPitchRange(activeTrackId);
+        fallbackTrack.synthAttack = trackGetSynthAttack(activeTrackId);
+        fallbackTrack.synthDecay = trackGetSynthDecay(activeTrackId);
+        fallbackTrack.synthSustain = trackGetSynthSustain(activeTrackId);
+        fallbackTrack.synthRelease = trackGetSynthRelease(activeTrackId);
+        fallbackTrack.sampleAttack = trackGetSampleAttack(activeTrackId);
+        fallbackTrack.sampleRelease = trackGetSampleRelease(activeTrackId);
         activeTrackPtr = &fallbackTrack;
     }
 
@@ -3490,6 +3653,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     drawSequencer(surface, activeTrackId);
 
     drawSynthTrackControls(surface, client, activeTrackPtr);
+    drawSampleTrackControls(surface, client, activeTrackPtr);
 
     for (const auto& option : dropdownOptions)
     {
@@ -3708,6 +3872,68 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     waveDropdownOpen = false;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthPitchRange, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthAttackSliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthAttack, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthDecaySliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthDecay, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthSustainSliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthSustain, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+
+                if (pointInRect(gSynthReleaseSliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SynthRelease, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+            }
+            else if (showSampleLoader)
+            {
+                if (pointInRect(gSampleAttackSliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SampleAttack, activeTrackId);
+                    updateSliderDrag(hwnd, x);
+                    return 0;
+                }
+
+                if (pointInRect(gSampleReleaseSliderControl.control, x, y))
+                {
+                    openTrackTypeTrackId = 0;
+                    waveDropdownOpen = false;
+                    audioDeviceDropdownOpen = false;
+                    beginSliderDrag(hwnd, SliderDragTarget::SampleRelease, activeTrackId);
                     updateSliderDrag(hwnd, x);
                     return 0;
                 }
