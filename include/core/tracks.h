@@ -50,6 +50,8 @@ Track addTrack(const std::string& name = {});
 std::vector<Track> getTracks();
 size_t getTrackCount();
 
+void trackSetName(int trackId, const std::string& name);
+
 TrackType trackGetType(int trackId);
 void trackSetType(int trackId, TrackType type);
 

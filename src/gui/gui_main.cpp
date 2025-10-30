@@ -1085,8 +1085,53 @@ void showLoadProjectDialog(HWND hwnd)
 
     if (GetOpenFileNameW(&ofn))
     {
+        std::filesystem::path selectedPath(fileBuffer);
+        if (!loadProjectFromFile(selectedPath))
+        {
+            MessageBoxW(hwnd,
+                        L"Failed to load project.",
+                        L"Load Project",
+                        MB_OK | MB_ICONERROR);
+            return;
+        }
+
+        auto tracks = getTracks();
+        if (!tracks.empty())
+        {
+            selectedTrackId = tracks.front().id;
+            setActiveSequencerTrackId(selectedTrackId);
+        }
+        else
+        {
+            selectedTrackId = 0;
+            setActiveSequencerTrackId(0);
+        }
+
+        currentStepPage = 0;
+        openTrackTypeTrackId = 0;
+        waveDropdownOpen = false;
+        waveDropdownTrackId = 0;
+        audioDeviceDropdownOpen = false;
+
+        notifyEffectsWindowTrackListChanged();
+        if (selectedTrackId > 0)
+        {
+            notifyEffectsWindowActiveTrackChanged(selectedTrackId);
+            notifyEffectsWindowTrackValuesChanged(selectedTrackId);
+        }
+
+        invalidatePianoRollWindow();
+        if (hwnd && IsWindow(hwnd))
+        {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        if (gMainWindow && IsWindow(gMainWindow) && hwnd != gMainWindow)
+        {
+            InvalidateRect(gMainWindow, nullptr, FALSE);
+        }
+
         MessageBoxW(hwnd,
-                    L"Project loading is not yet implemented.",
+                    L"Project loaded successfully.",
                     L"Load Project",
                     MB_OK | MB_ICONINFORMATION);
     }
