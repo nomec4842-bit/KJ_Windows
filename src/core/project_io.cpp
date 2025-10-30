@@ -632,6 +632,12 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float feedback = trackGetSynthFeedback(track.id);
         float pitch = trackGetSynthPitch(track.id);
         float pitchRange = trackGetSynthPitchRange(track.id);
+        float synthAttack = trackGetSynthAttack(track.id);
+        float synthDecay = trackGetSynthDecay(track.id);
+        float synthSustain = trackGetSynthSustain(track.id);
+        float synthRelease = trackGetSynthRelease(track.id);
+        float sampleAttack = trackGetSampleAttack(track.id);
+        float sampleRelease = trackGetSampleRelease(track.id);
         bool hasSample = trackGetSampleBuffer(track.id) != nullptr;
         int stepCount = trackGetStepCount(track.id);
 
@@ -649,6 +655,12 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"feedback\": " << formatFloat(feedback) << ",\n";
         stream << "      \"pitch\": " << formatFloat(pitch) << ",\n";
         stream << "      \"pitchRange\": " << formatFloat(pitchRange) << ",\n";
+        stream << "      \"synthAttack\": " << formatFloat(synthAttack) << ",\n";
+        stream << "      \"synthDecay\": " << formatFloat(synthDecay) << ",\n";
+        stream << "      \"synthSustain\": " << formatFloat(synthSustain) << ",\n";
+        stream << "      \"synthRelease\": " << formatFloat(synthRelease) << ",\n";
+        stream << "      \"sampleAttack\": " << formatFloat(sampleAttack) << ",\n";
+        stream << "      \"sampleRelease\": " << formatFloat(sampleRelease) << ",\n";
         stream << "      \"hasSample\": " << (hasSample ? "true" : "false") << ",\n";
         stream << "      \"stepCount\": " << stepCount << ",\n";
         stream << "      \"steps\": [\n";
@@ -780,6 +792,12 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetSynthFeedback(trackId, jsonToFloat(findMember(trackObject, "feedback"), trackGetSynthFeedback(trackId)));
         trackSetSynthPitch(trackId, jsonToFloat(findMember(trackObject, "pitch"), trackGetSynthPitch(trackId)));
         trackSetSynthPitchRange(trackId, jsonToFloat(findMember(trackObject, "pitchRange"), trackGetSynthPitchRange(trackId)));
+        trackSetSynthAttack(trackId, jsonToFloat(findMember(trackObject, "synthAttack"), trackGetSynthAttack(trackId)));
+        trackSetSynthDecay(trackId, jsonToFloat(findMember(trackObject, "synthDecay"), trackGetSynthDecay(trackId)));
+        trackSetSynthSustain(trackId, jsonToFloat(findMember(trackObject, "synthSustain"), trackGetSynthSustain(trackId)));
+        trackSetSynthRelease(trackId, jsonToFloat(findMember(trackObject, "synthRelease"), trackGetSynthRelease(trackId)));
+        trackSetSampleAttack(trackId, jsonToFloat(findMember(trackObject, "sampleAttack"), trackGetSampleAttack(trackId)));
+        trackSetSampleRelease(trackId, jsonToFloat(findMember(trackObject, "sampleRelease"), trackGetSampleRelease(trackId)));
 
         int stepCount = jsonToInt(findMember(trackObject, "stepCount"), trackGetStepCount(trackId));
         trackSetStepCount(trackId, stepCount);

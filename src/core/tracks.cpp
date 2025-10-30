@@ -34,6 +34,18 @@ constexpr float kDefaultPitch = 0.0f;
 constexpr float kMinPitchRange = 1.0f;
 constexpr float kMaxPitchRange = 24.0f;
 constexpr float kDefaultPitchRange = 12.0f;
+constexpr float kMinSynthEnvelopeTime = 0.0f;
+constexpr float kMaxSynthEnvelopeTime = 4.0f;
+constexpr float kMinSynthSustain = 0.0f;
+constexpr float kMaxSynthSustain = 1.0f;
+constexpr float kDefaultSynthAttack = 0.01f;
+constexpr float kDefaultSynthDecay = 0.2f;
+constexpr float kDefaultSynthSustain = 0.8f;
+constexpr float kDefaultSynthRelease = 0.3f;
+constexpr float kMinSampleEnvelopeTime = 0.0f;
+constexpr float kMaxSampleEnvelopeTime = 4.0f;
+constexpr float kDefaultSampleAttack = 0.005f;
+constexpr float kDefaultSampleRelease = 0.3f;
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
 constexpr int kDefaultMidiNote = 69; // A4
@@ -64,6 +76,12 @@ struct TrackData
         track.feedback = kDefaultFeedback;
         track.pitch = kDefaultPitch;
         track.pitchRange = kDefaultPitchRange;
+        track.synthAttack = kDefaultSynthAttack;
+        track.synthDecay = kDefaultSynthDecay;
+        track.synthSustain = kDefaultSynthSustain;
+        track.synthRelease = kDefaultSynthRelease;
+        track.sampleAttack = kDefaultSampleAttack;
+        track.sampleRelease = kDefaultSampleRelease;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
@@ -93,6 +111,12 @@ struct TrackData
     std::atomic<float> feedback{kDefaultFeedback};
     std::atomic<float> pitch{kDefaultPitch};
     std::atomic<float> pitchRange{kDefaultPitchRange};
+    std::atomic<float> synthAttack{kDefaultSynthAttack};
+    std::atomic<float> synthDecay{kDefaultSynthDecay};
+    std::atomic<float> synthSustain{kDefaultSynthSustain};
+    std::atomic<float> synthRelease{kDefaultSynthRelease};
+    std::atomic<float> sampleAttack{kDefaultSampleAttack};
+    std::atomic<float> sampleRelease{kDefaultSampleRelease};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
     std::array<std::vector<int>, kMaxSequencerSteps> stepNotes{};
@@ -124,6 +148,12 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.feedback = kDefaultFeedback;
     baseTrack.pitch = kDefaultPitch;
     baseTrack.pitchRange = kDefaultPitchRange;
+    baseTrack.synthAttack = kDefaultSynthAttack;
+    baseTrack.synthDecay = kDefaultSynthDecay;
+    baseTrack.synthSustain = kDefaultSynthSustain;
+    baseTrack.synthRelease = kDefaultSynthRelease;
+    baseTrack.sampleAttack = kDefaultSampleAttack;
+    baseTrack.sampleRelease = kDefaultSampleRelease;
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -188,6 +218,12 @@ std::vector<Track> getTracks()
         info.feedback = track->feedback.load(std::memory_order_relaxed);
         info.pitch = track->pitch.load(std::memory_order_relaxed);
         info.pitchRange = track->pitchRange.load(std::memory_order_relaxed);
+        info.synthAttack = track->synthAttack.load(std::memory_order_relaxed);
+        info.synthDecay = track->synthDecay.load(std::memory_order_relaxed);
+        info.synthSustain = track->synthSustain.load(std::memory_order_relaxed);
+        info.synthRelease = track->synthRelease.load(std::memory_order_relaxed);
+        info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
+        info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
         result.push_back(std::move(info));
     }
     return result;
@@ -742,6 +778,126 @@ void trackSetSynthPitchRange(int trackId, float value)
     if (quantized < kMinPitchRange)
         quantized = kMinPitchRange;
     track->pitchRange.store(quantized, std::memory_order_relaxed);
+}
+
+float trackGetSynthAttack(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSynthAttack;
+
+    float value = track->synthAttack.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+}
+
+void trackSetSynthAttack(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    track->synthAttack.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthDecay(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSynthDecay;
+
+    float value = track->synthDecay.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+}
+
+void trackSetSynthDecay(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    track->synthDecay.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthSustain(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSynthSustain;
+
+    float value = track->synthSustain.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthSustain, kMaxSynthSustain);
+}
+
+void trackSetSynthSustain(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthSustain, kMaxSynthSustain);
+    track->synthSustain.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthRelease(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSynthRelease;
+
+    float value = track->synthRelease.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+}
+
+void trackSetSynthRelease(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    track->synthRelease.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSampleAttack(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSampleAttack;
+
+    float value = track->sampleAttack.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSampleEnvelopeTime, kMaxSampleEnvelopeTime);
+}
+
+void trackSetSampleAttack(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSampleEnvelopeTime, kMaxSampleEnvelopeTime);
+    track->sampleAttack.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSampleRelease(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSampleRelease;
+
+    float value = track->sampleRelease.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSampleEnvelopeTime, kMaxSampleEnvelopeTime);
+}
+
+void trackSetSampleRelease(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSampleEnvelopeTime, kMaxSampleEnvelopeTime);
+    track->sampleRelease.store(clamped, std::memory_order_relaxed);
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)
