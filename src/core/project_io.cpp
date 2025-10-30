@@ -591,8 +591,6 @@ std::string jsonToString(const JsonValue* value)
 
 } // namespace
 
-} // namespace
-
 bool saveProjectToFile(const std::filesystem::path& path)
 {
     if (path.empty())
