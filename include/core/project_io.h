@@ -7,3 +7,8 @@
 // applied. Returns true on success and false if the file could not be written.
 bool saveProjectToFile(const std::filesystem::path& path);
 
+// Loads a project from the specified .jik file and applies it to the current
+// application state. Returns true on success and false if the project could
+// not be parsed or applied.
+bool loadProjectFromFile(const std::filesystem::path& path);
+

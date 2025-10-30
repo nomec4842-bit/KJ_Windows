@@ -199,6 +199,23 @@ size_t getTrackCount()
     return gTracks.size();
 }
 
+void trackSetName(int trackId, const std::string& name)
+{
+    std::unique_lock<std::shared_mutex> lock(gTrackMutex);
+    for (auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            track->track.name = name;
+            if (track->track.name.empty())
+            {
+                track->track.name = "Track " + std::to_string(track->track.id);
+            }
+            return;
+        }
+    }
+}
+
 bool trackGetStepState(int trackId, int stepIndex)
 {
     if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
