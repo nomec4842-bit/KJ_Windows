@@ -3,6 +3,7 @@
 #include "core/project_io.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
+#include "gui/waveform_window.h"
 #include "wdl/lice/lice.h"
 
 #include <windows.h>
@@ -149,13 +150,41 @@ int gPianoRollSelectedMenuTab = 0;
 bool gPianoRollMenuCollapsed = false;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
+HMENU gViewMenu = nullptr;
 
 void notifyEffectsWindowTrackListChanged();
 void notifyEffectsWindowActiveTrackChanged(int trackId);
 void notifyEffectsWindowTrackValuesChanged(int trackId);
 
+void updateViewMenuChecks()
+{
+    if (!gViewMenu)
+        return;
+
+    UINT pianoState = (gPianoRollWindow && IsWindow(gPianoRollWindow)) ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandTogglePianoRoll, MF_BYCOMMAND | pianoState);
+
+    UINT effectsState = (gEffectsWindow && IsWindow(gEffectsWindow)) ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleEffects, MF_BYCOMMAND | effectsState);
+
+    UINT waveformState = isWaveformWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
+}
+
+void requestMainMenuRefresh()
+{
+    updateViewMenuChecks();
+    if (gMainWindow && IsWindow(gMainWindow))
+    {
+        DrawMenuBar(gMainWindow);
+    }
+}
+
 constexpr UINT kMenuCommandLoadProject = 1001;
 constexpr UINT kMenuCommandSaveProject = 1002;
+constexpr UINT kMenuCommandTogglePianoRoll = 1003;
+constexpr UINT kMenuCommandToggleEffects = 1004;
+constexpr UINT kMenuCommandToggleWaveform = 1005;
 
 struct PianoRollDragState
 {
@@ -1104,6 +1133,7 @@ void closePianoRollWindow()
     {
         DestroyWindow(gPianoRollWindow);
         gPianoRollWindow = nullptr;
+        requestMainMenuRefresh();
     }
 }
 
@@ -1227,6 +1257,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 InvalidateRect(gMainWindow, nullptr, FALSE);
             }
         }
+        requestMainMenuRefresh();
         return 0;
     case WM_TIMER:
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -2149,6 +2180,7 @@ void togglePianoRollWindow(HWND parent)
         gPianoRollWindow = hwnd;
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        requestMainMenuRefresh();
     }
 }
 
@@ -2508,6 +2540,7 @@ void closeEffectsWindow()
     {
         DestroyWindow(gEffectsWindow);
         gEffectsWindow = nullptr;
+        requestMainMenuRefresh();
     }
 }
 
@@ -2577,6 +2610,7 @@ void toggleEffectsWindow(HWND parent)
         gEffectsWindow = hwnd;
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        requestMainMenuRefresh();
     }
 }
 
@@ -2928,6 +2962,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 InvalidateRect(gMainWindow, nullptr, FALSE);
             }
         }
+        requestMainMenuRefresh();
         return 0;
     }
     }
@@ -3675,6 +3710,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         buildStepRects();
         SetTimer(hwnd, 1, 60, nullptr);
         {
+            gViewMenu = nullptr;
             HMENU menuBar = CreateMenu();
             if (menuBar)
             {
@@ -3684,6 +3720,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     AppendMenuW(fileMenu, MF_STRING, kMenuCommandLoadProject, L"&Load Project...");
                     AppendMenuW(fileMenu, MF_STRING, kMenuCommandSaveProject, L"&Save Project...");
                     AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"&File");
+                }
+
+                HMENU viewMenu = CreatePopupMenu();
+                if (viewMenu)
+                {
+                    gViewMenu = viewMenu;
+                    AppendMenuW(viewMenu, MF_STRING, kMenuCommandTogglePianoRoll, L"&Piano Roll");
+                    AppendMenuW(viewMenu, MF_STRING, kMenuCommandToggleEffects, L"Track &Effects");
+                    AppendMenuW(viewMenu, MF_STRING, kMenuCommandToggleWaveform, L"&Waveform Visualizer");
+                    AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"&View");
+                    updateViewMenuChecks();
+                }
+                else
+                {
+                    gViewMenu = nullptr;
                 }
                 SetMenu(hwnd, menuBar);
                 DrawMenuBar(hwnd);
@@ -3699,6 +3750,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         case kMenuCommandSaveProject:
             showSaveProjectDialog(hwnd);
+            return 0;
+        case kMenuCommandTogglePianoRoll:
+            togglePianoRollWindow(hwnd);
+            return 0;
+        case kMenuCommandToggleEffects:
+            toggleEffectsWindow(hwnd);
+            return 0;
+        case kMenuCommandToggleWaveform:
+            toggleWaveformWindow(hwnd);
             return 0;
         default:
             break;
@@ -4252,8 +4312,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         KillTimer(hwnd, 1);
         gSurface.reset();
         gMainWindow = nullptr;
+        gViewMenu = nullptr;
         closePianoRollWindow();
         closeEffectsWindow();
+        closeWaveformWindow();
         PostQuitMessage(0);
         return 0;
     }

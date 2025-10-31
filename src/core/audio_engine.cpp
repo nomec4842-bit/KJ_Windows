@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -32,6 +33,12 @@ static std::wstring activeDeviceId;
 static std::wstring activeDeviceName;
 static std::wstring activeRequestedDeviceId;
 static std::atomic<bool> deviceChangeRequested{false};
+
+constexpr std::size_t kMasterWaveformBufferSize = 44100;
+static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
+static std::size_t masterWaveformWriteIndex = 0;
+static bool masterWaveformFilled = false;
+static std::mutex masterWaveformMutex;
 
 namespace {
 
@@ -730,6 +737,10 @@ void audioLoop() {
                 samplerResetPending = false;
             }
 
+            static thread_local std::vector<float> capturedSamples;
+            capturedSamples.clear();
+            capturedSamples.reserve(static_cast<std::size_t>(available));
+
             for (UINT32 i = 0; i < available; i++) {
                 bool playing = isPlaying.load(std::memory_order_relaxed);
                 bool stepAdvanced = false;
@@ -1160,12 +1171,32 @@ void audioLoop() {
                         mixPeak = currentPeak;
 #endif
 
+                    float monoValue = static_cast<float>((leftValue + rightValue) * 0.5);
+                    capturedSamples.push_back(monoValue);
                     samples[i * 2] = static_cast<short>(leftValue * 32767.0);
                     samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
                     continue;
                 }
+                capturedSamples.push_back(0.0f);
                 samples[i * 2] = 0;
                 samples[i * 2 + 1] = 0;
+            }
+
+            if (!capturedSamples.empty())
+            {
+                std::lock_guard<std::mutex> waveformLock(masterWaveformMutex);
+                if (!masterWaveformBuffer.empty())
+                {
+                    for (float sampleValue : capturedSamples)
+                    {
+                        masterWaveformBuffer[masterWaveformWriteIndex] = sampleValue;
+                        masterWaveformWriteIndex = (masterWaveformWriteIndex + 1) % masterWaveformBuffer.size();
+                        if (masterWaveformWriteIndex == 0)
+                        {
+                            masterWaveformFilled = true;
+                        }
+                    }
+                }
             }
 #ifdef DEBUG_AUDIO
             double averageAmplitude = (available > 0)
@@ -1252,6 +1283,34 @@ bool setActiveAudioOutputDevice(const std::wstring& deviceId) {
     }
     deviceChangeRequested.store(true, std::memory_order_release);
     return true;
+}
+
+std::vector<float> getMasterWaveformSnapshot(std::size_t sampleCount)
+{
+    std::lock_guard<std::mutex> lock(masterWaveformMutex);
+    const std::size_t capacity = masterWaveformBuffer.size();
+    if (capacity == 0)
+        return {};
+
+    std::size_t available = masterWaveformFilled ? capacity : masterWaveformWriteIndex;
+    if (available == 0)
+        return {};
+
+    sampleCount = std::min(sampleCount, available);
+    std::vector<float> result(sampleCount);
+    std::size_t startIndex = (masterWaveformWriteIndex + capacity - sampleCount) % capacity;
+    for (std::size_t i = 0; i < sampleCount; ++i)
+    {
+        std::size_t index = (startIndex + i) % capacity;
+        result[i] = masterWaveformBuffer[index];
+    }
+    return result;
+}
+
+std::size_t getMasterWaveformCapacity()
+{
+    std::lock_guard<std::mutex> lock(masterWaveformMutex);
+    return masterWaveformBuffer.size();
 }
 
 void initAudio() {

@@ -1,5 +1,6 @@
 add_library(kj_gui STATIC
     gui_main.cpp
+    waveform_window.cpp
     ../../external/wdl/lice/lice.cpp
 )
 
