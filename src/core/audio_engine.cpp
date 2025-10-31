@@ -61,6 +61,22 @@ std::filesystem::path findDefaultSamplePath() {
     return {};
 }
 
+#ifdef DEBUG_AUDIO
+std::string narrowFromWide(const std::wstring& value)
+{
+    std::string result;
+    result.reserve(value.size());
+    for (wchar_t ch : value) {
+        if (ch >= 0 && ch <= 0x7F) {
+            result.push_back(static_cast<char>(ch));
+        } else {
+            result.push_back('?');
+        }
+    }
+    return result;
+}
+#endif
+
 struct BiquadFilter {
     double b0 = 1.0;
     double b1 = 0.0;
@@ -220,6 +236,24 @@ enum class EnvelopeStage
     Release,
 };
 
+const char* envelopeStageToString(EnvelopeStage stage)
+{
+    switch (stage)
+    {
+    case EnvelopeStage::Idle:
+        return "Idle";
+    case EnvelopeStage::Attack:
+        return "Attack";
+    case EnvelopeStage::Decay:
+        return "Decay";
+    case EnvelopeStage::Sustain:
+        return "Sustain";
+    case EnvelopeStage::Release:
+        return "Release";
+    }
+    return "Unknown";
+}
+
 double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack, double decay, double sustain,
                        double release, double sampleRate)
 {
@@ -347,6 +381,27 @@ struct TrackPlaybackState {
     std::vector<SynthVoice> voices;
 };
 
+void resetSamplePlaybackState(TrackPlaybackState& state)
+{
+    state.samplePlaying = false;
+    state.samplePosition = 0.0;
+    state.sampleIncrement = 1.0;
+    state.sampleEnvelope = 0.0;
+    state.sampleEnvelopeSmoothed = 0.0;
+    state.sampleEnvelopeStage = EnvelopeStage::Idle;
+    state.sampleTailActive = false;
+    state.sampleLastLeft = 0.0;
+    state.sampleLastRight = 0.0;
+}
+
+void resetSynthPlaybackState(TrackPlaybackState& state)
+{
+    state.envelope = 0.0;
+    state.synthEnvelopeStage = EnvelopeStage::Idle;
+    state.pitchEnvelope = 0.0;
+    state.voices.clear();
+}
+
 // Added proper includes and scope for updateMixerState (fix undefined type errors)
 void updateMixerState(TrackPlaybackState& state, const Track& track, double sampleRate)
 {
@@ -444,7 +499,7 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
 void audioLoop() {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
-    AudioDeviceHandler deviceHandler;
+    std::unique_ptr<AudioDeviceHandler> deviceHandler;
     UINT32 bufferFrameCount = 0;
     const WAVEFORMATEX* format = nullptr;
     double sampleRate = 44100.0;
@@ -453,6 +508,10 @@ void audioLoop() {
     bool previousPlaying = false;
     std::unordered_map<int, TrackPlaybackState> playbackStates;
     bool deviceReady = false;
+    bool samplerResetPending = true;
+#ifdef DEBUG_AUDIO
+    std::chrono::steady_clock::time_point lastCallbackTime{};
+#endif
 
     while (running) {
         bool changeRequested = deviceChangeRequested.exchange(false);
@@ -463,14 +522,17 @@ void audioLoop() {
         }
 
         if (changeRequested || !deviceReady) {
-            deviceHandler.stop();
-            deviceHandler.shutdown();
+            if (deviceHandler) {
+                deviceHandler->stop();
+                deviceHandler->shutdown();
+            }
+            deviceHandler = std::make_unique<AudioDeviceHandler>();
             deviceReady = false;
 
             bool usedFallback = false;
-            bool initialized = deviceHandler.initialize(desiredDeviceId);
+            bool initialized = deviceHandler->initialize(desiredDeviceId);
             if (!initialized && !desiredDeviceId.empty()) {
-                initialized = deviceHandler.initialize();
+                initialized = deviceHandler->initialize();
                 usedFallback = initialized;
             }
 
@@ -482,34 +544,46 @@ void audioLoop() {
                         activeDeviceName.clear();
                     }
                 }
+                deviceHandler.reset();
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
 
-            if (!deviceHandler.start()) {
-                deviceHandler.shutdown();
+            if (!deviceHandler->start()) {
+                deviceHandler->shutdown();
+                deviceHandler.reset();
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
 
-            bufferFrameCount = deviceHandler.bufferFrameCount();
-            format = deviceHandler.format();
+            bufferFrameCount = deviceHandler->bufferFrameCount();
+            format = deviceHandler->format();
             sampleRate = format ? static_cast<double>(format->nSamplesPerSec) : 44100.0;
             deviceReady = true;
             stepSampleCounter = 0.0;
             previousPlaying = false;
+            for (auto& [_, state] : playbackStates) {
+                resetSynthPlaybackState(state);
+                resetSamplePlaybackState(state);
+            }
             playbackStates.clear();
+            samplerResetPending = true;
+#ifdef DEBUG_AUDIO
+            lastCallbackTime = std::chrono::steady_clock::now();
+#endif
 
 #ifdef DEBUG_AUDIO
-            std::cout << "[AudioEngine] Initialized device with sampleRate="
+            std::wstring logDeviceName = deviceHandler->deviceName();
+            std::cout << "[AudioEngine] Initialized device sampleRate="
                       << sampleRate
-                      << " Hz, blockSize=" << bufferFrameCount << std::endl;
+                      << " Hz blockSize=" << bufferFrameCount
+                      << " name=" << narrowFromWide(logDeviceName) << std::endl;
 #endif
 
             {
                 std::lock_guard<std::mutex> lock(deviceMutex);
-                activeDeviceId = deviceHandler.deviceId();
-                activeDeviceName = deviceHandler.deviceName();
+                activeDeviceId = deviceHandler->deviceId();
+                activeDeviceName = deviceHandler->deviceName();
                 if (usedFallback) {
                     requestedDeviceId.clear();
                     activeRequestedDeviceId.clear();
@@ -525,11 +599,17 @@ void audioLoop() {
             continue;
         }
 
+        if (!deviceHandler) {
+            deviceReady = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         UINT32 padding = 0;
-        HRESULT paddingResult = deviceHandler.currentPadding(&padding);
+        HRESULT paddingResult = deviceHandler->currentPadding(&padding);
         if (paddingResult == AUDCLNT_E_DEVICE_INVALIDATED) {
-            deviceHandler.stop();
-            deviceHandler.shutdown();
+            deviceHandler->stop();
+            deviceHandler->shutdown();
             {
                 std::lock_guard<std::mutex> lock(deviceMutex);
                 activeDeviceId.clear();
@@ -547,10 +627,10 @@ void audioLoop() {
         UINT32 available = bufferFrameCount > padding ? bufferFrameCount - padding : 0;
         if (available > 0) {
             BYTE* data;
-            HRESULT bufferResult = deviceHandler.getBuffer(available, &data);
+            HRESULT bufferResult = deviceHandler->getBuffer(available, &data);
             if (bufferResult == AUDCLNT_E_DEVICE_INVALIDATED) {
-                deviceHandler.stop();
-                deviceHandler.shutdown();
+                deviceHandler->stop();
+                deviceHandler->shutdown();
                 {
                     std::lock_guard<std::mutex> lock(deviceMutex);
                     activeDeviceId.clear();
@@ -598,41 +678,56 @@ void audioLoop() {
 
             for (const auto& trackInfo : trackInfos) {
                 auto& state = playbackStates[trackInfo.id];
+                TrackType previousType = state.type;
+                bool typeChanged = previousType != trackInfo.type;
                 state.type = trackInfo.type;
+
                 if (trackInfo.type == TrackType::Sample) {
                     auto sampleBuffer = trackGetSampleBuffer(trackInfo.id);
-                    if (sampleBuffer != state.sampleBuffer) {
-                        state.sampleBuffer = std::move(sampleBuffer);
-                        state.sampleFrameCount = state.sampleBuffer ? state.sampleBuffer->frameCount() : 0;
-                        if (state.sampleBuffer && state.sampleBuffer->sampleRate > 0) {
-                            state.sampleIncrement = static_cast<double>(state.sampleBuffer->sampleRate) / sampleRate;
-                        } else {
-                            state.sampleIncrement = 1.0;
-                        }
-                        state.samplePlaying = false;
-                        state.samplePosition = 0.0;
+                    bool sampleBufferChanged = sampleBuffer != state.sampleBuffer;
+                    state.sampleBuffer = std::move(sampleBuffer);
+                    state.sampleFrameCount = state.sampleBuffer ? state.sampleBuffer->frameCount() : 0;
+                    if (state.sampleBuffer && state.sampleBuffer->sampleRate > 0) {
+                        state.sampleIncrement = static_cast<double>(state.sampleBuffer->sampleRate) / sampleRate;
+                    } else {
+                        state.sampleIncrement = 1.0;
                     }
-                    state.envelope = 0.0;
-                    state.synthEnvelopeStage = EnvelopeStage::Idle;
-                    state.sampleEnvelope = 0.0;
-                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
-                    state.currentMidiNote = 69;
-                    state.currentFrequency = midiNoteToFrequency(69);
-                    state.voices.clear();
+
+                    if (sampleBufferChanged || samplerResetPending || typeChanged) {
+                        resetSamplePlaybackState(state);
+                        resetSynthPlaybackState(state);
+                        state.currentMidiNote = 69;
+                        state.currentFrequency = midiNoteToFrequency(69);
+                        state.lastParameterStep = -1;
+                        state.stepVelocity = 1.0;
+                        state.stepPan = 0.0;
+                        state.stepPitchOffset = 0.0;
+                    }
                 } else {
-                    state.sampleBuffer.reset();
-                    state.sampleFrameCount = 0;
-                    state.samplePlaying = false;
-                    state.samplePosition = 0.0;
-                    state.sampleEnvelope = 0.0;
-                    state.sampleEnvelopeStage = EnvelopeStage::Idle;
+                    if (state.sampleBuffer) {
+                        state.sampleBuffer.reset();
+                        state.sampleFrameCount = 0;
+                    }
+                    if (typeChanged || samplerResetPending) {
+                        resetSamplePlaybackState(state);
+                    }
                     if (state.currentMidiNote < 0 || state.currentMidiNote > 127) {
                         state.currentMidiNote = 69;
+                    }
+                    if (typeChanged || samplerResetPending) {
+                        resetSynthPlaybackState(state);
+                        state.lastParameterStep = -1;
+                        state.stepVelocity = 1.0;
+                        state.stepPan = 0.0;
+                        state.stepPitchOffset = 0.0;
                     }
                     state.currentFrequency = midiNoteToFrequency(state.currentMidiNote);
                 }
 
                 updateMixerState(state, trackInfo, sampleRate);
+            }
+            if (samplerResetPending) {
+                samplerResetPending = false;
             }
 
             for (UINT32 i = 0; i < available; i++) {
@@ -650,10 +745,7 @@ void audioLoop() {
                         if (state.envelope < 0.0001)
                             state.envelope = 0.0;
                         state.synthEnvelopeStage = EnvelopeStage::Idle;
-                        state.sampleEnvelope = 0.0;
-                        state.sampleEnvelopeStage = EnvelopeStage::Idle;
-                        state.samplePlaying = false;
-                        state.samplePosition = 0.0;
+                        resetSamplePlaybackState(state);
                         state.voices.clear();
                         state.pitchEnvelope = 0.0;
                         state.lastParameterStep = -1;
@@ -672,8 +764,8 @@ void audioLoop() {
                             stepSampleCounter = 0.0;
                             for (auto& [_, state] : playbackStates) {
                                 state.envelope = 0.0;
-                                state.samplePlaying = false;
-                                state.samplePosition = 0.0;
+                                resetSamplePlaybackState(state);
+                                resetSynthPlaybackState(state);
                                 state.currentStep = 0;
                                 state.lastParameterStep = -1;
                                 state.stepVelocity = 1.0;
@@ -872,10 +964,14 @@ void audioLoop() {
                                 double outputAmplitude = 0.5 * (std::abs(trackLeft) + std::abs(trackRight));
                                 std::cout << "[Sampler] track=" << trackInfo.id
                                           << " frame=" << playbackFrame
+                                          << " cursor=" << state.samplePosition
+                                          << " stage=" << envelopeStageToString(state.sampleEnvelopeStage)
                                           << " env=" << state.sampleEnvelope
+                                          << " smooth=" << state.sampleEnvelopeSmoothed
                                           << " gain=" << sampleGain
                                           << " amp=" << outputAmplitude
                                           << " playing=" << (state.samplePlaying ? "true" : "false")
+                                          << " tail=" << (state.sampleTailActive ? "true" : "false")
                                           << std::endl;
                             }
 #endif
@@ -1075,19 +1171,38 @@ void audioLoop() {
             double averageAmplitude = (available > 0)
                 ? (mixSumAbs / (static_cast<double>(available) * 2.0))
                 : 0.0;
-            std::cout << "[AudioEngine] blockFrames=" << available
+            auto now = std::chrono::steady_clock::now();
+            double intervalMs = 0.0;
+            if (lastCallbackTime.time_since_epoch().count() != 0) {
+                intervalMs = std::chrono::duration<double, std::milli>(now - lastCallbackTime).count();
+            }
+            lastCallbackTime = now;
+            std::wstring driverNameCopy;
+            {
+                std::lock_guard<std::mutex> lock(deviceMutex);
+                driverNameCopy = activeDeviceName;
+            }
+            bool playingState = isPlaying.load(std::memory_order_relaxed);
+            std::cout << "[AudioEngine] driver=" << narrowFromWide(driverNameCopy)
+                      << " bufferFrames=" << available
+                      << " deviceFrames=" << bufferFrameCount
+                      << " sampleRate=" << sampleRate
+                      << " intervalMs=" << intervalMs
                       << " tracks=" << trackInfos.size()
                       << " avg=" << averageAmplitude
                       << " peak=" << mixPeak
+                      << " playing=" << (playingState ? "true" : "false")
                       << std::endl;
 #endif
-            deviceHandler.releaseBuffer(available);
+            deviceHandler->releaseBuffer(available);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    deviceHandler.stop();
-    deviceHandler.shutdown();
+    if (deviceHandler) {
+        deviceHandler->stop();
+        deviceHandler->shutdown();
+    }
     CoUninitialize();
 }
 
