@@ -2,7 +2,7 @@
 
 #include "core/audio_engine.h"
 #include "gui/gui_main.h"
-#include "gui_refresh.h"
+#include "gui/gui_refresh.h"
 
 #include <algorithm>
 #include <cmath>
