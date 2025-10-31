@@ -3,6 +3,7 @@
 #include "core/project_io.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
+#include "gui/menu_commands.h"
 #include "gui/waveform_window.h"
 #include "wdl/lice/lice.h"
 
@@ -182,9 +183,6 @@ void requestMainMenuRefresh()
 
 constexpr UINT kMenuCommandLoadProject = 1001;
 constexpr UINT kMenuCommandSaveProject = 1002;
-constexpr UINT kMenuCommandTogglePianoRoll = 1003;
-constexpr UINT kMenuCommandToggleEffects = 1004;
-constexpr UINT kMenuCommandToggleWaveform = 1005;
 
 struct PianoRollDragState
 {
