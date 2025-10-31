@@ -122,6 +122,32 @@ const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::Synth, TrackType:
 const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, SynthWaveType::Square,
                                                         SynthWaveType::Saw, SynthWaveType::Triangle};
 
+LONG computeDropdownStartTop(const RECT& anchor, int optionCount, int optionHeight, int spacing, const RECT& client)
+{
+    if (optionCount <= 0)
+        return anchor.bottom;
+
+    LONG totalHeight = static_cast<LONG>(optionCount * optionHeight + (optionCount - 1) * spacing);
+    LONG belowStart = anchor.bottom + spacing;
+    if (belowStart + totalHeight <= client.bottom)
+        return belowStart;
+
+    LONG aboveStart = anchor.top - spacing - totalHeight;
+    if (aboveStart >= client.top)
+        return aboveStart;
+
+    LONG minTop = client.top;
+    LONG maxTop = client.bottom - totalHeight;
+    if (maxTop < minTop)
+        maxTop = minTop;
+
+    if (belowStart < minTop)
+        return minTop;
+    if (belowStart > maxTop)
+        return maxTop;
+    return belowStart;
+}
+
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
 RECT saveProjectButton = {360, 115, 520, 145};
@@ -3489,8 +3515,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
         if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
         {
+            const int optionCount = static_cast<int>(kSynthWaveOptions.size());
             RECT optionRect = waveSelectButton;
-            optionRect.top = waveSelectButton.bottom + kWaveDropdownSpacing;
+            optionRect.top = computeDropdownStartTop(waveSelectButton, optionCount, kWaveDropdownOptionHeight,
+                                                     kWaveDropdownSpacing, client);
             optionRect.bottom = optionRect.top + kWaveDropdownOptionHeight;
 
             for (SynthWaveType option : kSynthWaveOptions)
@@ -3553,8 +3581,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     if (audioDeviceDropdownOpen)
     {
         refreshAudioDeviceList(false);
+        const int optionCount = 1 + static_cast<int>(gCachedAudioDevices.size());
         RECT optionRect = audioDeviceButton;
-        optionRect.top = audioDeviceButton.bottom + kAudioDeviceDropdownSpacing;
+        optionRect.top = computeDropdownStartTop(audioDeviceButton, optionCount, kAudioDeviceDropdownOptionHeight,
+                                                 kAudioDeviceDropdownSpacing, client);
         optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
 
         std::wstring requestedDeviceId = getRequestedAudioOutputDeviceId();
@@ -3667,8 +3697,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
         if (track.id == openTrackTypeTrackId)
         {
+            const int optionCount = static_cast<int>(kTrackTypeOptions.size());
             RECT optionRect = typeRect;
-            optionRect.top = typeRect.bottom + kTrackTypeDropdownSpacing;
+            optionRect.top = computeDropdownStartTop(typeRect, optionCount, kTrackTypeDropdownOptionHeight,
+                                                     kTrackTypeDropdownSpacing, client);
             optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
             for (TrackType option : kTrackTypeOptions)
             {
