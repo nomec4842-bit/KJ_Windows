@@ -172,15 +172,6 @@ void updateViewMenuChecks()
     CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
 }
 
-void requestMainMenuRefresh()
-{
-    updateViewMenuChecks();
-    if (gMainWindow && IsWindow(gMainWindow))
-    {
-        DrawMenuBar(gMainWindow);
-    }
-}
-
 constexpr UINT kMenuCommandLoadProject = 1001;
 constexpr UINT kMenuCommandSaveProject = 1002;
 
@@ -732,6 +723,15 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 }
 
 } // namespace
+
+void requestMainMenuRefresh()
+{
+    updateViewMenuChecks();
+    if (gMainWindow && IsWindow(gMainWindow))
+    {
+        DrawMenuBar(gMainWindow);
+    }
+}
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
 
