@@ -3,6 +3,7 @@
 #include "core/project_io.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
+#include "gui/gui_refresh.h"
 #include "gui/menu_commands.h"
 #include "gui/waveform_window.h"
 #include "wdl/lice/lice.h"
@@ -4355,5 +4356,10 @@ void initGUI()
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+}
+
+void requestMainMenuRefresh()
+{
+    // TODO: trigger main menu refresh or mark menu dirty
 }
 
