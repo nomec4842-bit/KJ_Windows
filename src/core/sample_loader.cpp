@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#ifdef DEBUG_AUDIO
+#include <iostream>
+#endif
+
 namespace {
 
 uint16_t readLE16(const char* data) {
@@ -164,6 +168,14 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
     outBuffer.samples = std::move(sampleData);
     outBuffer.channels = numChannels;
     outBuffer.sampleRate = static_cast<int>(sampleRate);
+
+#ifdef DEBUG_AUDIO
+    std::cout << "[SampleLoader] loaded path=" << path.u8string()
+              << " channels=" << numChannels
+              << " sampleRate=" << sampleRate
+              << " frames=" << outBuffer.frameCount()
+              << std::endl;
+#endif
 
     return true;
 }
