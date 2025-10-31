@@ -726,6 +726,7 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 
 void requestMainMenuRefresh()
 {
+    // TODO: refresh main menu or trigger redraw
     updateViewMenuChecks();
     if (gMainWindow && IsWindow(gMainWindow))
     {
