@@ -9,9 +9,9 @@
 
 namespace
 {
-constexpr float kDefaultDelayTimeMs = 350.0f;
-constexpr float kDefaultDelayFeedback = 0.35f;
-constexpr float kDefaultDelayMix = 0.4f;
+constexpr float kDefaultDelayTimeMs = 450.0f;
+constexpr float kDefaultDelayFeedback = 0.55f;
+constexpr float kDefaultDelayMix = 0.6f;
 constexpr float kMinDelayTimeMs = 10.0f;
 constexpr float kMaxDelayTimeMs = 2000.0f;
 constexpr float kMinDelayFeedback = 0.0f;
@@ -79,6 +79,9 @@ struct DelayEffect
 
         std::size_t currentDelay = std::min(delaySamples, bufferSize - 1);
 
+        const float dryAmount = 1.0f - mix;
+        const float wetAmount = mix;
+
         for (std::size_t i = 0; i < frameCount; ++i)
         {
             std::size_t readIndex = (writeIndex + bufferSize - currentDelay) % bufferSize;
@@ -94,10 +97,8 @@ struct DelayEffect
             bufferLeft[writeIndex] = inputLeft + delayedLeft * feedback;
             bufferRight[writeIndex] = inputRight + delayedRight * feedback;
 
-            float dryAmount = 1.0f - mix;
-            float wetAmount = mix;
-            left[i] = inputLeft * dryAmount + wetLeft * wetAmount;
-            right[i] = inputRight * dryAmount + wetRight * wetAmount;
+            left[i] = std::clamp(inputLeft * dryAmount + wetLeft * wetAmount, -1.0f, 1.0f);
+            right[i] = std::clamp(inputRight * dryAmount + wetRight * wetAmount, -1.0f, 1.0f);
 
             writeIndex = (writeIndex + 1) % bufferSize;
         }
@@ -153,7 +154,7 @@ void setDelayParameter(void* instance, const char* parameterId, float value)
     }
 }
 
-void processDelay(void* instance, float* left, float* right, std::size_t frameCount)
+void processAudio(void* instance, float* left, float* right, std::size_t frameCount)
 {
     if (!instance)
         return;
@@ -177,7 +178,7 @@ EffectDescriptor gDelayDescriptor {
     &createDelayInstance,
     &destroyDelayInstance,
     &setDelayParameter,
-    &processDelay,
+    &processAudio,
     &resetDelay,
 };
 
