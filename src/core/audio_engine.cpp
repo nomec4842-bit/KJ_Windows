@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 #include <unordered_map>
 #include <mutex>
@@ -64,6 +65,89 @@ std::filesystem::path findDefaultSamplePath() {
     for (const auto& candidate : candidates) {
         if (std::filesystem::exists(candidate))
             return candidate;
+    }
+
+    return {};
+}
+
+std::filesystem::path findDelayPluginPath()
+{
+    auto exeDir = getExecutableDirectory();
+    if (exeDir.empty())
+        return {};
+
+    const std::filesystem::path pluginFileName = L"kj_delay.dll";
+
+    const std::array<std::filesystem::path, 3> initialCandidates = {
+        exeDir / pluginFileName,
+        exeDir / L"plugins" / pluginFileName,
+        exeDir / L"effects" / pluginFileName
+    };
+
+    std::error_code ec;
+    for (const auto& candidate : initialCandidates)
+    {
+        if (candidate.empty())
+            continue;
+
+        ec.clear();
+        if (std::filesystem::exists(candidate, ec) && !ec)
+            return candidate;
+    }
+
+    std::vector<std::filesystem::path> searchRoots;
+    searchRoots.reserve(12);
+
+    auto addRoot = [&](const std::filesystem::path& root) {
+        if (root.empty())
+            return;
+        if (std::find(searchRoots.begin(), searchRoots.end(), root) == searchRoots.end())
+            searchRoots.push_back(root);
+    };
+
+    auto current = exeDir;
+    for (int depth = 0; depth < 6 && !current.empty(); ++depth)
+    {
+        addRoot(current);
+        addRoot(current / L"plugins");
+        addRoot(current / L"effects");
+
+        auto parent = current.parent_path();
+        if (parent == current)
+            break;
+        current = parent;
+    }
+
+    for (const auto& root : searchRoots)
+    {
+        if (root.empty())
+            continue;
+
+        auto directCandidate = root / pluginFileName;
+        ec.clear();
+        if (std::filesystem::exists(directCandidate, ec) && !ec)
+            return directCandidate;
+
+        ec.clear();
+        if (!std::filesystem::is_directory(root, ec) || ec)
+            continue;
+
+        ec.clear();
+        std::filesystem::directory_iterator dirIter(root, ec);
+        if (ec)
+            continue;
+
+        for (const auto& entry : dirIter)
+        {
+            ec.clear();
+            if (!entry.is_directory(ec) || ec)
+                continue;
+
+            auto nestedCandidate = entry.path() / pluginFileName;
+            std::error_code nestedEc;
+            if (std::filesystem::exists(nestedCandidate, nestedEc) && !nestedEc)
+                return nestedCandidate;
+        }
     }
 
     return {};
@@ -133,43 +217,30 @@ void ensureDelayEffectLoaded()
     if (gDelayEffect.descriptor)
         return;
 
-    auto exeDir = getExecutableDirectory();
-    if (exeDir.empty())
+    auto pluginPath = findDelayPluginPath();
+    if (pluginPath.empty())
         return;
 
-    const std::array<std::filesystem::path, 3> candidates = {
-        exeDir / L"kj_delay.dll",
-        exeDir / L"plugins" / L"kj_delay.dll",
-        exeDir / L"effects" / L"kj_delay.dll"
-    };
+    HMODULE module = LoadLibraryW(pluginPath.c_str());
+    if (!module)
+        return;
 
-    for (const auto& candidate : candidates)
+    auto getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, "getEffectDescriptor"));
+    if (!getDescriptor)
     {
-        if (!std::filesystem::exists(candidate))
-            continue;
-
-        HMODULE module = LoadLibraryW(candidate.c_str());
-        if (!module)
-            continue;
-
-        auto getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, "getEffectDescriptor"));
-        if (!getDescriptor)
-        {
-            FreeLibrary(module);
-            continue;
-        }
-
-        const EffectDescriptor* descriptor = getDescriptor();
-        if (!descriptor || !descriptor->createInstance || !descriptor->destroyInstance || !descriptor->process)
-        {
-            FreeLibrary(module);
-            continue;
-        }
-
-        gDelayEffect.module = module;
-        gDelayEffect.descriptor = descriptor;
-        break;
+        FreeLibrary(module);
+        return;
     }
+
+    const EffectDescriptor* descriptor = getDescriptor();
+    if (!descriptor || !descriptor->createInstance || !descriptor->destroyInstance || !descriptor->process)
+    {
+        FreeLibrary(module);
+        return;
+    }
+
+    gDelayEffect.module = module;
+    gDelayEffect.descriptor = descriptor;
 }
 
 constexpr const char* kDelayTimeParamId = "time_ms";
