@@ -784,6 +784,16 @@ struct WaveDropdownOption
 
 std::vector<WaveDropdownOption> gWaveOptions;
 
+struct TrackTypeDropdownOption
+{
+    RECT rect{};
+    int trackId = 0;
+    TrackType type = TrackType::Synth;
+    bool isSelected = false;
+};
+
+std::vector<TrackTypeDropdownOption> gTrackTypeDropdownOptions;
+
 constexpr float kMixerVolumeMin = 0.0f;
 constexpr float kMixerVolumeMax = 1.0f;
 constexpr float kMixerPanMin = -1.0f;
@@ -3437,6 +3447,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
     gAudioDeviceOptions.clear();
     gWaveOptions.clear();
+    gTrackTypeDropdownOptions.clear();
 
     drawButton(surface, playButton,
                isPlaying.load(std::memory_order_relaxed) ? RGB(0, 150, 0) : RGB(120, 0, 0),
@@ -3529,11 +3540,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
                 dropdownOption.isSelected = option == activeWaveType;
                 gWaveOptions.push_back(dropdownOption);
 
-                COLORREF optionFill = dropdownOption.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
-                COLORREF optionOutline = dropdownOption.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
-                std::string optionLabel = synthWaveTypeToString(option);
-                drawButton(surface, optionRect, optionFill, optionOutline, optionLabel.c_str());
-
                 optionRect.top = optionRect.bottom + kWaveDropdownSpacing;
                 optionRect.bottom = optionRect.top + kWaveDropdownOptionHeight;
             }
@@ -3600,14 +3606,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         defaultOption.label = std::move(defaultLabel);
         defaultOption.isSelected = requestedDeviceId.empty();
         gAudioDeviceOptions.push_back(defaultOption);
-
-        COLORREF defaultFill = defaultOption.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
-        COLORREF defaultOutline = defaultOption.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
-        std::string defaultLabelUtf8 = FromWideString(gAudioDeviceOptions.back().label);
-        if (defaultLabelUtf8.empty())
-            defaultLabelUtf8 = "System Default";
-        drawButton(surface, optionRect, defaultFill, defaultOutline, defaultLabelUtf8.c_str());
-
         optionRect.top = optionRect.bottom + kAudioDeviceDropdownSpacing;
         optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
 
@@ -3619,14 +3617,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
             option.label = device.name.empty() ? L"Audio Device" : device.name;
             option.isSelected = !requestedDeviceId.empty() && device.id == requestedDeviceId;
             gAudioDeviceOptions.push_back(option);
-
-            COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
-            COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
-            std::string optionLabelUtf8 = FromWideString(option.label);
-            if (optionLabelUtf8.empty())
-                optionLabelUtf8 = "Audio Device";
-            drawButton(surface, optionRect, optionFill, optionOutline, optionLabelUtf8.c_str());
-
             optionRect.top = optionRect.bottom + kAudioDeviceDropdownSpacing;
             optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
         }
@@ -3663,14 +3653,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     const size_t rectCount = trackTabRects.size();
     const size_t tabCount = std::min(rectCount, tracks.size());
-    struct PendingDropdownOption
-    {
-        int trackId;
-        TrackType type;
-        RECT rect;
-        bool isSelected;
-    };
-    std::vector<PendingDropdownOption> dropdownOptions;
     for (size_t i = 0; i < tabCount; ++i)
     {
         const auto& track = tracks[i];
@@ -3704,12 +3686,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
             optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
             for (TrackType option : kTrackTypeOptions)
             {
-                PendingDropdownOption pending {};
+                TrackTypeDropdownOption pending{};
                 pending.trackId = track.id;
                 pending.type = option;
                 pending.rect = optionRect;
                 pending.isSelected = (option == track.type);
-                dropdownOptions.push_back(pending);
+                gTrackTypeDropdownOptions.push_back(pending);
 
                 optionRect.top = optionRect.bottom + kTrackTypeDropdownSpacing;
                 optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
@@ -3722,7 +3704,25 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     drawSynthTrackControls(surface, client, activeTrackPtr);
     drawSampleTrackControls(surface, client, activeTrackPtr);
 
-    for (const auto& option : dropdownOptions)
+    for (const auto& option : gAudioDeviceOptions)
+    {
+        COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string optionLabelUtf8 = FromWideString(option.label);
+        if (optionLabelUtf8.empty())
+            optionLabelUtf8 = "Audio Device";
+        drawButton(surface, option.rect, optionFill, optionOutline, optionLabelUtf8.c_str());
+    }
+
+    for (const auto& option : gWaveOptions)
+    {
+        COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string optionLabel = synthWaveTypeToString(option.type);
+        drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
+    }
+
+    for (const auto& option : gTrackTypeDropdownOptions)
     {
         COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
         COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
@@ -3906,6 +3906,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
         }
 
+        if (openTrackTypeTrackId != 0)
+        {
+            for (const auto& option : gTrackTypeDropdownOptions)
+            {
+                if (option.trackId == openTrackTypeTrackId && pointInRect(option.rect, x, y))
+                {
+                    trackSetType(option.trackId, option.type);
+                    if (option.type != TrackType::Synth && waveDropdownTrackId == option.trackId)
+                    {
+                        waveDropdownOpen = false;
+                        waveDropdownTrackId = 0;
+                    }
+                    openTrackTypeTrackId = 0;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+        }
+
         if (showWaveSelector && pointInRect(waveSelectButton, x, y))
         {
             if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
@@ -4038,30 +4057,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             const auto& track = tracks[i];
             const RECT& tabRect = trackTabRects[i];
             RECT typeRect = getTrackTypeButtonRect(tabRect);
-
-            if (track.id == openTrackTypeTrackId)
-            {
-                RECT optionRect = typeRect;
-                optionRect.top = typeRect.bottom + kTrackTypeDropdownSpacing;
-                optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
-                for (TrackType option : kTrackTypeOptions)
-                {
-                    if (pointInRect(optionRect, x, y))
-                    {
-                        trackSetType(track.id, option);
-                        if (option != TrackType::Synth && waveDropdownTrackId == track.id)
-                        {
-                            waveDropdownOpen = false;
-                            waveDropdownTrackId = 0;
-                        }
-                        openTrackTypeTrackId = 0;
-                        InvalidateRect(hwnd, nullptr, FALSE);
-                        return 0;
-                    }
-                    optionRect.top = optionRect.bottom + kTrackTypeDropdownSpacing;
-                    optionRect.bottom = optionRect.top + kTrackTypeDropdownOptionHeight;
-                }
-            }
 
             if (pointInRect(typeRect, x, y))
             {
