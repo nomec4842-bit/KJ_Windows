@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(src/core)
 add_subdirectory(src/gui)
+add_subdirectory(src/core/vst)
 
 add_executable(KJ src/main.cpp)
 target_include_directories(KJ PRIVATE include)

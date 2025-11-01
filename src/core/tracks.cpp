@@ -22,6 +22,15 @@ constexpr float kMinPan = -1.0f;
 constexpr float kMaxPan = 1.0f;
 constexpr float kMinEqGainDb = -12.0f;
 constexpr float kMaxEqGainDb = 12.0f;
+constexpr float kMinDelayTimeMs = 10.0f;
+constexpr float kMaxDelayTimeMs = 2000.0f;
+constexpr float kDefaultDelayTimeMs = 350.0f;
+constexpr float kMinDelayFeedback = 0.0f;
+constexpr float kMaxDelayFeedback = 0.95f;
+constexpr float kDefaultDelayFeedback = 0.35f;
+constexpr float kMinDelayMix = 0.0f;
+constexpr float kMaxDelayMix = 1.0f;
+constexpr float kDefaultDelayMix = 0.4f;
 constexpr float kMinFormant = 0.0f;
 constexpr float kMaxFormant = 1.0f;
 constexpr float kDefaultFormant = 0.5f;
@@ -72,6 +81,10 @@ struct TrackData
         track.lowGainDb = 0.0f;
         track.midGainDb = 0.0f;
         track.highGainDb = 0.0f;
+        track.delayEnabled = false;
+        track.delayTimeMs = kDefaultDelayTimeMs;
+        track.delayFeedback = kDefaultDelayFeedback;
+        track.delayMix = kDefaultDelayMix;
         track.formant = kDefaultFormant;
         track.feedback = kDefaultFeedback;
         track.pitch = kDefaultPitch;
@@ -107,6 +120,10 @@ struct TrackData
     std::atomic<float> lowGainDb{0.0f};
     std::atomic<float> midGainDb{0.0f};
     std::atomic<float> highGainDb{0.0f};
+    std::atomic<bool> delayEnabled{false};
+    std::atomic<float> delayTimeMs{kDefaultDelayTimeMs};
+    std::atomic<float> delayFeedback{kDefaultDelayFeedback};
+    std::atomic<float> delayMix{kDefaultDelayMix};
     std::atomic<float> formant{kDefaultFormant};
     std::atomic<float> feedback{kDefaultFeedback};
     std::atomic<float> pitch{kDefaultPitch};
@@ -144,6 +161,10 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.lowGainDb = 0.0f;
     baseTrack.midGainDb = 0.0f;
     baseTrack.highGainDb = 0.0f;
+    baseTrack.delayEnabled = false;
+    baseTrack.delayTimeMs = kDefaultDelayTimeMs;
+    baseTrack.delayFeedback = kDefaultDelayFeedback;
+    baseTrack.delayMix = kDefaultDelayMix;
     baseTrack.formant = kDefaultFormant;
     baseTrack.feedback = kDefaultFeedback;
     baseTrack.pitch = kDefaultPitch;
@@ -214,6 +235,10 @@ std::vector<Track> getTracks()
         info.lowGainDb = track->lowGainDb.load(std::memory_order_relaxed);
         info.midGainDb = track->midGainDb.load(std::memory_order_relaxed);
         info.highGainDb = track->highGainDb.load(std::memory_order_relaxed);
+        info.delayEnabled = track->delayEnabled.load(std::memory_order_relaxed);
+        info.delayTimeMs = track->delayTimeMs.load(std::memory_order_relaxed);
+        info.delayFeedback = track->delayFeedback.load(std::memory_order_relaxed);
+        info.delayMix = track->delayMix.load(std::memory_order_relaxed);
         info.formant = track->formant.load(std::memory_order_relaxed);
         info.feedback = track->feedback.load(std::memory_order_relaxed);
         info.pitch = track->pitch.load(std::memory_order_relaxed);
@@ -694,6 +719,84 @@ void trackSetEqHighGain(int trackId, float gainDb)
 
     float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
     track->highGainDb.store(clamped, std::memory_order_relaxed);
+}
+
+bool trackGetDelayEnabled(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return false;
+
+    return track->delayEnabled.load(std::memory_order_relaxed);
+}
+
+void trackSetDelayEnabled(int trackId, bool enabled)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->delayEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+float trackGetDelayTimeMs(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultDelayTimeMs;
+
+    float value = track->delayTimeMs.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinDelayTimeMs, kMaxDelayTimeMs);
+}
+
+void trackSetDelayTimeMs(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinDelayTimeMs, kMaxDelayTimeMs);
+    track->delayTimeMs.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetDelayFeedback(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultDelayFeedback;
+
+    float value = track->delayFeedback.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinDelayFeedback, kMaxDelayFeedback);
+}
+
+void trackSetDelayFeedback(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinDelayFeedback, kMaxDelayFeedback);
+    track->delayFeedback.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetDelayMix(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultDelayMix;
+
+    float value = track->delayMix.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinDelayMix, kMaxDelayMix);
+}
+
+void trackSetDelayMix(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinDelayMix, kMaxDelayMix);
+    track->delayMix.store(clamped, std::memory_order_relaxed);
 }
 
 float trackGetSynthFormant(int trackId)
