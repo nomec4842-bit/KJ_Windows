@@ -228,8 +228,23 @@ void ensureDelayEffectLoaded()
     auto getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, "getEffectDescriptor"));
     if (!getDescriptor)
     {
-        FreeLibrary(module);
-        return;
+        const char* const aliases[] = {
+            "_getEffectDescriptor",
+            "_getEffectDescriptor@0"
+        };
+
+        for (const auto* alias : aliases)
+        {
+            getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, alias));
+            if (getDescriptor)
+                break;
+        }
+
+        if (!getDescriptor)
+        {
+            FreeLibrary(module);
+            return;
+        }
     }
 
     const EffectDescriptor* descriptor = getDescriptor();
