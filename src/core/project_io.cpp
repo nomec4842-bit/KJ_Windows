@@ -628,6 +628,10 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float lowGain = trackGetEqLowGain(track.id);
         float midGain = trackGetEqMidGain(track.id);
         float highGain = trackGetEqHighGain(track.id);
+        bool delayEnabled = trackGetDelayEnabled(track.id);
+        float delayTimeMs = trackGetDelayTimeMs(track.id);
+        float delayFeedback = trackGetDelayFeedback(track.id);
+        float delayMix = trackGetDelayMix(track.id);
         float formant = trackGetSynthFormant(track.id);
         float feedback = trackGetSynthFeedback(track.id);
         float pitch = trackGetSynthPitch(track.id);
@@ -651,6 +655,10 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"eqLow\": " << formatFloat(lowGain) << ",\n";
         stream << "      \"eqMid\": " << formatFloat(midGain) << ",\n";
         stream << "      \"eqHigh\": " << formatFloat(highGain) << ",\n";
+        stream << "      \"delayEnabled\": " << (delayEnabled ? "true" : "false") << ",\n";
+        stream << "      \"delayTimeMs\": " << formatFloat(delayTimeMs) << ",\n";
+        stream << "      \"delayFeedback\": " << formatFloat(delayFeedback) << ",\n";
+        stream << "      \"delayMix\": " << formatFloat(delayMix) << ",\n";
         stream << "      \"formant\": " << formatFloat(formant) << ",\n";
         stream << "      \"feedback\": " << formatFloat(feedback) << ",\n";
         stream << "      \"pitch\": " << formatFloat(pitch) << ",\n";
@@ -798,6 +806,10 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetSynthRelease(trackId, jsonToFloat(findMember(trackObject, "synthRelease"), trackGetSynthRelease(trackId)));
         trackSetSampleAttack(trackId, jsonToFloat(findMember(trackObject, "sampleAttack"), trackGetSampleAttack(trackId)));
         trackSetSampleRelease(trackId, jsonToFloat(findMember(trackObject, "sampleRelease"), trackGetSampleRelease(trackId)));
+        trackSetDelayEnabled(trackId, jsonToBool(findMember(trackObject, "delayEnabled"), trackGetDelayEnabled(trackId)));
+        trackSetDelayTimeMs(trackId, jsonToFloat(findMember(trackObject, "delayTimeMs"), trackGetDelayTimeMs(trackId)));
+        trackSetDelayFeedback(trackId, jsonToFloat(findMember(trackObject, "delayFeedback"), trackGetDelayFeedback(trackId)));
+        trackSetDelayMix(trackId, jsonToFloat(findMember(trackObject, "delayMix"), trackGetDelayMix(trackId)));
 
         int stepCount = jsonToInt(findMember(trackObject, "stepCount"), trackGetStepCount(trackId));
         trackSetStepCount(trackId, stepCount);

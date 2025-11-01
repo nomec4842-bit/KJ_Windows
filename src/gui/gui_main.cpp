@@ -68,6 +68,21 @@ std::string formatEqValue(float value)
     return stream.str();
 }
 
+std::string formatDelayTimeValue(float value)
+{
+    std::ostringstream stream;
+    int precision = value < 100.0f ? 1 : 0;
+    stream << std::fixed << std::setprecision(precision) << value << " ms";
+    return stream.str();
+}
+
+std::string formatDelayPercentValue(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(1) << (value * 100.0f) << " %";
+    return stream.str();
+}
+
 std::string formatNormalizedValue(float value)
 {
     std::ostringstream stream;
@@ -800,6 +815,12 @@ constexpr float kMixerPanMin = -1.0f;
 constexpr float kMixerPanMax = 1.0f;
 constexpr float kMixerEqMin = -12.0f;
 constexpr float kMixerEqMax = 12.0f;
+constexpr float kMixerDelayTimeMin = 10.0f;
+constexpr float kMixerDelayTimeMax = 2000.0f;
+constexpr float kMixerDelayFeedbackMin = 0.0f;
+constexpr float kMixerDelayFeedbackMax = 0.95f;
+constexpr float kMixerDelayMixMin = 0.0f;
+constexpr float kMixerDelayMixMax = 1.0f;
 constexpr float kSynthFormantMin = 0.0f;
 constexpr float kSynthFormantMax = 1.0f;
 constexpr float kSynthFeedbackMin = 0.0f;
@@ -2233,6 +2254,11 @@ enum
     kEffectsLowEqToggleId = 1012,
     kEffectsMidEqToggleId = 1013,
     kEffectsHighEqToggleId = 1014,
+    kEffectsDelayToggleId = 1015,
+    kEffectsDelayEnableId = 1016,
+    kEffectsDelayTimeSliderId = 1017,
+    kEffectsDelayFeedbackSliderId = 1018,
+    kEffectsDelayMixSliderId = 1019,
 };
 
 struct EffectsWindowState
@@ -2254,11 +2280,23 @@ struct EffectsWindowState
     HWND highEqHeader = nullptr;
     HWND highEqSlider = nullptr;
     HWND highEqValueLabel = nullptr;
+    HWND delayHeader = nullptr;
+    HWND delayEnableCheckbox = nullptr;
+    HWND delayTimeLabel = nullptr;
+    HWND delayTimeSlider = nullptr;
+    HWND delayTimeValueLabel = nullptr;
+    HWND delayFeedbackLabel = nullptr;
+    HWND delayFeedbackSlider = nullptr;
+    HWND delayFeedbackValueLabel = nullptr;
+    HWND delayMixLabel = nullptr;
+    HWND delayMixSlider = nullptr;
+    HWND delayMixValueLabel = nullptr;
     bool volumeExpanded = true;
     bool panExpanded = true;
     bool lowEqExpanded = true;
     bool midEqExpanded = true;
     bool highEqExpanded = true;
+    bool delayExpanded = true;
     int selectedTrackId = 0;
 };
 
@@ -2287,6 +2325,17 @@ void effectsWindowApplyFont(const EffectsWindowState& state, HFONT font)
         state.highEqHeader,
         state.highEqSlider,
         state.highEqValueLabel,
+        state.delayHeader,
+        state.delayEnableCheckbox,
+        state.delayTimeLabel,
+        state.delayTimeSlider,
+        state.delayTimeValueLabel,
+        state.delayFeedbackLabel,
+        state.delayFeedbackSlider,
+        state.delayFeedbackValueLabel,
+        state.delayMixLabel,
+        state.delayMixSlider,
+        state.delayMixValueLabel,
     };
 
     for (HWND control : controls)
@@ -2374,6 +2423,73 @@ void effectsWindowLayout(HWND hwnd, EffectsWindowState* state, int width, int he
     layoutSection(state->lowEqHeader, state->lowEqSlider, state->lowEqValueLabel, state->lowEqExpanded);
     layoutSection(state->midEqHeader, state->midEqSlider, state->midEqValueLabel, state->midEqExpanded);
     layoutSection(state->highEqHeader, state->highEqSlider, state->highEqValueLabel, state->highEqExpanded);
+
+    if (state->delayHeader)
+    {
+        ShowWindow(state->delayHeader, SW_SHOW);
+        MoveWindow(state->delayHeader, rightLeft, currentY, usableWidth, headerHeight, TRUE);
+        currentY += headerHeight;
+
+        auto hideDelayControl = [](HWND control)
+        {
+            if (control)
+                ShowWindow(control, SW_HIDE);
+        };
+
+        if (!state->delayExpanded)
+        {
+            hideDelayControl(state->delayEnableCheckbox);
+            hideDelayControl(state->delayTimeLabel);
+            hideDelayControl(state->delayTimeSlider);
+            hideDelayControl(state->delayTimeValueLabel);
+            hideDelayControl(state->delayFeedbackLabel);
+            hideDelayControl(state->delayFeedbackSlider);
+            hideDelayControl(state->delayFeedbackValueLabel);
+            hideDelayControl(state->delayMixLabel);
+            hideDelayControl(state->delayMixSlider);
+            hideDelayControl(state->delayMixValueLabel);
+            currentY += controlSpacing;
+        }
+        else
+        {
+            int innerY = currentY + controlSpacing;
+            if (state->delayEnableCheckbox)
+            {
+                ShowWindow(state->delayEnableCheckbox, SW_SHOW);
+                MoveWindow(state->delayEnableCheckbox, rightLeft, innerY, usableWidth, headerHeight, TRUE);
+                innerY += headerHeight + controlSpacing;
+            }
+
+            auto layoutDelaySlider = [&](HWND label, HWND slider, HWND valueLabel)
+            {
+                if (!label || !valueLabel)
+                    return;
+
+                ShowWindow(label, SW_SHOW);
+                MoveWindow(label, rightLeft, innerY, usableWidth - valueLabelWidth, headerHeight, TRUE);
+                ShowWindow(valueLabel, SW_SHOW);
+                MoveWindow(valueLabel, rightLeft + usableWidth - valueLabelWidth, innerY, valueLabelWidth, headerHeight, TRUE);
+                innerY += headerHeight + labelToSliderSpacing;
+
+                if (slider)
+                {
+                    ShowWindow(slider, SW_SHOW);
+                    MoveWindow(slider, rightLeft, innerY, usableWidth, sliderHeight, TRUE);
+                    innerY += sliderHeight + controlSpacing;
+                }
+                else
+                {
+                    innerY += controlSpacing;
+                }
+            };
+
+            layoutDelaySlider(state->delayTimeLabel, state->delayTimeSlider, state->delayTimeValueLabel);
+            layoutDelaySlider(state->delayFeedbackLabel, state->delayFeedbackSlider, state->delayFeedbackValueLabel);
+            layoutDelaySlider(state->delayMixLabel, state->delayMixSlider, state->delayMixValueLabel);
+
+            currentY = innerY;
+        }
+    }
 }
 
 void effectsWindowSetValueText(HWND control, const std::string& text)
@@ -2398,6 +2514,9 @@ void effectsWindowDisableControls(EffectsWindowState* state)
         state->lowEqSlider,
         state->midEqSlider,
         state->highEqSlider,
+        state->delayTimeSlider,
+        state->delayFeedbackSlider,
+        state->delayMixSlider,
     };
 
     for (HWND slider : sliders)
@@ -2415,6 +2534,9 @@ void effectsWindowDisableControls(EffectsWindowState* state)
         state->lowEqValueLabel,
         state->midEqValueLabel,
         state->highEqValueLabel,
+        state->delayTimeValueLabel,
+        state->delayFeedbackValueLabel,
+        state->delayMixValueLabel,
     };
 
     for (HWND label : valueLabels)
@@ -2424,12 +2546,21 @@ void effectsWindowDisableControls(EffectsWindowState* state)
             SetWindowTextW(label, L"-");
         }
     }
+
+    if (state->delayEnableCheckbox)
+    {
+        EnableWindow(state->delayEnableCheckbox, FALSE);
+        SendMessageW(state->delayEnableCheckbox, BM_SETCHECK, BST_UNCHECKED, 0);
+    }
 }
 
 void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
 {
     if (!state)
         return;
+
+    if (state->delayHeader)
+        effectsWindowUpdateSectionHeader(state->delayHeader, L"Delay", state->delayExpanded);
 
     Track fallbackTrack {};
     const Track* trackPtr = nullptr;
@@ -2448,6 +2579,10 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
             fallbackTrack.lowGainDb = trackGetEqLowGain(state->selectedTrackId);
             fallbackTrack.midGainDb = trackGetEqMidGain(state->selectedTrackId);
             fallbackTrack.highGainDb = trackGetEqHighGain(state->selectedTrackId);
+            fallbackTrack.delayEnabled = trackGetDelayEnabled(state->selectedTrackId);
+            fallbackTrack.delayTimeMs = trackGetDelayTimeMs(state->selectedTrackId);
+            fallbackTrack.delayFeedback = trackGetDelayFeedback(state->selectedTrackId);
+            fallbackTrack.delayMix = trackGetDelayMix(state->selectedTrackId);
             fallbackTrack.formant = trackGetSynthFormant(state->selectedTrackId);
             fallbackTrack.feedback = trackGetSynthFeedback(state->selectedTrackId);
             fallbackTrack.pitch = trackGetSynthPitch(state->selectedTrackId);
@@ -2501,6 +2636,63 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
         syncEq(state->lowEqSlider, state->lowEqValueLabel, trackPtr->lowGainDb);
         syncEq(state->midEqSlider, state->midEqValueLabel, trackPtr->midGainDb);
         syncEq(state->highEqSlider, state->highEqValueLabel, trackPtr->highGainDb);
+
+        if (state->delayEnableCheckbox)
+        {
+            EnableWindow(state->delayEnableCheckbox, TRUE);
+            SendMessageW(state->delayEnableCheckbox, BM_SETCHECK,
+                         trackPtr->delayEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+
+        auto syncDelaySlider = [&](HWND slider,
+                                   HWND valueLabel,
+                                   float value,
+                                   float minValue,
+                                   float maxValue,
+                                   bool enabled,
+                                   auto formatter,
+                                   auto positionConverter)
+        {
+            if (!slider)
+                return;
+            EnableWindow(slider, enabled ? TRUE : FALSE);
+            float clampedValue = std::clamp(value, minValue, maxValue);
+            int pos = positionConverter(clampedValue, minValue, maxValue);
+            SendMessageW(slider, TBM_SETPOS, TRUE, pos);
+            if (valueLabel)
+            {
+                effectsWindowSetValueText(valueLabel, formatter(clampedValue));
+            }
+        };
+
+        bool delayEnabled = trackPtr->delayEnabled;
+
+        syncDelaySlider(state->delayTimeSlider,
+                        state->delayTimeValueLabel,
+                        trackPtr->delayTimeMs,
+                        kMixerDelayTimeMin,
+                        kMixerDelayTimeMax,
+                        delayEnabled,
+                        [](float v) { return formatDelayTimeValue(v); },
+                        [](float v, float, float) { return static_cast<int>(std::lround(v)); });
+
+        syncDelaySlider(state->delayFeedbackSlider,
+                        state->delayFeedbackValueLabel,
+                        trackPtr->delayFeedback,
+                        kMixerDelayFeedbackMin,
+                        kMixerDelayFeedbackMax,
+                        delayEnabled,
+                        [](float v) { return formatDelayPercentValue(v); },
+                        [](float v, float, float) { return static_cast<int>(std::lround(v * 100.0f)); });
+
+        syncDelaySlider(state->delayMixSlider,
+                        state->delayMixValueLabel,
+                        trackPtr->delayMix,
+                        kMixerDelayMixMin,
+                        kMixerDelayMixMax,
+                        delayEnabled,
+                        [](float v) { return formatDelayPercentValue(v); },
+                        [](float v, float, float) { return static_cast<int>(std::lround(v * 100.0f)); });
     }
     else
     {
@@ -2810,6 +3002,110 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 240,
                                 20);
 
+        newState->delayHeader = CreateWindowExW(0,
+                                                L"BUTTON",
+                                                L"",
+                                                headerStyle,
+                                                0,
+                                                0,
+                                                100,
+                                                20,
+                                                hwnd,
+                                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEffectsDelayToggleId)),
+                                                instance,
+                                                nullptr);
+        effectsWindowUpdateSectionHeader(newState->delayHeader, L"Delay", newState->delayExpanded);
+
+        newState->delayEnableCheckbox = CreateWindowExW(0,
+                                                         L"BUTTON",
+                                                         L"Enable Delay",
+                                                         staticStyle | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                                         0,
+                                                         0,
+                                                         120,
+                                                         20,
+                                                         hwnd,
+                                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEffectsDelayEnableId)),
+                                                         instance,
+                                                         nullptr);
+        SendMessageW(newState->delayEnableCheckbox, BM_SETCHECK, BST_UNCHECKED, 0);
+
+        auto createDelaySlider = [&](const wchar_t* labelText,
+                                     INT_PTR sliderId,
+                                     HWND& labelOut,
+                                     HWND& sliderOut,
+                                     HWND& valueOut,
+                                     int rangeMin,
+                                     int rangeMax,
+                                     int ticFreq)
+        {
+            labelOut = CreateWindowExW(0,
+                                        L"STATIC",
+                                        labelText,
+                                        staticStyle,
+                                        0,
+                                        0,
+                                        100,
+                                        20,
+                                        hwnd,
+                                        nullptr,
+                                        instance,
+                                        nullptr);
+            valueOut = CreateWindowExW(0,
+                                        L"STATIC",
+                                        L"-",
+                                        staticStyle | SS_RIGHT,
+                                        0,
+                                        0,
+                                        80,
+                                        20,
+                                        hwnd,
+                                        nullptr,
+                                        instance,
+                                        nullptr);
+            sliderOut = CreateWindowExW(0,
+                                         TRACKBAR_CLASSW,
+                                         L"",
+                                         WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                         0,
+                                         0,
+                                         100,
+                                         30,
+                                         hwnd,
+                                         reinterpret_cast<HMENU>(sliderId),
+                                         instance,
+                                         nullptr);
+            SendMessageW(sliderOut, TBM_SETRANGE, TRUE, MAKELPARAM(rangeMin, rangeMax));
+            SendMessageW(sliderOut, TBM_SETTICFREQ, ticFreq, 0);
+        };
+
+        createDelaySlider(L"Time",
+                          kEffectsDelayTimeSliderId,
+                          newState->delayTimeLabel,
+                          newState->delayTimeSlider,
+                          newState->delayTimeValueLabel,
+                          static_cast<int>(kMixerDelayTimeMin),
+                          static_cast<int>(kMixerDelayTimeMax),
+                          100);
+
+        createDelaySlider(L"Feedback",
+                          kEffectsDelayFeedbackSliderId,
+                          newState->delayFeedbackLabel,
+                          newState->delayFeedbackSlider,
+                          newState->delayFeedbackValueLabel,
+                          0,
+                          100,
+                          10);
+
+        createDelaySlider(L"Mix",
+                          kEffectsDelayMixSliderId,
+                          newState->delayMixLabel,
+                          newState->delayMixSlider,
+                          newState->delayMixValueLabel,
+                          0,
+                          100,
+                          10);
+
         HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         effectsWindowApplyFont(*newState, font);
 
@@ -2860,6 +3156,22 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         if (handleToggle(kEffectsHighEqToggleId, state->highEqHeader, L"High EQ", state->highEqExpanded, state->highEqSlider))
             return 0;
+        if (handleToggle(kEffectsDelayToggleId, state->delayHeader, L"Delay", state->delayExpanded, nullptr))
+            return 0;
+
+        if (LOWORD(wParam) == kEffectsDelayEnableId && HIWORD(wParam) == BN_CLICKED && state->delayEnableCheckbox)
+        {
+            int trackId = state->selectedTrackId;
+            if (trackId > 0)
+            {
+                bool enabled = SendMessageW(state->delayEnableCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                trackSetDelayEnabled(trackId, enabled);
+                effectsWindowSyncControls(hwnd, state);
+                if (gMainWindow && IsWindow(gMainWindow))
+                    InvalidateRect(gMainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
 
         if (LOWORD(wParam) == kEffectsTrackListId && HIWORD(wParam) == LBN_SELCHANGE && state->trackList)
         {
@@ -2943,6 +3255,39 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         if (handleEqSlider(state->highEqSlider, trackSetEqHighGain))
             return 0;
+
+        if (control == state->delayTimeSlider)
+        {
+            int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+            float newTime = std::clamp(static_cast<float>(pos), kMixerDelayTimeMin, kMixerDelayTimeMax);
+            trackSetDelayTimeMs(trackId, newTime);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return 0;
+        }
+
+        if (control == state->delayFeedbackSlider)
+        {
+            int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+            float newFeedback = std::clamp(static_cast<float>(pos) / 100.0f, kMixerDelayFeedbackMin, kMixerDelayFeedbackMax);
+            trackSetDelayFeedback(trackId, newFeedback);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return 0;
+        }
+
+        if (control == state->delayMixSlider)
+        {
+            int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+            float newMix = std::clamp(static_cast<float>(pos) / 100.0f, kMixerDelayMixMin, kMixerDelayMixMax);
+            trackSetDelayMix(trackId, newMix);
+            effectsWindowSyncControls(hwnd, state);
+            if (gMainWindow && IsWindow(gMainWindow))
+                InvalidateRect(gMainWindow, nullptr, FALSE);
+            return 0;
+        }
 
         return 0;
     }
