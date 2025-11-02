@@ -2272,6 +2272,7 @@ enum class EffectListItemType
 {
     Eq,
     Delay,
+    Sidechain,
 };
 
 struct EffectListEntry
@@ -2552,6 +2553,9 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
                     break;
                 case EffectListItemType::Delay:
                     checked = trackPtr->delayEnabled;
+                    break;
+                case EffectListItemType::Sidechain:
+                    checked = trackPtr->sidechainEnabled;
                     break;
                 }
                 ListView_SetCheckState(state->effectList, static_cast<int>(i), checked ? TRUE : FALSE);
@@ -3712,6 +3716,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             newState->effectEntries = {
                 {EffectListItemType::Eq, L"Equalizer"},
                 {EffectListItemType::Delay, L"Delay"},
+                {EffectListItemType::Sidechain, L"Sidechain"},
             };
 
             LVITEMW item {0};
@@ -3726,7 +3731,18 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 int index = ListView_InsertItem(newState->effectList, &item);
                 if (index >= 0)
                 {
-                    ListView_SetItemText(newState->effectList, index, 1, const_cast<LPWSTR>(L"Open"));
+                    const wchar_t* containerText = L"";
+                    switch (entry.type)
+                    {
+                    case EffectListItemType::Eq:
+                    case EffectListItemType::Delay:
+                        containerText = L"Open";
+                        break;
+                    case EffectListItemType::Sidechain:
+                        containerText = L"";
+                        break;
+                    }
+                    ListView_SetItemText(newState->effectList, index, 1, const_cast<LPWSTR>(containerText));
                 }
             }
         }
@@ -3872,6 +3888,9 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             trackSetDelayEnabled(trackId, checked);
                             notifyDelayWindowValuesChanged(trackId);
                             break;
+                        case EffectListItemType::Sidechain:
+                            trackSetSidechainEnabled(trackId, checked);
+                            break;
                         }
                         effectsWindowSyncControls(hwnd, state);
                         if (gMainWindow && IsWindow(gMainWindow))
@@ -3897,6 +3916,8 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             break;
                         case EffectListItemType::Delay:
                             openDelayWindow(hwnd, trackId);
+                            break;
+                        case EffectListItemType::Sidechain:
                             break;
                         }
                     }
