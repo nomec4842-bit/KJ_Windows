@@ -37,6 +37,11 @@ struct Track
     float delayTimeMs = 350.0f;
     float delayFeedback = 0.35f;
     float delayMix = 0.4f;
+    bool sidechainEnabled = false;
+    int sidechainSourceTrackId = -1;
+    float sidechainAmount = 1.0f;
+    float sidechainAttack = 0.01f;
+    float sidechainRelease = 0.3f;
     float formant = 0.5f;
     float feedback = 0.0f;
     float pitch = 0.0f;
@@ -97,6 +102,21 @@ void trackSetDelayFeedback(int trackId, float value);
 
 float trackGetDelayMix(int trackId);
 void trackSetDelayMix(int trackId, float value);
+
+bool trackGetSidechainEnabled(int trackId);
+void trackSetSidechainEnabled(int trackId, bool enabled);
+
+int trackGetSidechainSourceTrack(int trackId);
+void trackSetSidechainSourceTrack(int trackId, int sourceTrackId);
+
+float trackGetSidechainAmount(int trackId);
+void trackSetSidechainAmount(int trackId, float value);
+
+float trackGetSidechainAttack(int trackId);
+void trackSetSidechainAttack(int trackId, float value);
+
+float trackGetSidechainRelease(int trackId);
+void trackSetSidechainRelease(int trackId, float value);
 
 float trackGetSynthFormant(int trackId);
 void trackSetSynthFormant(int trackId, float value);

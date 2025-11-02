@@ -31,6 +31,12 @@ constexpr float kDefaultDelayFeedback = 0.35f;
 constexpr float kMinDelayMix = 0.0f;
 constexpr float kMaxDelayMix = 1.0f;
 constexpr float kDefaultDelayMix = 0.4f;
+constexpr float kMinSidechainAmount = 0.0f;
+constexpr float kMaxSidechainAmount = 1.0f;
+constexpr float kDefaultSidechainAmount = 1.0f;
+constexpr float kDefaultSidechainAttack = 0.01f;
+constexpr float kDefaultSidechainRelease = 0.3f;
+constexpr int kDefaultSidechainSourceTrack = -1;
 constexpr float kMinFormant = 0.0f;
 constexpr float kMaxFormant = 1.0f;
 constexpr float kDefaultFormant = 0.5f;
@@ -86,6 +92,11 @@ struct TrackData
         track.delayTimeMs = kDefaultDelayTimeMs;
         track.delayFeedback = kDefaultDelayFeedback;
         track.delayMix = kDefaultDelayMix;
+        track.sidechainEnabled = false;
+        track.sidechainSourceTrackId = kDefaultSidechainSourceTrack;
+        track.sidechainAmount = kDefaultSidechainAmount;
+        track.sidechainAttack = kDefaultSidechainAttack;
+        track.sidechainRelease = kDefaultSidechainRelease;
         track.formant = kDefaultFormant;
         track.feedback = kDefaultFeedback;
         track.pitch = kDefaultPitch;
@@ -126,6 +137,11 @@ struct TrackData
     std::atomic<float> delayTimeMs{kDefaultDelayTimeMs};
     std::atomic<float> delayFeedback{kDefaultDelayFeedback};
     std::atomic<float> delayMix{kDefaultDelayMix};
+    std::atomic<bool> sidechainEnabled{false};
+    std::atomic<int> sidechainSourceTrackId{kDefaultSidechainSourceTrack};
+    std::atomic<float> sidechainAmount{kDefaultSidechainAmount};
+    std::atomic<float> sidechainAttack{kDefaultSidechainAttack};
+    std::atomic<float> sidechainRelease{kDefaultSidechainRelease};
     std::atomic<float> formant{kDefaultFormant};
     std::atomic<float> feedback{kDefaultFeedback};
     std::atomic<float> pitch{kDefaultPitch};
@@ -168,6 +184,11 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.delayTimeMs = kDefaultDelayTimeMs;
     baseTrack.delayFeedback = kDefaultDelayFeedback;
     baseTrack.delayMix = kDefaultDelayMix;
+    baseTrack.sidechainEnabled = false;
+    baseTrack.sidechainSourceTrackId = kDefaultSidechainSourceTrack;
+    baseTrack.sidechainAmount = kDefaultSidechainAmount;
+    baseTrack.sidechainAttack = kDefaultSidechainAttack;
+    baseTrack.sidechainRelease = kDefaultSidechainRelease;
     baseTrack.formant = kDefaultFormant;
     baseTrack.feedback = kDefaultFeedback;
     baseTrack.pitch = kDefaultPitch;
@@ -243,6 +264,11 @@ std::vector<Track> getTracks()
         info.delayTimeMs = track->delayTimeMs.load(std::memory_order_relaxed);
         info.delayFeedback = track->delayFeedback.load(std::memory_order_relaxed);
         info.delayMix = track->delayMix.load(std::memory_order_relaxed);
+        info.sidechainEnabled = track->sidechainEnabled.load(std::memory_order_relaxed);
+        info.sidechainSourceTrackId = track->sidechainSourceTrackId.load(std::memory_order_relaxed);
+        info.sidechainAmount = track->sidechainAmount.load(std::memory_order_relaxed);
+        info.sidechainAttack = track->sidechainAttack.load(std::memory_order_relaxed);
+        info.sidechainRelease = track->sidechainRelease.load(std::memory_order_relaxed);
         info.formant = track->formant.load(std::memory_order_relaxed);
         info.feedback = track->feedback.load(std::memory_order_relaxed);
         info.pitch = track->pitch.load(std::memory_order_relaxed);
@@ -819,6 +845,102 @@ void trackSetDelayMix(int trackId, float value)
 
     float clamped = std::clamp(value, kMinDelayMix, kMaxDelayMix);
     track->delayMix.store(clamped, std::memory_order_relaxed);
+}
+
+bool trackGetSidechainEnabled(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return false;
+
+    return track->sidechainEnabled.load(std::memory_order_relaxed);
+}
+
+void trackSetSidechainEnabled(int trackId, bool enabled)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->sidechainEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+int trackGetSidechainSourceTrack(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSidechainSourceTrack;
+
+    return track->sidechainSourceTrackId.load(std::memory_order_relaxed);
+}
+
+void trackSetSidechainSourceTrack(int trackId, int sourceTrackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->sidechainSourceTrackId.store(sourceTrackId, std::memory_order_relaxed);
+}
+
+float trackGetSidechainAmount(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSidechainAmount;
+
+    float value = track->sidechainAmount.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSidechainAmount, kMaxSidechainAmount);
+}
+
+void trackSetSidechainAmount(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSidechainAmount, kMaxSidechainAmount);
+    track->sidechainAmount.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSidechainAttack(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSidechainAttack;
+
+    float value = track->sidechainAttack.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+}
+
+void trackSetSidechainAttack(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    track->sidechainAttack.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSidechainRelease(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultSidechainRelease;
+
+    float value = track->sidechainRelease.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+}
+
+void trackSetSidechainRelease(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    track->sidechainRelease.store(clamped, std::memory_order_relaxed);
 }
 
 float trackGetSynthFormant(int trackId)

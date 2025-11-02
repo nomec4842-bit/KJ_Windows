@@ -25,6 +25,7 @@
 #include "core/sequencer.h"
 #include "core/audio_device_handler.h"
 #include "core/effects/delay_effect.h"
+#include "core/effects/sidechain_processor.h"
 
 std::atomic<bool> isPlaying = false;
 static bool running = true;
@@ -395,6 +396,7 @@ struct TrackPlaybackState {
     std::unique_ptr<DelayEffect> delayEffect;
     double delaySampleRate = 0.0;
     bool delayParametersDirty = false;
+    SidechainProcessor sidechain;
     struct SynthVoice {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
@@ -474,6 +476,11 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newDelayTime = std::clamp(static_cast<double>(track.delayTimeMs), kDelayTimeMinMs, kDelayTimeMaxMs);
     double newDelayFeedback = std::clamp(static_cast<double>(track.delayFeedback), kDelayFeedbackMin, kDelayFeedbackMax);
     double newDelayMix = std::clamp(static_cast<double>(track.delayMix), kDelayMixMin, kDelayMixMax);
+    bool newSidechainEnabled = track.sidechainEnabled;
+    int newSidechainSourceTrackId = track.sidechainSourceTrackId;
+    double newSidechainAmount = std::clamp(static_cast<double>(track.sidechainAmount), 0.0, 1.0);
+    double newSidechainAttack = std::clamp(static_cast<double>(track.sidechainAttack), 0.0, 4.0);
+    double newSidechainRelease = std::clamp(static_cast<double>(track.sidechainRelease), 0.0, 4.0);
     bool newEqEnabled = track.eqEnabled;
     bool requestedDelayEnabled = track.delayEnabled;
 
@@ -601,6 +608,12 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
             }
         }
     }
+
+    state.sidechain.setEnabled(newSidechainEnabled);
+    state.sidechain.setSourceTrackId(newSidechainSourceTrackId);
+    state.sidechain.setAmount(newSidechainAmount);
+    state.sidechain.setAttack(newSidechainAttack);
+    state.sidechain.setRelease(newSidechainRelease);
 }
 
 } // namespace
@@ -867,6 +880,7 @@ void audioLoop() {
                         state.stepVelocity = 1.0;
                         state.stepPan = 0.0;
                         state.stepPitchOffset = 0.0;
+                        state.sidechain.reset();
                     }
                 } else {
                     if (!previousPlaying) {
@@ -886,6 +900,7 @@ void audioLoop() {
                                 state.stepVelocity = 1.0;
                                 state.stepPan = 0.0;
                                 state.stepPitchOffset = 0.0;
+                                state.sidechain.reset();
                             }
                         }
 
@@ -1263,14 +1278,47 @@ void audioLoop() {
                             processedRight = delayRight;
                         }
 
+                        double sidechainGain = 1.0;
+                        if (state.sidechain.enabled())
+                        {
+                            double sourceLevel = 0.0;
+                            int sourceTrackId = state.sidechain.sourceTrackId();
+                            if (sourceTrackId == trackInfo.id)
+                            {
+                                sourceLevel = state.sidechain.detectorLevel();
+                            }
+                            else
+                            {
+                                auto sourceIt = playbackStates.find(sourceTrackId);
+                                if (sourceIt != playbackStates.end())
+                                {
+                                    sourceLevel = sourceIt->second.sidechain.detectorLevel();
+                                }
+                            }
+                            sidechainGain = state.sidechain.computeGain(sourceLevel, sampleRate);
+                        }
+                        else
+                        {
+                            state.sidechain.resetEnvelope();
+                        }
+
+                        processedLeft *= sidechainGain;
+                        processedRight *= sidechainGain;
+
                         double combinedPan = std::clamp(state.pan + state.stepPan, -1.0, 1.0);
                         double panAmount = std::clamp((combinedPan + 1.0) * 0.5, 0.0, 1.0);
                         double leftPanGain = std::cos(panAmount * (kPi * 0.5));
                         double rightPanGain = std::sin(panAmount * (kPi * 0.5));
                         double volumeGain = state.volume * state.stepVelocity;
 
-                        leftValue += processedLeft * volumeGain * leftPanGain;
-                        rightValue += processedRight * volumeGain * rightPanGain;
+                        double finalLeft = processedLeft * volumeGain * leftPanGain;
+                        double finalRight = processedRight * volumeGain * rightPanGain;
+
+                        leftValue += finalLeft;
+                        rightValue += finalRight;
+
+                        double detectionLevel = std::max(std::abs(finalLeft), std::abs(finalRight));
+                        state.sidechain.setDetectorLevel(detectionLevel);
                     }
 
                     if (activeTrackHasSteps) {
