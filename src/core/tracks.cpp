@@ -81,6 +81,7 @@ struct TrackData
         track.lowGainDb = 0.0f;
         track.midGainDb = 0.0f;
         track.highGainDb = 0.0f;
+        track.eqEnabled = true;
         track.delayEnabled = false;
         track.delayTimeMs = kDefaultDelayTimeMs;
         track.delayFeedback = kDefaultDelayFeedback;
@@ -120,6 +121,7 @@ struct TrackData
     std::atomic<float> lowGainDb{0.0f};
     std::atomic<float> midGainDb{0.0f};
     std::atomic<float> highGainDb{0.0f};
+    std::atomic<bool> eqEnabled{true};
     std::atomic<bool> delayEnabled{false};
     std::atomic<float> delayTimeMs{kDefaultDelayTimeMs};
     std::atomic<float> delayFeedback{kDefaultDelayFeedback};
@@ -161,6 +163,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.lowGainDb = 0.0f;
     baseTrack.midGainDb = 0.0f;
     baseTrack.highGainDb = 0.0f;
+    baseTrack.eqEnabled = true;
     baseTrack.delayEnabled = false;
     baseTrack.delayTimeMs = kDefaultDelayTimeMs;
     baseTrack.delayFeedback = kDefaultDelayFeedback;
@@ -235,6 +238,7 @@ std::vector<Track> getTracks()
         info.lowGainDb = track->lowGainDb.load(std::memory_order_relaxed);
         info.midGainDb = track->midGainDb.load(std::memory_order_relaxed);
         info.highGainDb = track->highGainDb.load(std::memory_order_relaxed);
+        info.eqEnabled = track->eqEnabled.load(std::memory_order_relaxed);
         info.delayEnabled = track->delayEnabled.load(std::memory_order_relaxed);
         info.delayTimeMs = track->delayTimeMs.load(std::memory_order_relaxed);
         info.delayFeedback = track->delayFeedback.load(std::memory_order_relaxed);
@@ -691,6 +695,15 @@ float trackGetEqHighGain(int trackId)
     return std::clamp(gain, kMinEqGainDb, kMaxEqGainDb);
 }
 
+bool trackGetEqEnabled(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return true;
+
+    return track->eqEnabled.load(std::memory_order_relaxed);
+}
+
 void trackSetEqLowGain(int trackId, float gainDb)
 {
     auto track = findTrackData(trackId);
@@ -719,6 +732,15 @@ void trackSetEqHighGain(int trackId, float gainDb)
 
     float clamped = std::clamp(gainDb, kMinEqGainDb, kMaxEqGainDb);
     track->highGainDb.store(clamped, std::memory_order_relaxed);
+}
+
+void trackSetEqEnabled(int trackId, bool enabled)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->eqEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 bool trackGetDelayEnabled(int trackId)

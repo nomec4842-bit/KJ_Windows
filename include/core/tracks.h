@@ -32,6 +32,7 @@ struct Track
     float lowGainDb = 0.0f;
     float midGainDb = 0.0f;
     float highGainDb = 0.0f;
+    bool eqEnabled = true;
     bool delayEnabled = false;
     float delayTimeMs = 350.0f;
     float delayFeedback = 0.35f;
@@ -78,9 +79,12 @@ float trackGetEqLowGain(int trackId);
 float trackGetEqMidGain(int trackId);
 float trackGetEqHighGain(int trackId);
 
+bool trackGetEqEnabled(int trackId);
+
 void trackSetEqLowGain(int trackId, float gainDb);
 void trackSetEqMidGain(int trackId, float gainDb);
 void trackSetEqHighGain(int trackId, float gainDb);
+void trackSetEqEnabled(int trackId, bool enabled);
 
 bool trackGetDelayEnabled(int trackId);
 void trackSetDelayEnabled(int trackId, bool enabled);

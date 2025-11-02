@@ -387,6 +387,7 @@ struct TrackPlaybackState {
     double sampleLastLeft = 0.0;
     double sampleLastRight = 0.0;
     bool sampleTailActive = false;
+    bool eqEnabled = true;
     bool delayEnabled = false;
     double delayTimeMs = 350.0;
     double delayFeedback = 0.35;
@@ -473,6 +474,7 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newDelayTime = std::clamp(static_cast<double>(track.delayTimeMs), kDelayTimeMinMs, kDelayTimeMaxMs);
     double newDelayFeedback = std::clamp(static_cast<double>(track.delayFeedback), kDelayFeedbackMin, kDelayFeedbackMax);
     double newDelayMix = std::clamp(static_cast<double>(track.delayMix), kDelayMixMin, kDelayMixMax);
+    bool newEqEnabled = track.eqEnabled;
     bool requestedDelayEnabled = track.delayEnabled;
 
     bool sampleRateChanged = std::abs(state.lastSampleRate - sr) > 1e-6;
@@ -520,12 +522,23 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
         state.pitchEnvelopeStep = computePitchEnvelopeStep(sr, newPitchRange);
     }
 
+    bool eqEnabledChanged = state.eqEnabled != newEqEnabled;
+
     if (sampleRateChanged || lowChanged || midChanged || highChanged)
     {
         resetFilterState(state.lowShelf);
         resetFilterState(state.midPeak);
         resetFilterState(state.highShelf);
     }
+
+    if (eqEnabledChanged)
+    {
+        resetFilterState(state.lowShelf);
+        resetFilterState(state.midPeak);
+        resetFilterState(state.highShelf);
+    }
+
+    state.eqEnabled = newEqEnabled;
 
     state.volume = newVolume;
     state.pan = newPan;
@@ -1228,13 +1241,18 @@ void audioLoop() {
                             }
                         }
 
-                        double processedLeft = processBiquadSample(state.lowShelf, trackLeft, false);
-                        processedLeft = processBiquadSample(state.midPeak, processedLeft, false);
-                        processedLeft = processBiquadSample(state.highShelf, processedLeft, false);
+                        double processedLeft = trackLeft;
+                        double processedRight = trackRight;
+                        if (state.eqEnabled)
+                        {
+                            processedLeft = processBiquadSample(state.lowShelf, processedLeft, false);
+                            processedLeft = processBiquadSample(state.midPeak, processedLeft, false);
+                            processedLeft = processBiquadSample(state.highShelf, processedLeft, false);
 
-                        double processedRight = processBiquadSample(state.lowShelf, trackRight, true);
-                        processedRight = processBiquadSample(state.midPeak, processedRight, true);
-                        processedRight = processBiquadSample(state.highShelf, processedRight, true);
+                            processedRight = processBiquadSample(state.lowShelf, processedRight, true);
+                            processedRight = processBiquadSample(state.midPeak, processedRight, true);
+                            processedRight = processBiquadSample(state.highShelf, processedRight, true);
+                        }
 
                         if (state.delayEnabled && state.delayEffect)
                         {
