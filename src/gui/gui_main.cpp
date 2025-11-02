@@ -196,6 +196,8 @@ int gPianoRollSelectedMenuTab = 0;
 bool gPianoRollMenuCollapsed = false;
 HWND gEffectsWindow = nullptr;
 bool gEffectsWindowClassRegistered = false;
+HWND gSidechainWindow = nullptr;
+bool gSidechainWindowClassRegistered = false;
 HWND gEqWindow = nullptr;
 bool gEqWindowClassRegistered = false;
 HWND gDelayWindow = nullptr;
@@ -205,10 +207,14 @@ HMENU gViewMenu = nullptr;
 void notifyEffectsWindowTrackListChanged();
 void notifyEffectsWindowActiveTrackChanged(int trackId);
 void notifyEffectsWindowTrackValuesChanged(int trackId);
+void notifySidechainWindowTrackChanged(int trackId);
+void notifySidechainWindowValuesChanged(int trackId);
+void notifySidechainWindowTrackListChanged();
 void notifyEqWindowTrackChanged(int trackId);
 void notifyEqWindowValuesChanged(int trackId);
 void notifyDelayWindowTrackChanged(int trackId);
 void notifyDelayWindowValuesChanged(int trackId);
+void openSidechainWindow(HWND parent, int trackId);
 void openEqWindow(HWND parent, int trackId);
 void openDelayWindow(HWND parent, int trackId);
 
@@ -292,6 +298,9 @@ const std::array<const wchar_t*, kPianoRollMenuTabCount> kPianoRollMenuTabLabels
 constexpr wchar_t kEffectsWindowClassName[] = L"KJEffectsWindow";
 constexpr int kEffectsWindowWidth = 520;
 constexpr int kEffectsWindowHeight = 360;
+constexpr wchar_t kSidechainWindowClassName[] = L"KJSidechainWindow";
+constexpr int kSidechainWindowWidth = 420;
+constexpr int kSidechainWindowHeight = 320;
 
 constexpr UINT WM_EFFECTS_REFRESH_VALUES = WM_APP + 1;
 constexpr UINT WM_EFFECTS_RELOAD_TRACKS = WM_APP + 2;
@@ -300,6 +309,9 @@ constexpr UINT WM_EQ_REFRESH_VALUES = WM_APP + 10;
 constexpr UINT WM_EQ_SET_TRACK = WM_APP + 11;
 constexpr UINT WM_DELAY_REFRESH_VALUES = WM_APP + 20;
 constexpr UINT WM_DELAY_SET_TRACK = WM_APP + 21;
+constexpr UINT WM_SIDECHAIN_REFRESH_VALUES = WM_APP + 30;
+constexpr UINT WM_SIDECHAIN_SET_TRACK = WM_APP + 31;
+constexpr UINT WM_SIDECHAIN_RELOAD_TRACKS = WM_APP + 32;
 
 struct PianoRollLayout
 {
@@ -2631,6 +2643,620 @@ void effectsWindowEnsureSelectionVisible(HWND hwnd, EffectsWindowState* state)
     }
 }
 
+struct SidechainWindowState
+{
+    int trackId = 0;
+    HWND trackLabel = nullptr;
+    HWND enableCheckbox = nullptr;
+    HWND inputLabel = nullptr;
+    HWND inputCombo = nullptr;
+    HWND amountSlider = nullptr;
+    HWND amountValueLabel = nullptr;
+    HWND attackSlider = nullptr;
+    HWND attackValueLabel = nullptr;
+    HWND releaseSlider = nullptr;
+    HWND releaseValueLabel = nullptr;
+    bool populatingSource = false;
+};
+
+SidechainWindowState* getSidechainWindowState(HWND hwnd)
+{
+    return reinterpret_cast<SidechainWindowState*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+}
+
+void sidechainWindowApplyFont(const SidechainWindowState& state, HFONT font)
+{
+    const HWND controls[] = {
+        state.trackLabel,
+        state.enableCheckbox,
+        state.inputLabel,
+        state.inputCombo,
+        state.amountSlider,
+        state.amountValueLabel,
+        state.attackSlider,
+        state.attackValueLabel,
+        state.releaseSlider,
+        state.releaseValueLabel,
+    };
+
+    for (HWND control : controls)
+    {
+        if (control)
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
+}
+
+void sidechainWindowDisableControls(SidechainWindowState* state)
+{
+    if (!state)
+        return;
+
+    if (state->inputCombo)
+        EnableWindow(state->inputCombo, FALSE);
+
+    const HWND sliders[] = {
+        state->amountSlider,
+        state->attackSlider,
+        state->releaseSlider,
+    };
+
+    for (HWND slider : sliders)
+    {
+        if (slider)
+        {
+            EnableWindow(slider, FALSE);
+            SendMessageW(slider, TBM_SETPOS, TRUE, 0);
+        }
+    }
+
+    const HWND labels[] = {
+        state->amountValueLabel,
+        state->attackValueLabel,
+        state->releaseValueLabel,
+    };
+
+    for (HWND label : labels)
+    {
+        if (label)
+            SetWindowTextW(label, L"-");
+    }
+}
+
+void sidechainWindowPopulateSourceList(SidechainWindowState* state, int currentSourceTrackId)
+{
+    if (!state || !state->inputCombo)
+        return;
+
+    state->populatingSource = true;
+    SendMessageW(state->inputCombo, CB_RESETCONTENT, 0, 0);
+
+    std::wstring noneText = L"None";
+    int noneIndex = static_cast<int>(SendMessageW(state->inputCombo,
+                                                  CB_ADDSTRING,
+                                                  0,
+                                                  reinterpret_cast<LPARAM>(noneText.c_str())));
+    if (noneIndex >= 0)
+        SendMessageW(state->inputCombo, CB_SETITEMDATA, noneIndex, static_cast<LPARAM>(-1));
+
+    int selectIndex = (currentSourceTrackId <= 0) ? noneIndex : -1;
+
+    auto tracks = getTracks();
+    for (const auto& track : tracks)
+    {
+        std::wstring name = ToWideString(track.name);
+        if (name.empty())
+            name = L"Track " + std::to_wstring(track.id);
+
+        int index = static_cast<int>(SendMessageW(state->inputCombo,
+                                                  CB_ADDSTRING,
+                                                  0,
+                                                  reinterpret_cast<LPARAM>(name.c_str())));
+        if (index >= 0)
+        {
+            SendMessageW(state->inputCombo, CB_SETITEMDATA, index, static_cast<LPARAM>(track.id));
+            if (track.id == currentSourceTrackId)
+                selectIndex = index;
+        }
+    }
+
+    if (selectIndex >= 0)
+        SendMessageW(state->inputCombo, CB_SETCURSEL, selectIndex, 0);
+    else if (noneIndex >= 0)
+        SendMessageW(state->inputCombo, CB_SETCURSEL, noneIndex, 0);
+    else
+        SendMessageW(state->inputCombo, CB_SETCURSEL, 0, 0);
+
+    state->populatingSource = false;
+}
+
+void sidechainWindowSyncControls(HWND hwnd, SidechainWindowState* state)
+{
+    if (!state)
+        return;
+
+    int trackId = state->trackId;
+    if (trackId <= 0)
+    {
+        if (state->trackLabel)
+            SetWindowTextW(state->trackLabel, L"No track selected");
+        if (state->enableCheckbox)
+        {
+            EnableWindow(state->enableCheckbox, FALSE);
+            SendMessageW(state->enableCheckbox, BM_SETCHECK, BST_UNCHECKED, 0);
+        }
+        sidechainWindowPopulateSourceList(state, -1);
+        sidechainWindowDisableControls(state);
+        if (hwnd && IsWindow(hwnd))
+            InvalidateRect(hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Track fallbackTrack {};
+    const Track* trackPtr = nullptr;
+    auto tracks = getTracks();
+    trackPtr = findTrackById(tracks, trackId);
+    if (!trackPtr)
+    {
+        fallbackTrack.id = trackId;
+        fallbackTrack.name = "Track " + std::to_string(trackId);
+        fallbackTrack.sidechainEnabled = trackGetSidechainEnabled(trackId);
+        fallbackTrack.sidechainSourceTrackId = trackGetSidechainSourceTrack(trackId);
+        fallbackTrack.sidechainAmount = trackGetSidechainAmount(trackId);
+        fallbackTrack.sidechainAttack = trackGetSidechainAttack(trackId);
+        fallbackTrack.sidechainRelease = trackGetSidechainRelease(trackId);
+        trackPtr = &fallbackTrack;
+    }
+
+    std::wstring labelText = ToWideString(trackPtr->name);
+    if (labelText.empty())
+        labelText = L"Unnamed Track";
+    labelText += L" - Sidechain";
+    if (state->trackLabel)
+        SetWindowTextW(state->trackLabel, labelText.c_str());
+
+    if (state->enableCheckbox)
+    {
+        EnableWindow(state->enableCheckbox, TRUE);
+        SendMessageW(state->enableCheckbox,
+                     BM_SETCHECK,
+                     trackPtr->sidechainEnabled ? BST_CHECKED : BST_UNCHECKED,
+                     0);
+    }
+
+    sidechainWindowPopulateSourceList(state, trackPtr->sidechainSourceTrackId);
+    if (state->inputCombo)
+        EnableWindow(state->inputCombo, TRUE);
+
+    auto setSlider = [&](HWND slider,
+                         HWND valueLabel,
+                         float value,
+                         float minValue,
+                         float maxValue,
+                         float scale,
+                         auto formatter)
+    {
+        if (!slider)
+            return;
+        float clamped = std::clamp(value, minValue, maxValue);
+        EnableWindow(slider, trackPtr->sidechainEnabled ? TRUE : FALSE);
+        int pos = static_cast<int>(std::lround(clamped * scale));
+        SendMessageW(slider, TBM_SETPOS, TRUE, pos);
+        if (valueLabel)
+            effectsWindowSetValueText(valueLabel, formatter(clamped));
+    };
+
+    setSlider(state->amountSlider,
+              state->amountValueLabel,
+              trackPtr->sidechainAmount,
+              0.0f,
+              1.0f,
+              100.0f,
+              [](float v) { return formatDelayPercentValue(v); });
+
+    setSlider(state->attackSlider,
+              state->attackValueLabel,
+              trackPtr->sidechainAttack,
+              0.0f,
+              4.0f,
+              1000.0f,
+              [](float v) { return formatSecondsValue(v); });
+
+    setSlider(state->releaseSlider,
+              state->releaseValueLabel,
+              trackPtr->sidechainRelease,
+              0.0f,
+              4.0f,
+              1000.0f,
+              [](float v) { return formatSecondsValue(v); });
+
+    if (hwnd && IsWindow(hwnd))
+        InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void sidechainWindowLayout(HWND hwnd, SidechainWindowState* state, int width, int height)
+{
+    if (!state)
+        return;
+
+    const int padding = 12;
+    const int headerHeight = 24;
+    const int sliderHeight = 32;
+    const int controlSpacing = 12;
+    const int valueLabelWidth = 110;
+    const int inputLabelWidth = 100;
+
+    int currentY = padding;
+
+    if (state->trackLabel)
+    {
+        MoveWindow(state->trackLabel, padding, currentY, width - padding * 2, headerHeight, TRUE);
+        currentY += headerHeight + controlSpacing;
+    }
+
+    if (state->enableCheckbox)
+    {
+        MoveWindow(state->enableCheckbox, padding, currentY, width - padding * 2, headerHeight, TRUE);
+        currentY += headerHeight + controlSpacing;
+    }
+
+    if (state->inputLabel && state->inputCombo)
+    {
+        int comboWidth = std::max(100, width - padding * 2 - inputLabelWidth - controlSpacing);
+        MoveWindow(state->inputLabel, padding, currentY, inputLabelWidth, headerHeight, TRUE);
+        MoveWindow(state->inputCombo,
+                   padding + inputLabelWidth + controlSpacing,
+                   currentY,
+                   comboWidth,
+                   headerHeight * 6,
+                   TRUE);
+        currentY += headerHeight + controlSpacing;
+    }
+
+    auto layoutSlider = [&](HWND slider, HWND valueLabel)
+    {
+        if (!slider)
+            return;
+        int sliderWidth = std::max(100, width - padding * 3 - valueLabelWidth);
+        MoveWindow(slider, padding, currentY, sliderWidth, sliderHeight, TRUE);
+        if (valueLabel)
+        {
+            MoveWindow(valueLabel,
+                       padding + sliderWidth + padding,
+                       currentY,
+                       valueLabelWidth,
+                       sliderHeight,
+                       TRUE);
+        }
+        currentY += sliderHeight + controlSpacing;
+    };
+
+    layoutSlider(state->amountSlider, state->amountValueLabel);
+    layoutSlider(state->attackSlider, state->attackValueLabel);
+    layoutSlider(state->releaseSlider, state->releaseValueLabel);
+}
+
+LRESULT CALLBACK SidechainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    SidechainWindowState* state = getSidechainWindowState(hwnd);
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        auto* newState = new SidechainWindowState();
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(newState));
+
+        HINSTANCE instance = GetModuleHandle(nullptr);
+        DWORD staticStyle = WS_CHILD | WS_VISIBLE;
+
+        newState->trackLabel = CreateWindowExW(0,
+                                               L"STATIC",
+                                               L"",
+                                               staticStyle,
+                                               0,
+                                               0,
+                                               100,
+                                               20,
+                                               hwnd,
+                                               nullptr,
+                                               instance,
+                                               nullptr);
+
+        newState->enableCheckbox = CreateWindowExW(0,
+                                                   L"BUTTON",
+                                                   L"Enable sidechain",
+                                                   staticStyle | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                                   0,
+                                                   0,
+                                                   100,
+                                                   20,
+                                                   hwnd,
+                                                   nullptr,
+                                                   instance,
+                                                   nullptr);
+
+        newState->inputLabel = CreateWindowExW(0,
+                                               L"STATIC",
+                                               L"Input Track:",
+                                               staticStyle,
+                                               0,
+                                               0,
+                                               100,
+                                               20,
+                                               hwnd,
+                                               nullptr,
+                                               instance,
+                                               nullptr);
+
+        newState->inputCombo = CreateWindowExW(0,
+                                               L"COMBOBOX",
+                                               L"",
+                                               WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                               0,
+                                               0,
+                                               120,
+                                               120,
+                                               hwnd,
+                                               nullptr,
+                                               instance,
+                                               nullptr);
+
+        auto createSlider = [&](HWND& slider, HWND& valueLabel, int rangeMin, int rangeMax, int ticFreq)
+        {
+            slider = CreateWindowExW(0,
+                                     TRACKBAR_CLASSW,
+                                     L"",
+                                     WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                                     0,
+                                     0,
+                                     100,
+                                     30,
+                                     hwnd,
+                                     nullptr,
+                                     instance,
+                                     nullptr);
+            if (slider)
+            {
+                SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(rangeMin, rangeMax));
+                SendMessageW(slider, TBM_SETTICFREQ, ticFreq, 0);
+            }
+            valueLabel = CreateWindowExW(0,
+                                         L"STATIC",
+                                         L"-",
+                                         staticStyle | SS_RIGHT,
+                                         0,
+                                         0,
+                                         80,
+                                         20,
+                                         hwnd,
+                                         nullptr,
+                                         instance,
+                                         nullptr);
+        };
+
+        createSlider(newState->amountSlider, newState->amountValueLabel, 0, 100, 10);
+        createSlider(newState->attackSlider, newState->attackValueLabel, 0, 4000, 250);
+        createSlider(newState->releaseSlider, newState->releaseValueLabel, 0, 4000, 250);
+
+        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        sidechainWindowApplyFont(*newState, font);
+
+        RECT client {0, 0, 0, 0};
+        GetClientRect(hwnd, &client);
+        sidechainWindowLayout(hwnd, newState, client.right - client.left, client.bottom - client.top);
+        sidechainWindowPopulateSourceList(newState, -1);
+        sidechainWindowSyncControls(hwnd, newState);
+        return 0;
+    }
+    case WM_SIZE:
+        if (state)
+            sidechainWindowLayout(hwnd, state, LOWORD(lParam), HIWORD(lParam));
+        return 0;
+    case WM_COMMAND:
+        if (state)
+        {
+            HWND control = reinterpret_cast<HWND>(lParam);
+            if (control == state->enableCheckbox && HIWORD(wParam) == BN_CLICKED)
+            {
+                int trackId = state->trackId;
+                if (trackId > 0)
+                {
+                    bool enabled = SendMessageW(state->enableCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    trackSetSidechainEnabled(trackId, enabled);
+                    sidechainWindowSyncControls(hwnd, state);
+                    notifyEffectsWindowTrackValuesChanged(trackId);
+                    if (gMainWindow && IsWindow(gMainWindow))
+                        InvalidateRect(gMainWindow, nullptr, FALSE);
+                }
+                return 0;
+            }
+
+            if (control == state->inputCombo && HIWORD(wParam) == CBN_SELCHANGE)
+            {
+                if (state->populatingSource)
+                    return 0;
+
+                int trackId = state->trackId;
+                if (trackId > 0)
+                {
+                    int selection = static_cast<int>(SendMessageW(state->inputCombo, CB_GETCURSEL, 0, 0));
+                    if (selection >= 0)
+                    {
+                        LRESULT data = SendMessageW(state->inputCombo, CB_GETITEMDATA, selection, 0);
+                        int sourceTrackId = static_cast<int>(data);
+                        trackSetSidechainSourceTrack(trackId, sourceTrackId);
+                        notifyEffectsWindowTrackValuesChanged(trackId);
+                        if (gMainWindow && IsWindow(gMainWindow))
+                            InvalidateRect(gMainWindow, nullptr, FALSE);
+                    }
+                }
+                return 0;
+            }
+        }
+        break;
+    case WM_HSCROLL:
+        if (state)
+        {
+            int trackId = state->trackId;
+            if (trackId <= 0)
+                return 0;
+
+            HWND control = reinterpret_cast<HWND>(lParam);
+            if (!control)
+                control = GetFocus();
+
+            if (control == state->amountSlider)
+            {
+                int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+                float value = std::clamp(static_cast<float>(pos) / 100.0f, 0.0f, 1.0f);
+                trackSetSidechainAmount(trackId, value);
+                sidechainWindowSyncControls(hwnd, state);
+                notifyEffectsWindowTrackValuesChanged(trackId);
+                if (gMainWindow && IsWindow(gMainWindow))
+                    InvalidateRect(gMainWindow, nullptr, FALSE);
+                return 0;
+            }
+
+            if (control == state->attackSlider)
+            {
+                int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+                float value = std::clamp(static_cast<float>(pos) / 1000.0f, 0.0f, 4.0f);
+                trackSetSidechainAttack(trackId, value);
+                sidechainWindowSyncControls(hwnd, state);
+                notifyEffectsWindowTrackValuesChanged(trackId);
+                if (gMainWindow && IsWindow(gMainWindow))
+                    InvalidateRect(gMainWindow, nullptr, FALSE);
+                return 0;
+            }
+
+            if (control == state->releaseSlider)
+            {
+                int pos = static_cast<int>(SendMessageW(control, TBM_GETPOS, 0, 0));
+                float value = std::clamp(static_cast<float>(pos) / 1000.0f, 0.0f, 4.0f);
+                trackSetSidechainRelease(trackId, value);
+                sidechainWindowSyncControls(hwnd, state);
+                notifyEffectsWindowTrackValuesChanged(trackId);
+                if (gMainWindow && IsWindow(gMainWindow))
+                    InvalidateRect(gMainWindow, nullptr, FALSE);
+                return 0;
+            }
+        }
+        return 0;
+    case WM_SIDECHAIN_SET_TRACK:
+        if (state)
+        {
+            state->trackId = static_cast<int>(wParam);
+            sidechainWindowSyncControls(hwnd, state);
+        }
+        return 0;
+    case WM_SIDECHAIN_REFRESH_VALUES:
+        if (state)
+            sidechainWindowSyncControls(hwnd, state);
+        return 0;
+    case WM_SIDECHAIN_RELOAD_TRACKS:
+        if (state)
+            sidechainWindowSyncControls(hwnd, state);
+        return 0;
+    case WM_DESTROY:
+    {
+        auto* toDelete = state;
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+        delete toDelete;
+        if (hwnd == gSidechainWindow)
+        {
+            gSidechainWindow = nullptr;
+            requestMainMenuRefresh();
+        }
+        return 0;
+    }
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void ensureSidechainWindowClass()
+{
+    if (gSidechainWindowClassRegistered)
+        return;
+
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = SidechainWndProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kSidechainWindowClassName;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (RegisterClassW(&wc))
+        gSidechainWindowClassRegistered = true;
+}
+
+void openSidechainWindow(HWND parent, int trackId)
+{
+    ensureSidechainWindowClass();
+    if (!gSidechainWindowClassRegistered)
+        return;
+
+    if (gSidechainWindow && IsWindow(gSidechainWindow))
+    {
+        ShowWindow(gSidechainWindow, SW_SHOWNORMAL);
+        SetForegroundWindow(gSidechainWindow);
+        PostMessageW(gSidechainWindow, WM_SIDECHAIN_SET_TRACK, static_cast<WPARAM>(trackId), 0);
+        return;
+    }
+
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    if (parent && IsWindow(parent))
+    {
+        RECT rect {0, 0, 0, 0};
+        GetWindowRect(parent, &rect);
+        x = rect.right + 20;
+        y = rect.top + 20;
+    }
+
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW,
+                                kSidechainWindowClassName,
+                                L"Track Sidechain",
+                                WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME,
+                                x,
+                                y,
+                                kSidechainWindowWidth,
+                                kSidechainWindowHeight,
+                                parent,
+                                nullptr,
+                                GetModuleHandle(nullptr),
+                                nullptr);
+    if (hwnd)
+    {
+        gSidechainWindow = hwnd;
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        UpdateWindow(hwnd);
+        PostMessageW(hwnd, WM_SIDECHAIN_SET_TRACK, static_cast<WPARAM>(trackId), 0);
+        requestMainMenuRefresh();
+    }
+}
+
+void notifySidechainWindowTrackChanged(int trackId)
+{
+    if (gSidechainWindow && IsWindow(gSidechainWindow))
+        PostMessageW(gSidechainWindow, WM_SIDECHAIN_SET_TRACK, static_cast<WPARAM>(trackId), 0);
+}
+
+void notifySidechainWindowValuesChanged(int trackId)
+{
+    if (gSidechainWindow && IsWindow(gSidechainWindow))
+    {
+        SidechainWindowState* state = getSidechainWindowState(gSidechainWindow);
+        if (!state || state->trackId == trackId)
+            PostMessageW(gSidechainWindow, WM_SIDECHAIN_REFRESH_VALUES, 0, 0);
+    }
+}
+
+void notifySidechainWindowTrackListChanged()
+{
+    if (gSidechainWindow && IsWindow(gSidechainWindow))
+        PostMessageW(gSidechainWindow, WM_SIDECHAIN_RELOAD_TRACKS, 0, 0);
+}
+
 struct EqWindowState
 {
     int trackId = 0;
@@ -3552,6 +4178,7 @@ void notifyEffectsWindowTrackValuesChanged(int trackId)
     {
         PostMessageW(gEffectsWindow, WM_EFFECTS_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
     }
+    notifySidechainWindowValuesChanged(trackId);
     notifyEqWindowValuesChanged(trackId);
     notifyDelayWindowValuesChanged(trackId);
 }
@@ -3563,6 +4190,8 @@ void notifyEffectsWindowTrackListChanged()
         PostMessageW(gEffectsWindow, WM_EFFECTS_RELOAD_TRACKS, 0, 0);
     }
     int activeTrack = getActiveSequencerTrackId();
+    notifySidechainWindowTrackListChanged();
+    notifySidechainWindowTrackChanged(activeTrack);
     notifyEqWindowTrackChanged(activeTrack);
     notifyDelayWindowTrackChanged(activeTrack);
 }
@@ -3573,6 +4202,7 @@ void notifyEffectsWindowActiveTrackChanged(int trackId)
     {
         PostMessageW(gEffectsWindow, WM_EFFECTS_SELECT_TRACK, static_cast<WPARAM>(trackId), 0);
     }
+    notifySidechainWindowTrackChanged(trackId);
     notifyEqWindowTrackChanged(trackId);
     notifyDelayWindowTrackChanged(trackId);
 }
@@ -3736,10 +4366,8 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     {
                     case EffectListItemType::Eq:
                     case EffectListItemType::Delay:
-                        containerText = L"Open";
-                        break;
                     case EffectListItemType::Sidechain:
-                        containerText = L"";
+                        containerText = L"Open";
                         break;
                     }
                     ListView_SetItemText(newState->effectList, index, 1, const_cast<LPWSTR>(containerText));
@@ -3890,6 +4518,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             break;
                         case EffectListItemType::Sidechain:
                             trackSetSidechainEnabled(trackId, checked);
+                            notifySidechainWindowValuesChanged(trackId);
                             break;
                         }
                         effectsWindowSyncControls(hwnd, state);
@@ -3918,6 +4547,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             openDelayWindow(hwnd, trackId);
                             break;
                         case EffectListItemType::Sidechain:
+                            openSidechainWindow(hwnd, trackId);
                             break;
                         }
                     }
@@ -5328,6 +5958,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             DestroyWindow(gEqWindow);
         if (gDelayWindow && IsWindow(gDelayWindow))
             DestroyWindow(gDelayWindow);
+        if (gSidechainWindow && IsWindow(gSidechainWindow))
+            DestroyWindow(gSidechainWindow);
         PostQuitMessage(0);
         return 0;
     }
