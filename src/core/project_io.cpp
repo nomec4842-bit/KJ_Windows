@@ -628,6 +628,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float lowGain = trackGetEqLowGain(track.id);
         float midGain = trackGetEqMidGain(track.id);
         float highGain = trackGetEqHighGain(track.id);
+        bool eqEnabled = trackGetEqEnabled(track.id);
         bool delayEnabled = trackGetDelayEnabled(track.id);
         float delayTimeMs = trackGetDelayTimeMs(track.id);
         float delayFeedback = trackGetDelayFeedback(track.id);
@@ -655,6 +656,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"eqLow\": " << formatFloat(lowGain) << ",\n";
         stream << "      \"eqMid\": " << formatFloat(midGain) << ",\n";
         stream << "      \"eqHigh\": " << formatFloat(highGain) << ",\n";
+        stream << "      \"eqEnabled\": " << (eqEnabled ? "true" : "false") << ",\n";
         stream << "      \"delayEnabled\": " << (delayEnabled ? "true" : "false") << ",\n";
         stream << "      \"delayTimeMs\": " << formatFloat(delayTimeMs) << ",\n";
         stream << "      \"delayFeedback\": " << formatFloat(delayFeedback) << ",\n";
@@ -796,6 +798,7 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetEqLowGain(trackId, jsonToFloat(findMember(trackObject, "eqLow"), trackGetEqLowGain(trackId)));
         trackSetEqMidGain(trackId, jsonToFloat(findMember(trackObject, "eqMid"), trackGetEqMidGain(trackId)));
         trackSetEqHighGain(trackId, jsonToFloat(findMember(trackObject, "eqHigh"), trackGetEqHighGain(trackId)));
+        trackSetEqEnabled(trackId, jsonToBool(findMember(trackObject, "eqEnabled"), trackGetEqEnabled(trackId)));
         trackSetSynthFormant(trackId, jsonToFloat(findMember(trackObject, "formant"), trackGetSynthFormant(trackId)));
         trackSetSynthFeedback(trackId, jsonToFloat(findMember(trackObject, "feedback"), trackGetSynthFeedback(trackId)));
         trackSetSynthPitch(trackId, jsonToFloat(findMember(trackObject, "pitch"), trackGetSynthPitch(trackId)));
