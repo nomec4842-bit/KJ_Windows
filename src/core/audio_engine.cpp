@@ -24,7 +24,7 @@
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
 #include "core/audio_device_handler.h"
-#include "core/effects/effect_plugin.h"
+#include "core/effects/delay_effect.h"
 
 std::atomic<bool> isPlaying = false;
 static bool running = true;
@@ -70,89 +70,6 @@ std::filesystem::path findDefaultSamplePath() {
     return {};
 }
 
-std::filesystem::path findDelayPluginPath()
-{
-    auto exeDir = getExecutableDirectory();
-    if (exeDir.empty())
-        return {};
-
-    const std::filesystem::path pluginFileName = L"kj_delay.dll";
-
-    const std::array<std::filesystem::path, 3> initialCandidates = {
-        exeDir / pluginFileName,
-        exeDir / L"plugins" / pluginFileName,
-        exeDir / L"effects" / pluginFileName
-    };
-
-    std::error_code ec;
-    for (const auto& candidate : initialCandidates)
-    {
-        if (candidate.empty())
-            continue;
-
-        ec.clear();
-        if (std::filesystem::exists(candidate, ec) && !ec)
-            return candidate;
-    }
-
-    std::vector<std::filesystem::path> searchRoots;
-    searchRoots.reserve(12);
-
-    auto addRoot = [&](const std::filesystem::path& root) {
-        if (root.empty())
-            return;
-        if (std::find(searchRoots.begin(), searchRoots.end(), root) == searchRoots.end())
-            searchRoots.push_back(root);
-    };
-
-    auto current = exeDir;
-    for (int depth = 0; depth < 6 && !current.empty(); ++depth)
-    {
-        addRoot(current);
-        addRoot(current / L"plugins");
-        addRoot(current / L"effects");
-
-        auto parent = current.parent_path();
-        if (parent == current)
-            break;
-        current = parent;
-    }
-
-    for (const auto& root : searchRoots)
-    {
-        if (root.empty())
-            continue;
-
-        auto directCandidate = root / pluginFileName;
-        ec.clear();
-        if (std::filesystem::exists(directCandidate, ec) && !ec)
-            return directCandidate;
-
-        ec.clear();
-        if (!std::filesystem::is_directory(root, ec) || ec)
-            continue;
-
-        ec.clear();
-        std::filesystem::directory_iterator dirIter(root, ec);
-        if (ec)
-            continue;
-
-        for (const auto& entry : dirIter)
-        {
-            ec.clear();
-            if (!entry.is_directory(ec) || ec)
-                continue;
-
-            auto nestedCandidate = entry.path() / pluginFileName;
-            std::error_code nestedEc;
-            if (std::filesystem::exists(nestedCandidate, nestedEc) && !nestedEc)
-                return nestedCandidate;
-        }
-    }
-
-    return {};
-}
-
 #ifdef DEBUG_AUDIO
 std::string narrowFromWide(const std::wstring& value)
 {
@@ -187,80 +104,12 @@ constexpr double kMidPeakFrequency = 1000.0;
 constexpr double kHighShelfFrequency = 5000.0;
 constexpr double kMidPeakQ = 1.0;
 constexpr double kSampleEnvelopeSmoothingSeconds = 0.003;
-constexpr double kDelayTimeMinMs = 10.0;
-constexpr double kDelayTimeMaxMs = 2000.0;
-constexpr double kDelayFeedbackMin = 0.0;
-constexpr double kDelayFeedbackMax = 0.95;
-constexpr double kDelayMixMin = 0.0;
-constexpr double kDelayMixMax = 1.0;
-
-struct LoadedDelayEffect
-{
-    HMODULE module = nullptr;
-    const EffectDescriptor* descriptor = nullptr;
-};
-
-LoadedDelayEffect gDelayEffect;
-
-void unloadDelayEffect()
-{
-    if (gDelayEffect.module)
-    {
-        FreeLibrary(gDelayEffect.module);
-        gDelayEffect.module = nullptr;
-        gDelayEffect.descriptor = nullptr;
-    }
-}
-
-void ensureDelayEffectLoaded()
-{
-    if (gDelayEffect.descriptor)
-        return;
-
-    auto pluginPath = findDelayPluginPath();
-    if (pluginPath.empty())
-        return;
-
-    HMODULE module = LoadLibraryW(pluginPath.c_str());
-    if (!module)
-        return;
-
-    auto getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, "getEffectDescriptor"));
-    if (!getDescriptor)
-    {
-        const char* const aliases[] = {
-            "_getEffectDescriptor",
-            "_getEffectDescriptor@0"
-        };
-
-        for (const auto* alias : aliases)
-        {
-            getDescriptor = reinterpret_cast<GetEffectDescriptorFn>(GetProcAddress(module, alias));
-            if (getDescriptor)
-                break;
-        }
-
-        if (!getDescriptor)
-        {
-            FreeLibrary(module);
-            return;
-        }
-    }
-
-    const EffectDescriptor* descriptor = getDescriptor();
-    if (!descriptor || !descriptor->createInstance || !descriptor->destroyInstance || !descriptor->process)
-    {
-        FreeLibrary(module);
-        return;
-    }
-
-    gDelayEffect.module = module;
-    gDelayEffect.descriptor = descriptor;
-}
-
-constexpr const char* kDelayTimeParamId = "time_ms";
-constexpr const char* kDelayFeedbackParamId = "feedback";
-constexpr const char* kDelayMixParamId = "mix";
+constexpr double kDelayTimeMinMs = DelayEffect::kMinDelayTimeMs;
+constexpr double kDelayTimeMaxMs = DelayEffect::kMaxDelayTimeMs;
+constexpr double kDelayFeedbackMin = DelayEffect::kMinFeedback;
+constexpr double kDelayFeedbackMax = DelayEffect::kMaxFeedback;
+constexpr double kDelayMixMin = DelayEffect::kMinMix;
+constexpr double kDelayMixMax = DelayEffect::kMaxMix;
 
 void resetFilterState(BiquadFilter& filter)
 {
@@ -542,7 +391,7 @@ struct TrackPlaybackState {
     double delayTimeMs = 350.0;
     double delayFeedback = 0.35;
     double delayMix = 0.4;
-    void* delayInstance = nullptr;
+    std::unique_ptr<DelayEffect> delayEffect;
     double delaySampleRate = 0.0;
     bool delayParametersDirty = false;
     struct SynthVoice {
@@ -554,13 +403,9 @@ struct TrackPlaybackState {
     std::vector<SynthVoice> voices;
 };
 
-void destroyDelayInstance(TrackPlaybackState& state)
+void releaseDelayEffect(TrackPlaybackState& state)
 {
-    if (state.delayInstance && gDelayEffect.descriptor && gDelayEffect.descriptor->destroyInstance)
-    {
-        gDelayEffect.descriptor->destroyInstance(state.delayInstance);
-    }
-    state.delayInstance = nullptr;
+    state.delayEffect.reset();
     state.delaySampleRate = 0.0;
     state.delayParametersDirty = false;
 }
@@ -586,20 +431,22 @@ void resetSynthPlaybackState(TrackPlaybackState& state)
     state.voices.clear();
 }
 
-void ensureDelayInstance(TrackPlaybackState& state, double sampleRate)
+void ensureDelayEffect(TrackPlaybackState& state, double sampleRate)
 {
-    if (!gDelayEffect.descriptor || !gDelayEffect.descriptor->createInstance)
-        return;
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
 
-    if (state.delayInstance && std::abs(state.delaySampleRate - sampleRate) > 1e-6)
+    if (!state.delayEffect)
     {
-        destroyDelayInstance(state);
+        state.delayEffect = std::make_unique<DelayEffect>(sr);
+        state.delaySampleRate = sr;
+        state.delayParametersDirty = true;
+        return;
     }
 
-    if (!state.delayInstance)
+    if (std::abs(state.delaySampleRate - sr) > 1e-6)
     {
-        state.delayInstance = gDelayEffect.descriptor->createInstance(sampleRate);
-        state.delaySampleRate = sampleRate;
+        state.delayEffect->setSampleRate(sr);
+        state.delaySampleRate = sr;
         state.delayParametersDirty = true;
     }
 }
@@ -709,8 +556,7 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     if (delayMixChanged)
         state.delayMix = newDelayMix;
 
-    bool delayAvailable = gDelayEffect.descriptor != nullptr;
-    bool newDelayEnabled = requestedDelayEnabled && delayAvailable;
+    bool newDelayEnabled = requestedDelayEnabled;
     bool delayEnabledChanged = newDelayEnabled != state.delayEnabled;
 
     if (delayTimeChanged || delayFeedbackChanged || delayMixChanged)
@@ -720,30 +566,25 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
 
     if (!newDelayEnabled)
     {
-        if (state.delayInstance)
-        {
-            if (gDelayEffect.descriptor && gDelayEffect.descriptor->reset)
-                gDelayEffect.descriptor->reset(state.delayInstance);
-            destroyDelayInstance(state);
-        }
+        releaseDelayEffect(state);
         state.delayEnabled = false;
     }
     else
     {
-        ensureDelayInstance(state, sr);
-        state.delayEnabled = true;
-        if (state.delayInstance && gDelayEffect.descriptor)
+        ensureDelayEffect(state, sr);
+        state.delayEnabled = (state.delayEffect != nullptr);
+        if (state.delayEffect)
         {
-            if (state.delayParametersDirty && gDelayEffect.descriptor->setParameter)
+            if (state.delayParametersDirty)
             {
-                gDelayEffect.descriptor->setParameter(state.delayInstance, kDelayTimeParamId, static_cast<float>(state.delayTimeMs));
-                gDelayEffect.descriptor->setParameter(state.delayInstance, kDelayFeedbackParamId, static_cast<float>(state.delayFeedback));
-                gDelayEffect.descriptor->setParameter(state.delayInstance, kDelayMixParamId, static_cast<float>(state.delayMix));
+                state.delayEffect->setDelayTime(static_cast<float>(state.delayTimeMs));
+                state.delayEffect->setFeedback(static_cast<float>(state.delayFeedback));
+                state.delayEffect->setMix(static_cast<float>(state.delayMix));
                 state.delayParametersDirty = false;
             }
-            if (delayEnabledChanged && gDelayEffect.descriptor->reset)
+            if (delayEnabledChanged)
             {
-                gDelayEffect.descriptor->reset(state.delayInstance);
+                state.delayEffect->reset();
             }
         }
     }
@@ -753,7 +594,6 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
 
 void audioLoop() {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    ensureDelayEffectLoaded();
 
     std::unique_ptr<AudioDeviceHandler> deviceHandler;
     UINT32 bufferFrameCount = 0;
@@ -821,7 +661,7 @@ void audioLoop() {
             for (auto& [_, state] : playbackStates) {
                 resetSynthPlaybackState(state);
                 resetSamplePlaybackState(state);
-                destroyDelayInstance(state);
+                releaseDelayEffect(state);
             }
             playbackStates.clear();
             samplerResetPending = true;
@@ -927,7 +767,7 @@ void audioLoop() {
                     return track.id == trackId;
                 });
                 if (!exists) {
-                    destroyDelayInstance(it->second);
+                    releaseDelayEffect(it->second);
                     it = playbackStates.erase(it);
                 } else {
                     ++it;
@@ -1396,11 +1236,11 @@ void audioLoop() {
                         processedRight = processBiquadSample(state.midPeak, processedRight, true);
                         processedRight = processBiquadSample(state.highShelf, processedRight, true);
 
-                        if (state.delayEnabled && state.delayInstance && gDelayEffect.descriptor && gDelayEffect.descriptor->process)
+                        if (state.delayEnabled && state.delayEffect)
                         {
                             float delayLeft = static_cast<float>(processedLeft);
                             float delayRight = static_cast<float>(processedRight);
-                            gDelayEffect.descriptor->process(state.delayInstance, &delayLeft, &delayRight, 1);
+                            state.delayEffect->process(&delayLeft, &delayRight, 1);
                             processedLeft = delayLeft;
                             processedRight = delayRight;
                         }
@@ -1495,9 +1335,8 @@ void audioLoop() {
         deviceHandler->shutdown();
     }
     for (auto& [_, state] : playbackStates) {
-        destroyDelayInstance(state);
+        releaseDelayEffect(state);
     }
-    unloadDelayEffect();
     CoUninitialize();
 }
 
