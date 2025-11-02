@@ -1,3 +1,6 @@
+#define UNICODE
+#define _UNICODE
+
 #include "gui/gui_main.h"
 #include "core/audio_engine.h"
 #include "core/project_io.h"
@@ -3699,12 +3702,12 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             column.fmt = LVCFMT_LEFT;
             column.cx = 200;
             column.pszText = const_cast<LPWSTR>(L"Effect");
-            ListView_InsertColumn(newState->effectList, 0, &column);
+            ListView_InsertColumnW(newState->effectList, 0, &column);
 
             column.fmt = LVCFMT_CENTER;
             column.cx = 100;
             column.pszText = const_cast<LPWSTR>(L"Container");
-            ListView_InsertColumn(newState->effectList, 1, &column);
+            ListView_InsertColumnW(newState->effectList, 1, &column);
 
             newState->effectEntries = {
                 {EffectListItemType::Eq, L"Equalizer"},
@@ -3720,10 +3723,10 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 item.iSubItem = 0;
                 item.pszText = const_cast<LPWSTR>(entry.name.c_str());
                 item.lParam = static_cast<LPARAM>(static_cast<int>(entry.type));
-                int index = ListView_InsertItem(newState->effectList, &item);
+                int index = ListView_InsertItemW(newState->effectList, &item);
                 if (index >= 0)
                 {
-                    ListView_SetItemText(newState->effectList, index, 1, const_cast<LPWSTR>(L"Open"));
+                    ListView_SetItemTextW(newState->effectList, index, 1, const_cast<LPWSTR>(L"Open"));
                 }
             }
         }
