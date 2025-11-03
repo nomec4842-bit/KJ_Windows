@@ -37,6 +37,11 @@ struct Track
     float delayTimeMs = 350.0f;
     float delayFeedback = 0.35f;
     float delayMix = 0.4f;
+    bool compressorEnabled = false;
+    float compressorThresholdDb = -12.0f;
+    float compressorRatio = 4.0f;
+    float compressorAttack = 0.01f;
+    float compressorRelease = 0.2f;
     bool sidechainEnabled = false;
     int sidechainSourceTrackId = -1;
     float sidechainAmount = 1.0f;
@@ -102,6 +107,21 @@ void trackSetDelayFeedback(int trackId, float value);
 
 float trackGetDelayMix(int trackId);
 void trackSetDelayMix(int trackId, float value);
+
+bool trackGetCompressorEnabled(int trackId);
+void trackSetCompressorEnabled(int trackId, bool enabled);
+
+float trackGetCompressorThresholdDb(int trackId);
+void trackSetCompressorThresholdDb(int trackId, float value);
+
+float trackGetCompressorRatio(int trackId);
+void trackSetCompressorRatio(int trackId, float value);
+
+float trackGetCompressorAttack(int trackId);
+void trackSetCompressorAttack(int trackId, float value);
+
+float trackGetCompressorRelease(int trackId);
+void trackSetCompressorRelease(int trackId, float value);
 
 bool trackGetSidechainEnabled(int trackId);
 void trackSetSidechainEnabled(int trackId, bool enabled);

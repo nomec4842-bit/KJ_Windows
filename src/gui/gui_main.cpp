@@ -8,6 +8,7 @@
 #include "core/tracks.h"
 #include "gui/gui_refresh.h"
 #include "gui/menu_commands.h"
+#include "gui/compressor_window.h"
 #include "gui/waveform_window.h"
 #include "wdl/lice/lice.h"
 
@@ -2283,6 +2284,7 @@ enum class EffectListItemType
 {
     Eq,
     Delay,
+    Compressor,
     Sidechain,
 };
 
@@ -2511,6 +2513,11 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
             fallbackTrack.delayTimeMs = trackGetDelayTimeMs(state->selectedTrackId);
             fallbackTrack.delayFeedback = trackGetDelayFeedback(state->selectedTrackId);
             fallbackTrack.delayMix = trackGetDelayMix(state->selectedTrackId);
+            fallbackTrack.compressorEnabled = trackGetCompressorEnabled(state->selectedTrackId);
+            fallbackTrack.compressorThresholdDb = trackGetCompressorThresholdDb(state->selectedTrackId);
+            fallbackTrack.compressorRatio = trackGetCompressorRatio(state->selectedTrackId);
+            fallbackTrack.compressorAttack = trackGetCompressorAttack(state->selectedTrackId);
+            fallbackTrack.compressorRelease = trackGetCompressorRelease(state->selectedTrackId);
             fallbackTrack.formant = trackGetSynthFormant(state->selectedTrackId);
             fallbackTrack.feedback = trackGetSynthFeedback(state->selectedTrackId);
             fallbackTrack.pitch = trackGetSynthPitch(state->selectedTrackId);
@@ -2564,6 +2571,9 @@ void effectsWindowSyncControls(HWND hwnd, EffectsWindowState* state)
                     break;
                 case EffectListItemType::Delay:
                     checked = trackPtr->delayEnabled;
+                    break;
+                case EffectListItemType::Compressor:
+                    checked = trackPtr->compressorEnabled;
                     break;
                 case EffectListItemType::Sidechain:
                     checked = trackPtr->sidechainEnabled;
@@ -4177,6 +4187,7 @@ void notifyEffectsWindowTrackValuesChanged(int trackId)
     {
         PostMessageW(gEffectsWindow, WM_EFFECTS_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
     }
+    notifyCompressorWindowValuesChanged(trackId);
     notifySidechainWindowValuesChanged(trackId);
     notifyEqWindowValuesChanged(trackId);
     notifyDelayWindowValuesChanged(trackId);
@@ -4189,6 +4200,8 @@ void notifyEffectsWindowTrackListChanged()
         PostMessageW(gEffectsWindow, WM_EFFECTS_RELOAD_TRACKS, 0, 0);
     }
     int activeTrack = getActiveSequencerTrackId();
+    notifyCompressorWindowTrackChanged(activeTrack);
+    notifyCompressorWindowValuesChanged(activeTrack);
     notifySidechainWindowTrackListChanged();
     notifySidechainWindowTrackChanged(activeTrack);
     notifyEqWindowTrackChanged(activeTrack);
@@ -4201,6 +4214,7 @@ void notifyEffectsWindowActiveTrackChanged(int trackId)
     {
         PostMessageW(gEffectsWindow, WM_EFFECTS_SELECT_TRACK, static_cast<WPARAM>(trackId), 0);
     }
+    notifyCompressorWindowTrackChanged(trackId);
     notifySidechainWindowTrackChanged(trackId);
     notifyEqWindowTrackChanged(trackId);
     notifyDelayWindowTrackChanged(trackId);
@@ -4345,6 +4359,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             newState->effectEntries = {
                 {EffectListItemType::Eq, L"Equalizer"},
                 {EffectListItemType::Delay, L"Delay"},
+                {EffectListItemType::Compressor, L"Compressor"},
                 {EffectListItemType::Sidechain, L"Sidechain"},
             };
 
@@ -4365,6 +4380,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     {
                     case EffectListItemType::Eq:
                     case EffectListItemType::Delay:
+                    case EffectListItemType::Compressor:
                     case EffectListItemType::Sidechain:
                         containerText = L"Open";
                         break;
@@ -4429,6 +4445,7 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 {
                     state->selectedTrackId = trackId;
                     effectsWindowSyncControls(hwnd, state);
+                    notifyCompressorWindowTrackChanged(trackId);
                     notifyEqWindowTrackChanged(trackId);
                     notifyDelayWindowTrackChanged(trackId);
                     if (selectedTrackId != trackId)
@@ -4515,6 +4532,10 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             trackSetDelayEnabled(trackId, checked);
                             notifyDelayWindowValuesChanged(trackId);
                             break;
+                        case EffectListItemType::Compressor:
+                            trackSetCompressorEnabled(trackId, checked);
+                            notifyCompressorWindowValuesChanged(trackId);
+                            break;
                         case EffectListItemType::Sidechain:
                             trackSetSidechainEnabled(trackId, checked);
                             notifySidechainWindowValuesChanged(trackId);
@@ -4544,6 +4565,9 @@ LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             break;
                         case EffectListItemType::Delay:
                             openDelayWindow(hwnd, trackId);
+                            break;
+                        case EffectListItemType::Compressor:
+                            openCompressorWindow(hwnd, trackId);
                             break;
                         case EffectListItemType::Sidechain:
                             openSidechainWindow(hwnd, trackId);
@@ -5946,6 +5970,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         closePianoRollWindow();
         closeEffectsWindow();
         closeWaveformWindow();
+        closeCompressorWindow();
         if (gEqWindow && IsWindow(gEqWindow))
             DestroyWindow(gEqWindow);
         if (gDelayWindow && IsWindow(gDelayWindow))

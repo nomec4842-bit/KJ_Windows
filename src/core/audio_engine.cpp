@@ -111,6 +111,14 @@ constexpr double kDelayFeedbackMin = DelayEffect::kMinFeedback;
 constexpr double kDelayFeedbackMax = DelayEffect::kMaxFeedback;
 constexpr double kDelayMixMin = DelayEffect::kMinMix;
 constexpr double kDelayMixMax = DelayEffect::kMaxMix;
+constexpr double kCompressorThresholdMinDb = -60.0;
+constexpr double kCompressorThresholdMaxDb = 0.0;
+constexpr double kCompressorRatioMin = 1.0;
+constexpr double kCompressorRatioMax = 20.0;
+constexpr double kCompressorAttackMin = 0.001;
+constexpr double kCompressorAttackMax = 1.0;
+constexpr double kCompressorReleaseMin = 0.01;
+constexpr double kCompressorReleaseMax = 4.0;
 
 void resetFilterState(BiquadFilter& filter)
 {
@@ -396,6 +404,14 @@ struct TrackPlaybackState {
     std::unique_ptr<DelayEffect> delayEffect;
     double delaySampleRate = 0.0;
     bool delayParametersDirty = false;
+    bool compressorEnabled = false;
+    double compressorThresholdDb = -12.0;
+    double compressorRatio = 4.0;
+    double compressorAttack = 0.01;
+    double compressorRelease = 0.2;
+    double compressorGain = 1.0;
+    double compressorAttackCoeff = 0.0;
+    double compressorReleaseCoeff = 0.0;
     SidechainProcessor sidechain;
     struct SynthVoice {
         int midiNote = 69;
@@ -476,6 +492,19 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newDelayTime = std::clamp(static_cast<double>(track.delayTimeMs), kDelayTimeMinMs, kDelayTimeMaxMs);
     double newDelayFeedback = std::clamp(static_cast<double>(track.delayFeedback), kDelayFeedbackMin, kDelayFeedbackMax);
     double newDelayMix = std::clamp(static_cast<double>(track.delayMix), kDelayMixMin, kDelayMixMax);
+    bool newCompressorEnabled = track.compressorEnabled;
+    double newCompressorThreshold = std::clamp(static_cast<double>(track.compressorThresholdDb),
+                                               kCompressorThresholdMinDb,
+                                               kCompressorThresholdMaxDb);
+    double newCompressorRatio = std::clamp(static_cast<double>(track.compressorRatio),
+                                           kCompressorRatioMin,
+                                           kCompressorRatioMax);
+    double newCompressorAttack = std::clamp(static_cast<double>(track.compressorAttack),
+                                            kCompressorAttackMin,
+                                            kCompressorAttackMax);
+    double newCompressorRelease = std::clamp(static_cast<double>(track.compressorRelease),
+                                             kCompressorReleaseMin,
+                                             kCompressorReleaseMax);
     bool newSidechainEnabled = track.sidechainEnabled;
     int newSidechainSourceTrackId = track.sidechainSourceTrackId;
     double newSidechainAmount = std::clamp(static_cast<double>(track.sidechainAmount), 0.0, 1.0);
@@ -499,6 +528,11 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     bool delayTimeChanged = std::abs(state.delayTimeMs - newDelayTime) > 1e-6;
     bool delayFeedbackChanged = std::abs(state.delayFeedback - newDelayFeedback) > 1e-6;
     bool delayMixChanged = std::abs(state.delayMix - newDelayMix) > 1e-6;
+    bool compressorEnabledChanged = state.compressorEnabled != newCompressorEnabled;
+    bool compressorThresholdChanged = std::abs(state.compressorThresholdDb - newCompressorThreshold) > 1e-6;
+    bool compressorRatioChanged = std::abs(state.compressorRatio - newCompressorRatio) > 1e-6;
+    bool compressorAttackChanged = std::abs(state.compressorAttack - newCompressorAttack) > 1e-6;
+    bool compressorReleaseChanged = std::abs(state.compressorRelease - newCompressorRelease) > 1e-6;
 
     if (lowChanged)
     {
@@ -608,6 +642,39 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
             }
         }
     }
+
+    if (compressorThresholdChanged)
+        state.compressorThresholdDb = newCompressorThreshold;
+    if (compressorRatioChanged)
+        state.compressorRatio = newCompressorRatio;
+    if (compressorAttackChanged)
+        state.compressorAttack = newCompressorAttack;
+    if (compressorReleaseChanged)
+        state.compressorRelease = newCompressorRelease;
+
+    auto computeSmoothingCoefficient = [&](double timeSeconds) {
+        double srSafe = sr > 0.0 ? sr : 44100.0;
+        double minTime = 1.0 / std::max(srSafe, 1.0);
+        double clampedTime = std::max(timeSeconds, minTime);
+        double coeff = std::exp(-1.0 / (clampedTime * srSafe));
+        if (!std::isfinite(coeff))
+            coeff = 0.0;
+        return std::clamp(coeff, 0.0, 0.999999);
+    };
+
+    if (sampleRateChanged || compressorAttackChanged)
+        state.compressorAttackCoeff = computeSmoothingCoefficient(state.compressorAttack);
+    if (sampleRateChanged || compressorReleaseChanged)
+        state.compressorReleaseCoeff = computeSmoothingCoefficient(state.compressorRelease);
+
+    if (compressorEnabledChanged)
+        state.compressorGain = 1.0;
+    if (compressorThresholdChanged || compressorRatioChanged)
+        state.compressorGain = 1.0;
+
+    state.compressorEnabled = newCompressorEnabled;
+    if (!state.compressorEnabled)
+        state.compressorGain = 1.0;
 
     state.sidechain.setEnabled(newSidechainEnabled);
     state.sidechain.setSourceTrackId(newSidechainSourceTrackId);
@@ -1267,6 +1334,33 @@ void audioLoop() {
                             processedRight = processBiquadSample(state.lowShelf, processedRight, true);
                             processedRight = processBiquadSample(state.midPeak, processedRight, true);
                             processedRight = processBiquadSample(state.highShelf, processedRight, true);
+                        }
+
+                        if (state.compressorEnabled)
+                        {
+                            double inputLevel = std::max(std::abs(processedLeft), std::abs(processedRight));
+                            double inputDb = 20.0 * std::log10(inputLevel + 1e-12);
+                            double gainDb = 0.0;
+                            if (inputDb > state.compressorThresholdDb)
+                            {
+                                double overDb = inputDb - state.compressorThresholdDb;
+                                double compressedDb = state.compressorThresholdDb + overDb / state.compressorRatio;
+                                gainDb = compressedDb - inputDb;
+                            }
+                            double targetGain = std::pow(10.0, gainDb / 20.0);
+                            if (!std::isfinite(targetGain))
+                                targetGain = 1.0;
+                            double coeff = (targetGain < state.compressorGain) ? state.compressorAttackCoeff
+                                                                               : state.compressorReleaseCoeff;
+                            state.compressorGain = targetGain + coeff * (state.compressorGain - targetGain);
+                            if (!std::isfinite(state.compressorGain))
+                                state.compressorGain = 1.0;
+                            processedLeft *= state.compressorGain;
+                            processedRight *= state.compressorGain;
+                        }
+                        else
+                        {
+                            state.compressorGain = 1.0;
                         }
 
                         if (state.delayEnabled && state.delayEffect)
