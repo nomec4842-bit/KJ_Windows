@@ -4181,18 +4181,6 @@ void toggleEffectsWindow(HWND parent)
     }
 }
 
-void notifyEffectsWindowTrackValuesChanged(int trackId)
-{
-    if (gEffectsWindow && IsWindow(gEffectsWindow))
-    {
-        PostMessageW(gEffectsWindow, WM_EFFECTS_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
-    }
-    notifyCompressorWindowValuesChanged(trackId);
-    notifySidechainWindowValuesChanged(trackId);
-    notifyEqWindowValuesChanged(trackId);
-    notifyDelayWindowValuesChanged(trackId);
-}
-
 void notifyEffectsWindowTrackListChanged()
 {
     if (gEffectsWindow && IsWindow(gEffectsWindow))
