@@ -633,6 +633,11 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float delayTimeMs = trackGetDelayTimeMs(track.id);
         float delayFeedback = trackGetDelayFeedback(track.id);
         float delayMix = trackGetDelayMix(track.id);
+        bool compressorEnabled = trackGetCompressorEnabled(track.id);
+        float compressorThreshold = trackGetCompressorThresholdDb(track.id);
+        float compressorRatio = trackGetCompressorRatio(track.id);
+        float compressorAttack = trackGetCompressorAttack(track.id);
+        float compressorRelease = trackGetCompressorRelease(track.id);
         float formant = trackGetSynthFormant(track.id);
         float feedback = trackGetSynthFeedback(track.id);
         float pitch = trackGetSynthPitch(track.id);
@@ -661,6 +666,11 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"delayTimeMs\": " << formatFloat(delayTimeMs) << ",\n";
         stream << "      \"delayFeedback\": " << formatFloat(delayFeedback) << ",\n";
         stream << "      \"delayMix\": " << formatFloat(delayMix) << ",\n";
+        stream << "      \"compressorEnabled\": " << (compressorEnabled ? "true" : "false") << ",\n";
+        stream << "      \"compressorThresholdDb\": " << formatFloat(compressorThreshold) << ",\n";
+        stream << "      \"compressorRatio\": " << formatFloat(compressorRatio) << ",\n";
+        stream << "      \"compressorAttack\": " << formatFloat(compressorAttack) << ",\n";
+        stream << "      \"compressorRelease\": " << formatFloat(compressorRelease) << ",\n";
         stream << "      \"formant\": " << formatFloat(formant) << ",\n";
         stream << "      \"feedback\": " << formatFloat(feedback) << ",\n";
         stream << "      \"pitch\": " << formatFloat(pitch) << ",\n";
@@ -813,6 +823,21 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetDelayTimeMs(trackId, jsonToFloat(findMember(trackObject, "delayTimeMs"), trackGetDelayTimeMs(trackId)));
         trackSetDelayFeedback(trackId, jsonToFloat(findMember(trackObject, "delayFeedback"), trackGetDelayFeedback(trackId)));
         trackSetDelayMix(trackId, jsonToFloat(findMember(trackObject, "delayMix"), trackGetDelayMix(trackId)));
+        trackSetCompressorEnabled(trackId,
+                                  jsonToBool(findMember(trackObject, "compressorEnabled"),
+                                             trackGetCompressorEnabled(trackId)));
+        trackSetCompressorThresholdDb(trackId,
+                                      jsonToFloat(findMember(trackObject, "compressorThresholdDb"),
+                                                  trackGetCompressorThresholdDb(trackId)));
+        trackSetCompressorRatio(trackId,
+                                 jsonToFloat(findMember(trackObject, "compressorRatio"),
+                                             trackGetCompressorRatio(trackId)));
+        trackSetCompressorAttack(trackId,
+                                  jsonToFloat(findMember(trackObject, "compressorAttack"),
+                                              trackGetCompressorAttack(trackId)));
+        trackSetCompressorRelease(trackId,
+                                   jsonToFloat(findMember(trackObject, "compressorRelease"),
+                                               trackGetCompressorRelease(trackId)));
 
         int stepCount = jsonToInt(findMember(trackObject, "stepCount"), trackGetStepCount(trackId));
         trackSetStepCount(trackId, stepCount);

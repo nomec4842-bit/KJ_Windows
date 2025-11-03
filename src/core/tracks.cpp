@@ -31,6 +31,18 @@ constexpr float kDefaultDelayFeedback = 0.35f;
 constexpr float kMinDelayMix = 0.0f;
 constexpr float kMaxDelayMix = 1.0f;
 constexpr float kDefaultDelayMix = 0.4f;
+constexpr float kMinCompressorThresholdDb = -60.0f;
+constexpr float kMaxCompressorThresholdDb = 0.0f;
+constexpr float kDefaultCompressorThresholdDb = -12.0f;
+constexpr float kMinCompressorRatio = 1.0f;
+constexpr float kMaxCompressorRatio = 20.0f;
+constexpr float kDefaultCompressorRatio = 4.0f;
+constexpr float kMinCompressorAttack = 0.001f;
+constexpr float kMaxCompressorAttack = 1.0f;
+constexpr float kDefaultCompressorAttack = 0.01f;
+constexpr float kMinCompressorRelease = 0.01f;
+constexpr float kMaxCompressorRelease = 4.0f;
+constexpr float kDefaultCompressorRelease = 0.2f;
 constexpr float kMinSidechainAmount = 0.0f;
 constexpr float kMaxSidechainAmount = 1.0f;
 constexpr float kDefaultSidechainAmount = 1.0f;
@@ -92,6 +104,11 @@ struct TrackData
         track.delayTimeMs = kDefaultDelayTimeMs;
         track.delayFeedback = kDefaultDelayFeedback;
         track.delayMix = kDefaultDelayMix;
+        track.compressorEnabled = false;
+        track.compressorThresholdDb = kDefaultCompressorThresholdDb;
+        track.compressorRatio = kDefaultCompressorRatio;
+        track.compressorAttack = kDefaultCompressorAttack;
+        track.compressorRelease = kDefaultCompressorRelease;
         track.sidechainEnabled = false;
         track.sidechainSourceTrackId = kDefaultSidechainSourceTrack;
         track.sidechainAmount = kDefaultSidechainAmount;
@@ -137,6 +154,11 @@ struct TrackData
     std::atomic<float> delayTimeMs{kDefaultDelayTimeMs};
     std::atomic<float> delayFeedback{kDefaultDelayFeedback};
     std::atomic<float> delayMix{kDefaultDelayMix};
+    std::atomic<bool> compressorEnabled{false};
+    std::atomic<float> compressorThresholdDb{kDefaultCompressorThresholdDb};
+    std::atomic<float> compressorRatio{kDefaultCompressorRatio};
+    std::atomic<float> compressorAttack{kDefaultCompressorAttack};
+    std::atomic<float> compressorRelease{kDefaultCompressorRelease};
     std::atomic<bool> sidechainEnabled{false};
     std::atomic<int> sidechainSourceTrackId{kDefaultSidechainSourceTrack};
     std::atomic<float> sidechainAmount{kDefaultSidechainAmount};
@@ -184,6 +206,11 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.delayTimeMs = kDefaultDelayTimeMs;
     baseTrack.delayFeedback = kDefaultDelayFeedback;
     baseTrack.delayMix = kDefaultDelayMix;
+    baseTrack.compressorEnabled = false;
+    baseTrack.compressorThresholdDb = kDefaultCompressorThresholdDb;
+    baseTrack.compressorRatio = kDefaultCompressorRatio;
+    baseTrack.compressorAttack = kDefaultCompressorAttack;
+    baseTrack.compressorRelease = kDefaultCompressorRelease;
     baseTrack.sidechainEnabled = false;
     baseTrack.sidechainSourceTrackId = kDefaultSidechainSourceTrack;
     baseTrack.sidechainAmount = kDefaultSidechainAmount;
@@ -264,6 +291,11 @@ std::vector<Track> getTracks()
         info.delayTimeMs = track->delayTimeMs.load(std::memory_order_relaxed);
         info.delayFeedback = track->delayFeedback.load(std::memory_order_relaxed);
         info.delayMix = track->delayMix.load(std::memory_order_relaxed);
+        info.compressorEnabled = track->compressorEnabled.load(std::memory_order_relaxed);
+        info.compressorThresholdDb = track->compressorThresholdDb.load(std::memory_order_relaxed);
+        info.compressorRatio = track->compressorRatio.load(std::memory_order_relaxed);
+        info.compressorAttack = track->compressorAttack.load(std::memory_order_relaxed);
+        info.compressorRelease = track->compressorRelease.load(std::memory_order_relaxed);
         info.sidechainEnabled = track->sidechainEnabled.load(std::memory_order_relaxed);
         info.sidechainSourceTrackId = track->sidechainSourceTrackId.load(std::memory_order_relaxed);
         info.sidechainAmount = track->sidechainAmount.load(std::memory_order_relaxed);
@@ -845,6 +877,104 @@ void trackSetDelayMix(int trackId, float value)
 
     float clamped = std::clamp(value, kMinDelayMix, kMaxDelayMix);
     track->delayMix.store(clamped, std::memory_order_relaxed);
+}
+
+bool trackGetCompressorEnabled(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return false;
+
+    return track->compressorEnabled.load(std::memory_order_relaxed);
+}
+
+void trackSetCompressorEnabled(int trackId, bool enabled)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->compressorEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+float trackGetCompressorThresholdDb(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultCompressorThresholdDb;
+
+    float value = track->compressorThresholdDb.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinCompressorThresholdDb, kMaxCompressorThresholdDb);
+}
+
+void trackSetCompressorThresholdDb(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinCompressorThresholdDb, kMaxCompressorThresholdDb);
+    track->compressorThresholdDb.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetCompressorRatio(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultCompressorRatio;
+
+    float value = track->compressorRatio.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinCompressorRatio, kMaxCompressorRatio);
+}
+
+void trackSetCompressorRatio(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinCompressorRatio, kMaxCompressorRatio);
+    track->compressorRatio.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetCompressorAttack(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultCompressorAttack;
+
+    float value = track->compressorAttack.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinCompressorAttack, kMaxCompressorAttack);
+}
+
+void trackSetCompressorAttack(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinCompressorAttack, kMaxCompressorAttack);
+    track->compressorAttack.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetCompressorRelease(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultCompressorRelease;
+
+    float value = track->compressorRelease.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinCompressorRelease, kMaxCompressorRelease);
+}
+
+void trackSetCompressorRelease(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinCompressorRelease, kMaxCompressorRelease);
+    track->compressorRelease.store(clamped, std::memory_order_relaxed);
 }
 
 bool trackGetSidechainEnabled(int trackId)
