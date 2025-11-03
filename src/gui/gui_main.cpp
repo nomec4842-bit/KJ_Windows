@@ -87,6 +87,12 @@ std::string formatDelayPercentValue(float value)
     return stream.str();
 }
 
+void notifyEffectsWindowTrackValuesChanged(int trackId)
+{
+    (void)trackId;
+    // TODO: update FX window when track parameters change.
+}
+
 std::string formatNormalizedValue(float value)
 {
     std::ostringstream stream;
