@@ -168,7 +168,6 @@ LONG computeDropdownStartTop(const RECT& anchor, int optionCount, int optionHeig
 
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
-RECT saveProjectButton = {360, 115, 520, 145};
 RECT waveSelectButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
@@ -5157,7 +5156,6 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         }
     }
 
-    drawButton(surface, saveProjectButton, RGB(50, 50, 50), RGB(120, 120, 120), "Save Project");
     drawButton(surface, bpmDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
     drawButton(surface, bpmUpButton, RGB(50, 50, 50), RGB(120, 120, 120), "+");
     drawButton(surface, stepCountDownButton, RGB(50, 50, 50), RGB(120, 120, 120), "-");
@@ -5769,12 +5767,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
 
-            return 0;
-        }
-
-        if (pointInRect(saveProjectButton, x, y))
-        {
-            showSaveProjectDialog(hwnd);
             return 0;
         }
 
