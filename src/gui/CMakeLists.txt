@@ -1,6 +1,7 @@
 add_library(kj_gui STATIC
     gui_main.cpp
     compressor_window.cpp
+    effects_window.cpp
     waveform_window.cpp
     ../../external/wdl/lice/lice.cpp
 )
