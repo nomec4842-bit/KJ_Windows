@@ -540,6 +540,38 @@ bool stepContainsMidiNote(int trackId, int stepIndex, int midiNote)
     return std::find(notes.begin(), notes.end(), midiNote) != notes.end();
 }
 
+std::vector<int> getStepNotesForDisplay(int trackId, int stepIndex)
+{
+    std::vector<int> notes = trackGetStepNotes(trackId, stepIndex);
+    if (notes.empty() && getTrackStepState(trackId, stepIndex))
+    {
+        int fallback = trackGetStepNote(trackId, stepIndex);
+        if (fallback >= 0)
+            notes.push_back(fallback);
+    }
+    return notes;
+}
+
+bool stepHasDisplayableNote(int trackId, int stepIndex)
+{
+    auto notes = getStepNotesForDisplay(trackId, stepIndex);
+    return !notes.empty();
+}
+
+COLORREF scaleColor(COLORREF color, double factor)
+{
+    factor = std::clamp(factor, 0.25, 1.5);
+    auto clampChannel = [](int value) {
+        return static_cast<BYTE>(std::clamp(value, 0, 255));
+    };
+
+    int red = static_cast<int>(std::lround(static_cast<double>(GetRValue(color)) * factor));
+    int green = static_cast<int>(std::lround(static_cast<double>(GetGValue(color)) * factor));
+    int blue = static_cast<int>(std::lround(static_cast<double>(GetBValue(color)) * factor));
+
+    return RGB(clampChannel(red), clampChannel(green), clampChannel(blue));
+}
+
 void pianoRollApplyDragRange(int newEndStep)
 {
     if (!gPianoRollDrag.active)
@@ -667,16 +699,16 @@ RECT computePianoRollMenuLaneRect(const PianoRollLayout& layout)
     if (layout.menuContent.right <= layout.menuContent.left || layout.menuContent.bottom <= layout.menuContent.top)
         return laneRect;
 
-    LONG top = layout.menuContent.top + 10; // heading top offset
+    LONG top = layout.menuContent.top + 8; // heading top offset
     top += 24; // heading height
     top += 4;  // spacing to description
-    top += 48; // description height
-    top += 8;  // spacing to lane
+    top += 40; // description height
+    top += 6;  // spacing to lane
 
     laneRect.left = layout.menuContent.left + 12;
     laneRect.right = layout.menuContent.right - 12;
     laneRect.top = top;
-    laneRect.bottom = layout.menuContent.bottom - 12;
+    laneRect.bottom = layout.menuContent.bottom - 8;
 
     if (laneRect.right < laneRect.left)
         laneRect.right = laneRect.left;
@@ -759,6 +791,9 @@ void pianoRollApplyMenuParameter(int parameterIndex,
     {
     case 0:
     {
+        if (!stepHasDisplayableNote(trackId, stepIndex))
+            break;
+
         LONG clampedY = std::clamp(pointerY, static_cast<int>(innerTop), static_cast<int>(innerBottom));
         int height = static_cast<int>(innerBottom - innerTop);
         float normalized = (height > 0)
@@ -1417,6 +1452,11 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
                         if (stepIndex >= 0 && stepIndex < totalSteps)
                         {
+                            bool allowParameterDrag = (gPianoRollSelectedMenuTab != 0) ||
+                                                       stepHasDisplayableNote(trackId, stepIndex);
+                            if (!allowParameterDrag)
+                                return 0;
+
                             gPianoRollParamDrag.active = true;
                             gPianoRollParamDrag.parameterIndex = gPianoRollSelectedMenuTab;
                             gPianoRollParamDrag.trackId = trackId;
@@ -1808,14 +1848,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (stepIndex >= totalSteps)
                     continue;
 
-                auto notes = trackGetStepNotes(trackId, stepIndex);
-                if (notes.empty() && getTrackStepState(trackId, stepIndex))
-                {
-                    int fallback = trackGetStepNote(trackId, stepIndex);
-                    if (fallback >= 0)
-                        notes.push_back(fallback);
-                }
-                columnNotes[column] = std::move(notes);
+                columnNotes[column] = getStepNotesForDisplay(trackId, stepIndex);
             }
 
             for (int row = 0; row < kPianoRollNoteRows; ++row)
@@ -2037,6 +2070,10 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     {
                     case 0:
                     {
+                        const auto& notes = columnNotes[static_cast<size_t>(column)];
+                        if (notes.empty())
+                            break;
+
                         float velocity = trackGetStepVelocity(trackId, stepIndex);
                         double range = static_cast<double>(kTrackStepVelocityMax) - static_cast<double>(kTrackStepVelocityMin);
                         double normalized = range > 0.0
@@ -2044,13 +2081,70 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                                      range
                                                : 0.0;
                         normalized = std::clamp(normalized, 0.0, 1.0);
+
+                        LONG laneHeight = innerBottom - innerTop;
+                        if (laneHeight <= 0)
+                            break;
+
                         LONG barBottom = innerBottom;
-                        LONG barTop = barBottom - static_cast<LONG>(std::round(normalized * (innerBottom - innerTop)));
+                        LONG barTop = barBottom - static_cast<LONG>(std::round(normalized * laneHeight));
                         if (barTop < innerTop)
                             barTop = innerTop;
-                        RECT barRect {innerLeft, barTop, innerRight, barBottom};
-                        if (barRect.bottom > barRect.top && barRect.right > barRect.left)
-                            FillRect(hdc, &barRect, barBrush);
+
+                        int sliderCount = static_cast<int>(notes.size());
+                        if (sliderCount <= 0)
+                            break;
+
+                        if (sliderCount == 1)
+                        {
+                            RECT barRect {innerLeft, barTop, innerRight, barBottom};
+                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
+                                FillRect(hdc, &barRect, barBrush);
+                            break;
+                        }
+
+                        double columnWidth = static_cast<double>(std::max<LONG>(1, innerRight - innerLeft));
+                        double segmentWidth = columnWidth / static_cast<double>(sliderCount);
+                        double currentLeft = static_cast<double>(innerLeft);
+                        for (int noteIndex = 0; noteIndex < sliderCount; ++noteIndex)
+                        {
+                            double nextLeft = currentLeft + segmentWidth;
+                            LONG segmentLeft = static_cast<LONG>(std::lround(currentLeft));
+                            LONG segmentRight = (noteIndex == sliderCount - 1)
+                                                    ? innerRight
+                                                    : static_cast<LONG>(std::lround(nextLeft));
+
+                            if (sliderCount > 1)
+                            {
+                                if (noteIndex > 0 && segmentLeft < innerRight)
+                                    ++segmentLeft;
+                                if (noteIndex < sliderCount - 1 && segmentRight > segmentLeft)
+                                    --segmentRight;
+                            }
+
+                            if (segmentRight > innerRight)
+                                segmentRight = innerRight;
+                            if (segmentRight <= segmentLeft)
+                            {
+                                currentLeft = nextLeft;
+                                continue;
+                            }
+
+                            RECT barRect {segmentLeft, barTop, segmentRight, barBottom};
+                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
+                            {
+                                double shadeStep = sliderCount > 1
+                                                       ? 0.25 / static_cast<double>(sliderCount - 1)
+                                                       : 0.0;
+                                double shadeFactor = 1.0 - shadeStep * static_cast<double>(noteIndex);
+                                COLORREF segmentColor = scaleColor(kPianoRollActiveNote, shadeFactor);
+                                HBRUSH segmentBrush = CreateSolidBrush(segmentColor);
+                                FillRect(hdc, &barRect, segmentBrush);
+                                DeleteObject(segmentBrush);
+                            }
+
+                            currentLeft = nextLeft;
+                        }
                         break;
                     }
                     case 1:
