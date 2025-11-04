@@ -293,12 +293,12 @@ constexpr COLORREF kPianoRollMenuContentBackground = RGB(32, 32, 32);
 constexpr COLORREF kPianoRollMenuTabActive = RGB(65, 90, 130);
 constexpr COLORREF kPianoRollMenuTabInactive = RGB(45, 45, 45);
 
-constexpr int kPianoRollMenuTabCount = 4;
+constexpr int kPianoRollMenuTabCount = 3;
 constexpr int kPianoRollCollapseBarHeight = 28;
 constexpr int kPianoRollCollapseButtonSize = 20;
 constexpr int kPianoRollCollapseButtonPadding = 8;
 const std::array<const wchar_t*, kPianoRollMenuTabCount> kPianoRollMenuTabLabels = {
-    L"Velocity", L"Pan", L"Pitch", L"Effect"
+    L"Velocity", L"Pitch", L"Effect"
 };
 
 constexpr wchar_t kEffectsWindowClassName[] = L"KJEffectsWindow";
@@ -804,18 +804,6 @@ void pianoRollApplyMenuParameter(int parameterIndex,
         break;
     }
     case 1:
-    {
-        LONG clampedX = std::clamp(pointerX, static_cast<int>(innerLeft), static_cast<int>(innerRight));
-        double range = static_cast<double>(kTrackStepPanMax) - static_cast<double>(kTrackStepPanMin);
-        double normalized = range > 0.0
-                                ? (static_cast<double>(clampedX - innerLeft) / static_cast<double>(innerRight - innerLeft))
-                                : 0.5;
-        normalized = std::clamp(normalized, 0.0, 1.0);
-        double panValue = static_cast<double>(kTrackStepPanMin) + normalized * range;
-        trackSetStepPan(trackId, stepIndex, static_cast<float>(panValue));
-        break;
-    }
-    case 2:
     {
         LONG clampedY = std::clamp(pointerY, static_cast<int>(innerTop), static_cast<int>(innerBottom));
         int height = static_cast<int>(innerBottom - innerTop);
@@ -1434,7 +1422,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
 
-        if (!layout.menuCollapsed && gPianoRollSelectedMenuTab < 3)
+        if (!layout.menuCollapsed && gPianoRollSelectedMenuTab < 2)
         {
             RECT laneRect = computePianoRollMenuLaneRect(layout);
             if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top && x >= laneRect.left && x < laneRect.right &&
@@ -1989,12 +1977,9 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     description = L"Shape the intensity of each note. Drag a step to set its velocity envelope.";
                     break;
                 case 1:
-                    description = L"Position notes across the stereo field. Use left/right drags to pan per step.";
-                    break;
-                case 2:
                     description = L"Fine-tune note pitch in semitones or cents for expressive runs.";
                     break;
-                case 3:
+                case 2:
                 default:
                     description = L"Route per-note modulation and effects such as filters or delays.";
                     break;
@@ -2023,7 +2008,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 SelectObject(hdc, oldLanePen);
                 DeleteObject(lanePen);
 
-                if (gPianoRollSelectedMenuTab == 2)
+                if (gPianoRollSelectedMenuTab == 1)
                 {
                     HPEN centerPen = CreatePen(PS_SOLID, 1, RGB(75, 75, 75));
                     HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, centerPen));
@@ -2036,11 +2021,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
                 HBRUSH barBrush = CreateSolidBrush(kPianoRollActiveNote);
                 HBRUSH disabledBrush = CreateSolidBrush(RGB(30, 30, 30));
-                HPEN panCenterPen = nullptr;
-                if (gPianoRollSelectedMenuTab == 1)
-                {
-                    panCenterPen = CreatePen(PS_SOLID, 1, RGB(75, 75, 75));
-                }
 
                 for (int column = 0; column < kSequencerStepsPerPage; ++column)
                 {
@@ -2149,39 +2129,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                     case 1:
                     {
-                        float pan = trackGetStepPan(trackId, stepIndex);
-                        double range = static_cast<double>(kTrackStepPanMax) - static_cast<double>(kTrackStepPanMin);
-                        double normalized = range > 0.0
-                                               ? (static_cast<double>(pan) - static_cast<double>(kTrackStepPanMin)) / range
-                                               : 0.5;
-                        normalized = std::clamp(normalized, 0.0, 1.0);
-                        LONG indicatorX = innerLeft +
-                                          static_cast<LONG>(std::round(normalized * (innerRight - innerLeft)));
-                        if (indicatorX < innerLeft)
-                            indicatorX = innerLeft;
-                        if (indicatorX > innerRight)
-                            indicatorX = innerRight;
-                        RECT indicatorRect {indicatorX - 1, innerTop, indicatorX + 1, innerBottom};
-                        if (indicatorRect.left < innerLeft)
-                            indicatorRect.left = innerLeft;
-                        if (indicatorRect.right > innerRight)
-                            indicatorRect.right = innerRight;
-                        if (indicatorRect.right <= indicatorRect.left)
-                            indicatorRect.right = indicatorRect.left + 1;
-                        FillRect(hdc, &indicatorRect, barBrush);
-
-                        if (panCenterPen)
-                        {
-                            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, panCenterPen));
-                            LONG centerX = (innerLeft + innerRight) / 2;
-                            MoveToEx(hdc, centerX, innerTop, nullptr);
-                            LineTo(hdc, centerX, innerBottom);
-                            SelectObject(hdc, oldPen);
-                        }
-                        break;
-                    }
-                    case 2:
-                    {
                         float pitch = trackGetStepPitchOffset(trackId, stepIndex);
                         double maxAbs = std::max(std::abs(static_cast<double>(kTrackStepPitchMin)),
                                                  std::abs(static_cast<double>(kTrackStepPitchMax)));
@@ -2213,10 +2160,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     }
                 }
 
-                if (panCenterPen)
-                {
-                    DeleteObject(panCenterPen);
-                }
                 DeleteObject(disabledBrush);
                 DeleteObject(barBrush);
             }
