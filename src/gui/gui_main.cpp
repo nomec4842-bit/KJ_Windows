@@ -800,7 +800,31 @@ void pianoRollApplyMenuParameter(int parameterIndex,
                                ? 1.0f - static_cast<float>(clampedY - innerTop) / static_cast<float>(height)
                                : kTrackStepVelocityMax;
         normalized = std::clamp(normalized, kTrackStepVelocityMin, kTrackStepVelocityMax);
-        trackSetStepVelocity(trackId, stepIndex, normalized);
+
+        auto notes = getStepNotesForDisplay(trackId, stepIndex);
+        if (notes.empty())
+            break;
+
+        if (notes.size() == 1)
+        {
+            trackSetStepVelocity(trackId, stepIndex, normalized);
+            break;
+        }
+
+        LONG clampedX = std::clamp(pointerX, static_cast<int>(innerLeft), static_cast<int>(innerRight - 1));
+        LONG innerWidth = innerRight - innerLeft;
+        if (innerWidth <= 0)
+            break;
+
+        double normalizedX = static_cast<double>(clampedX - innerLeft) /
+                             static_cast<double>(std::max<LONG>(1, innerWidth));
+        int targetIndex = static_cast<int>(std::floor(normalizedX * static_cast<double>(notes.size())));
+        if (targetIndex < 0)
+            targetIndex = 0;
+        if (targetIndex >= static_cast<int>(notes.size()))
+            targetIndex = static_cast<int>(notes.size()) - 1;
+        int targetMidiNote = notes[static_cast<size_t>(targetIndex)];
+        trackSetStepNoteVelocity(trackId, stepIndex, targetMidiNote, normalized);
         break;
     }
     case 1:
@@ -2054,29 +2078,37 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         if (notes.empty())
                             break;
 
-                        float velocity = trackGetStepVelocity(trackId, stepIndex);
-                        double range = static_cast<double>(kTrackStepVelocityMax) - static_cast<double>(kTrackStepVelocityMin);
-                        double normalized = range > 0.0
-                                               ? (static_cast<double>(velocity) - static_cast<double>(kTrackStepVelocityMin)) /
-                                                     range
-                                               : 0.0;
-                        normalized = std::clamp(normalized, 0.0, 1.0);
-
                         LONG laneHeight = innerBottom - innerTop;
                         if (laneHeight <= 0)
                             break;
-
-                        LONG barBottom = innerBottom;
-                        LONG barTop = barBottom - static_cast<LONG>(std::round(normalized * laneHeight));
-                        if (barTop < innerTop)
-                            barTop = innerTop;
 
                         int sliderCount = static_cast<int>(notes.size());
                         if (sliderCount <= 0)
                             break;
 
+                        double range = static_cast<double>(kTrackStepVelocityMax) -
+                                        static_cast<double>(kTrackStepVelocityMin);
+                        if (range <= 0.0)
+                            range = 1.0;
+
+                        LONG barBottom = innerBottom;
+                        auto computeBarTop = [&](float velocityValue) {
+                            double normalized = (static_cast<double>(velocityValue) -
+                                                 static_cast<double>(kTrackStepVelocityMin)) /
+                                                range;
+                            normalized = std::clamp(normalized, 0.0, 1.0);
+                            LONG top = barBottom -
+                                       static_cast<LONG>(std::round(normalized * static_cast<double>(laneHeight)));
+                            if (top < innerTop)
+                                top = innerTop;
+                            return top;
+                        };
+
                         if (sliderCount == 1)
                         {
+                            int midiNote = notes.front();
+                            float noteVelocity = trackGetStepNoteVelocity(trackId, stepIndex, midiNote);
+                            LONG barTop = computeBarTop(noteVelocity);
                             RECT barRect {innerLeft, barTop, innerRight, barBottom};
                             if (barRect.bottom > barRect.top && barRect.right > barRect.left)
                                 FillRect(hdc, &barRect, barBrush);
@@ -2110,6 +2142,9 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                                 continue;
                             }
 
+                            int midiNote = notes[static_cast<size_t>(noteIndex)];
+                            float noteVelocity = trackGetStepNoteVelocity(trackId, stepIndex, midiNote);
+                            LONG barTop = computeBarTop(noteVelocity);
                             RECT barRect {segmentLeft, barTop, segmentRight, barBottom};
                             if (barRect.bottom > barRect.top && barRect.right > barRect.left)
                             {

@@ -418,6 +418,7 @@ struct TrackPlaybackState {
         double frequency = midiNoteToFrequency(69);
         double phase = 0.0;
         double lastOutput = 0.0;
+        double velocity = 1.0;
     };
     std::vector<SynthVoice> voices;
 };
@@ -981,11 +982,15 @@ void audioLoop() {
                     double rightValue = 0.0;
 
                     auto getNotesForStep = [](int trackId, int stepIndex) {
-                        std::vector<int> notes = trackGetStepNotes(trackId, stepIndex);
+                        std::vector<StepNoteInfo> notes = trackGetStepNoteInfo(trackId, stepIndex);
                         if (notes.empty()) {
                             int fallback = trackGetStepNote(trackId, stepIndex);
-                            if (fallback >= 0)
-                                notes.push_back(fallback);
+                            if (fallback >= 0) {
+                                StepNoteInfo info{};
+                                info.midiNote = fallback;
+                                info.velocity = trackGetStepNoteVelocity(trackId, stepIndex, fallback);
+                                notes.push_back(info);
+                            }
                         }
                         return notes;
                     };
@@ -1056,7 +1061,7 @@ void audioLoop() {
 
                         bool gate = false;
                         bool triggered = false;
-                        std::vector<int> triggeredNotes;
+                        std::vector<StepNoteInfo> triggeredNotes;
                         if (trackStepCount > 0 && stepIndex < trackStepCount) {
                             if (getTrackStepState(trackInfo.id, stepIndex)) {
                                 gate = true;
@@ -1197,9 +1202,13 @@ void audioLoop() {
                                     if (previousStep >= 0 && previousStep < trackStepCount && previousStep != stepIndex &&
                                         getTrackStepState(trackInfo.id, previousStep)) {
                                         auto previousNotes = getNotesForStep(trackInfo.id, previousStep);
-                                        for (int note : triggeredNotes) {
-                                            if (std::find(previousNotes.begin(), previousNotes.end(), note) != previousNotes.end()) {
-                                                sustainedNotes.push_back(note);
+                                        for (const auto& noteInfo : triggeredNotes) {
+                                            auto match = std::find_if(previousNotes.begin(), previousNotes.end(),
+                                                [&noteInfo](const StepNoteInfo& previous) {
+                                                    return previous.midiNote == noteInfo.midiNote;
+                                                });
+                                            if (match != previousNotes.end()) {
+                                                sustainedNotes.push_back(noteInfo.midiNote);
                                             }
                                         }
                                     }
@@ -1209,7 +1218,12 @@ void audioLoop() {
                                 updatedVoices.reserve(triggeredNotes.size());
 
                                 bool createdNewVoice = false;
-                                for (int note : triggeredNotes) {
+                                for (const auto& noteInfo : triggeredNotes) {
+                                    int note = noteInfo.midiNote;
+                                    double noteVelocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                     static_cast<double>(kTrackStepVelocityMin),
+                                                                     static_cast<double>(kTrackStepVelocityMax));
+
                                     auto existingIt = std::find_if(state.voices.begin(), state.voices.end(),
                                         [note](const TrackPlaybackState::SynthVoice& voice) {
                                             return voice.midiNote == note;
@@ -1217,13 +1231,16 @@ void audioLoop() {
 
                                     bool isSustained = std::find(sustainedNotes.begin(), sustainedNotes.end(), note) != sustainedNotes.end();
                                     if (existingIt != state.voices.end() && isSustained) {
-                                        updatedVoices.push_back(*existingIt);
+                                        TrackPlaybackState::SynthVoice voice = *existingIt;
+                                        voice.velocity = noteVelocity;
+                                        updatedVoices.push_back(voice);
                                     } else {
                                         TrackPlaybackState::SynthVoice voice{};
                                         voice.midiNote = note;
                                         voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset + state.stepPitchOffset);
                                         voice.phase = 0.0;
                                         voice.lastOutput = 0.0;
+                                        voice.velocity = noteVelocity;
                                         updatedVoices.push_back(voice);
                                         createdNewVoice = true;
                                     }
@@ -1252,6 +1269,7 @@ void audioLoop() {
                                                      state.pitchEnvelope * state.pitchRangeSemitones;
                                 double feedbackMix = std::clamp(state.feedbackAmount, 0.0, 0.99);
                                 SynthWaveType waveType = trackInfo.synthWaveType;
+                                double totalVelocity = 0.0;
                                 for (auto& voice : state.voices) {
                                     double noteWithPitch = static_cast<double>(voice.midiNote) + pitchOffset;
                                     double frequency = midiNoteToFrequency(noteWithPitch);
@@ -1285,7 +1303,11 @@ void audioLoop() {
                                     }
                                     waveform = std::clamp(waveform, -1.0, 1.0);
                                     voice.lastOutput = waveform;
-                                    sampleValue += waveform;
+                                    double velocityGain = std::clamp(voice.velocity,
+                                                                    static_cast<double>(kTrackStepVelocityMin),
+                                                                    static_cast<double>(kTrackStepVelocityMax));
+                                    sampleValue += waveform * velocityGain;
+                                    totalVelocity += velocityGain;
                                     double increment = twoPi * frequency / sampleRate;
                                     voice.phase += increment;
                                     if (voice.phase >= twoPi)
@@ -1293,13 +1315,16 @@ void audioLoop() {
                                         voice.phase = std::fmod(voice.phase, twoPi);
                                     }
                                 }
+                                if (totalVelocity > 0.0)
+                                {
+                                    sampleValue /= totalVelocity;
+                                }
                                 if (state.pitchEnvelope > 0.0)
                                 {
                                     state.pitchEnvelope = std::max(0.0, state.pitchEnvelope - state.pitchEnvelopeStep);
                                     if (state.pitchEnvelope < 1e-6)
                                         state.pitchEnvelope = 0.0;
                                 }
-                                sampleValue /= static_cast<double>(state.voices.size());
                             }
                             state.envelope = advanceEnvelope(state.synthEnvelopeStage, state.envelope,
                                                              state.synthAttack, state.synthDecay, state.synthSustain,
