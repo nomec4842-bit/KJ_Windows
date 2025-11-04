@@ -386,7 +386,10 @@ void trackSetStepState(int trackId, int stepIndex, bool enabled)
         else if (notes.empty())
         {
             int note = track->notes[stepIndex].load(std::memory_order_relaxed);
-            notes.push_back(clampMidiNote(note));
+            TrackData::StepNoteEntry entry{};
+            entry.midiNote = clampMidiNote(note);
+            entry.velocity = track->stepVelocity[stepIndex].load(std::memory_order_relaxed);
+            notes.push_back(entry);
         }
     }
 
