@@ -690,6 +690,12 @@ bool saveProjectToFile(const std::filesystem::path& path)
             bool enabled = trackGetStepState(track.id, stepIndex);
             auto notes = trackGetStepNotes(track.id, stepIndex);
             float velocity = trackGetStepVelocity(track.id, stepIndex);
+            std::vector<float> noteVelocities;
+            noteVelocities.reserve(notes.size());
+            for (int note : notes)
+            {
+                noteVelocities.push_back(trackGetStepNoteVelocity(track.id, stepIndex, note));
+            }
             float stepPan = trackGetStepPan(track.id, stepIndex);
             float pitchOffset = trackGetStepPitchOffset(track.id, stepIndex);
 
@@ -704,6 +710,16 @@ bool saveProjectToFile(const std::filesystem::path& path)
                     stream << ", ";
                 }
                 stream << notes[noteIndex];
+            }
+            stream << "],\n";
+            stream << "          \"noteVelocities\": [";
+            for (size_t noteIndex = 0; noteIndex < noteVelocities.size(); ++noteIndex)
+            {
+                if (noteIndex > 0)
+                {
+                    stream << ", ";
+                }
+                stream << formatFloat(noteVelocities[noteIndex]);
             }
             stream << "],\n";
             stream << "          \"velocity\": " << formatFloat(velocity) << ",\n";
@@ -909,6 +925,18 @@ bool loadProjectFromFile(const std::filesystem::path& path)
 
                 trackSetStepVelocity(trackId, stepIndex,
                                      jsonToFloat(findMember(stepObject, "velocity"), trackGetStepVelocity(trackId, stepIndex)));
+                const JsonValue* noteVelocityArray = findMember(stepObject, "noteVelocities");
+                if (noteVelocityArray && noteVelocityArray->isArray())
+                {
+                    const auto& velocities = noteVelocityArray->asArray();
+                    size_t count = std::min(notes.size(), velocities.size());
+                    for (size_t noteIndex = 0; noteIndex < count; ++noteIndex)
+                    {
+                        float velocityValue = jsonToFloat(&velocities[noteIndex],
+                                                          trackGetStepNoteVelocity(trackId, stepIndex, notes[noteIndex]));
+                        trackSetStepNoteVelocity(trackId, stepIndex, notes[noteIndex], velocityValue);
+                    }
+                }
                 trackSetStepPan(trackId, stepIndex,
                                 jsonToFloat(findMember(stepObject, "pan"), trackGetStepPan(trackId, stepIndex)));
                 trackSetStepPitchOffset(trackId, stepIndex,

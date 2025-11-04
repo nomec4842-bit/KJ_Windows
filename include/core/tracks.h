@@ -66,6 +66,12 @@ constexpr float kTrackStepPanMax = 1.0f;
 constexpr float kTrackStepPitchMin = -12.0f;
 constexpr float kTrackStepPitchMax = 12.0f;
 
+struct StepNoteInfo
+{
+    int midiNote = 0;
+    float velocity = kTrackStepVelocityMax;
+};
+
 void initTracks();
 Track addTrack(const std::string& name = {});
 std::vector<Track> getTracks();
@@ -181,6 +187,9 @@ void trackToggleStepNote(int trackId, int stepIndex, int midiNote);
 
 float trackGetStepVelocity(int trackId, int stepIndex);
 void trackSetStepVelocity(int trackId, int stepIndex, float value);
+float trackGetStepNoteVelocity(int trackId, int stepIndex, int midiNote);
+std::vector<StepNoteInfo> trackGetStepNoteInfo(int trackId, int stepIndex);
+void trackSetStepNoteVelocity(int trackId, int stepIndex, int midiNote, float value);
 
 float trackGetStepPan(int trackId, int stepIndex);
 void trackSetStepPan(int trackId, int stepIndex, float value);
