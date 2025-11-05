@@ -6,6 +6,7 @@
 std::atomic<int> sequencerCurrentStep{0};
 std::atomic<int> sequencerBPM{120};
 std::atomic<bool> sequencerResetRequested{false};
+std::atomic<SequencerResetReason> sequencerResetReason{SequencerResetReason::Manual};
 
 namespace
 {
@@ -18,7 +19,7 @@ void initSequencer()
 {
     sequencerCurrentStep.store(0, std::memory_order_relaxed);
     sequencerBPM.store(120, std::memory_order_relaxed);
-    sequencerResetRequested.store(true, std::memory_order_relaxed);
+    requestSequencerReset();
 
     int activeTrackId = 0;
     auto tracks = getTracks();
@@ -52,9 +53,10 @@ bool getTrackStepState(int trackId, int index)
     return trackGetStepState(trackId, index);
 }
 
-void requestSequencerReset()
+void requestSequencerReset(SequencerResetReason reason)
 {
-    sequencerResetRequested.store(true, std::memory_order_relaxed);
+    sequencerResetReason.store(reason, std::memory_order_relaxed);
+    sequencerResetRequested.store(true, std::memory_order_release);
 }
 
 void setSequencerStepCount(int trackId, int count)
@@ -75,7 +77,7 @@ void setSequencerStepCount(int trackId, int count)
         }
         if (current != previous)
         {
-            sequencerResetRequested.store(true, std::memory_order_relaxed);
+            requestSequencerReset(SequencerResetReason::StepCountChange);
         }
     }
 }
@@ -108,5 +110,5 @@ void setActiveSequencerTrackId(int trackId)
         sequencerCurrentStep.store(0, std::memory_order_relaxed);
     }
 
-    sequencerResetRequested.store(true, std::memory_order_relaxed);
+    requestSequencerReset(SequencerResetReason::TrackSelection);
 }
