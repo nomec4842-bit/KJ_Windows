@@ -413,6 +413,11 @@ struct TrackPlaybackState {
     double compressorAttackCoeff = 0.0;
     double compressorReleaseCoeff = 0.0;
     SidechainProcessor sidechain;
+    double resetFadeGain = 1.0;
+    double resetFadeStep = 0.0;
+    int resetFadeSamples = 0;
+    bool resetScheduled = false;
+    SequencerResetReason resetReason = SequencerResetReason::Manual;
     struct SynthVoice {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
@@ -932,7 +937,7 @@ void audioLoop() {
 
                 if (!playing) {
                     if (previousPlaying) {
-                        sequencerResetRequested.store(true, std::memory_order_relaxed);
+                        requestSequencerReset();
                     }
                     previousPlaying = false;
                     stepSampleCounter = 0.0;
@@ -952,23 +957,45 @@ void audioLoop() {
                     }
                 } else {
                     if (!previousPlaying) {
-                        sequencerResetRequested.store(true, std::memory_order_relaxed);
+                        requestSequencerReset();
                     }
                     previousPlaying = true;
 
                         if (sequencerResetRequested.exchange(false, std::memory_order_acq_rel)) {
+                            SequencerResetReason reason = sequencerResetReason.load(std::memory_order_relaxed);
                             sequencerCurrentStep.store(0, std::memory_order_relaxed);
                             stepSampleCounter = 0.0;
-                            for (auto& [_, state] : playbackStates) {
-                                state.envelope = 0.0;
-                                resetSamplePlaybackState(state);
-                                resetSynthPlaybackState(state);
-                                state.currentStep = 0;
-                                state.lastParameterStep = -1;
-                                state.stepVelocity = 1.0;
-                                state.stepPan = 0.0;
-                                state.stepPitchOffset = 0.0;
-                                state.sidechain.reset();
+
+                            if (reason == SequencerResetReason::TrackSelection) {
+                                double fadeSeconds = 0.004; // ~4ms
+                                double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+                                int fadeSamples = static_cast<int>(std::max(1.0, std::round(fadeSeconds * sr)));
+                                double fadeStep = 1.0 / static_cast<double>(fadeSamples);
+
+                                for (auto& [_, state] : playbackStates) {
+                                    state.resetScheduled = true;
+                                    state.resetFadeGain = 1.0;
+                                    state.resetFadeSamples = fadeSamples;
+                                    state.resetFadeStep = fadeStep;
+                                    state.resetReason = reason;
+                                }
+                            } else {
+                                for (auto& [_, state] : playbackStates) {
+                                    state.resetScheduled = false;
+                                    state.resetFadeGain = 1.0;
+                                    state.resetFadeSamples = 0;
+                                    state.resetFadeStep = 0.0;
+                                    state.resetReason = reason;
+                                    state.envelope = 0.0;
+                                    resetSamplePlaybackState(state);
+                                    resetSynthPlaybackState(state);
+                                    state.currentStep = 0;
+                                    state.lastParameterStep = -1;
+                                    state.stepVelocity = 1.0;
+                                    state.stepPan = 0.0;
+                                    state.stepPitchOffset = 0.0;
+                                    state.sidechain.reset();
+                                }
                             }
                         }
 
@@ -1345,6 +1372,36 @@ void audioLoop() {
                                 trackRight = filteredRight * (1.0 - state.formantBlend) + trackRight * state.formantBlend;
                                 state.formantStateL = filteredLeft;
                                 state.formantStateR = filteredRight;
+                            }
+                        }
+
+                        if (state.resetScheduled) {
+                            trackLeft *= state.resetFadeGain;
+                            trackRight *= state.resetFadeGain;
+
+                            if (state.resetFadeSamples > 0) {
+                                state.resetFadeGain = std::max(0.0, state.resetFadeGain - state.resetFadeStep);
+                                --state.resetFadeSamples;
+                            }
+
+                            bool fadeComplete = (state.resetFadeSamples <= 0) || (state.resetFadeGain <= 1e-6);
+                            if (fadeComplete) {
+                                trackLeft = 0.0;
+                                trackRight = 0.0;
+                                state.envelope = 0.0;
+                                resetSamplePlaybackState(state);
+                                resetSynthPlaybackState(state);
+                                state.currentStep = 0;
+                                state.lastParameterStep = -1;
+                                state.stepVelocity = 1.0;
+                                state.stepPan = 0.0;
+                                state.stepPitchOffset = 0.0;
+                                state.sidechain.reset();
+                                state.resetScheduled = false;
+                                state.resetFadeGain = 1.0;
+                                state.resetFadeStep = 0.0;
+                                state.resetFadeSamples = 0;
+                                state.resetReason = SequencerResetReason::Manual;
                             }
                         }
 
