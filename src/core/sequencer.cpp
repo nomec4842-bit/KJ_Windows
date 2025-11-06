@@ -100,15 +100,12 @@ int getActiveSequencerTrackId()
 
 void setActiveSequencerTrackId(int trackId)
 {
-    int validatedId = trackGetStepCount(trackId) > 0 ? trackId : 0;
-    gActiveTrackId.store(validatedId, std::memory_order_relaxed);
-
-    int stepCount = getSequencerStepCount(validatedId);
-    int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
-    if (currentStep >= stepCount)
+    if (trackId > 0 && trackGetStepCount(trackId) > 0)
     {
-        sequencerCurrentStep.store(0, std::memory_order_relaxed);
+        gActiveTrackId.store(trackId, std::memory_order_relaxed);
     }
-
-    requestSequencerReset(SequencerResetReason::TrackSelection);
+    else
+    {
+        gActiveTrackId.store(0, std::memory_order_relaxed);
+    }
 }
