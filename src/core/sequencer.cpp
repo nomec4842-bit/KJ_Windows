@@ -73,11 +73,8 @@ void setSequencerStepCount(int trackId, int count)
         int currentStep = sequencerCurrentStep.load(std::memory_order_relaxed);
         if (currentStep >= current)
         {
-            sequencerCurrentStep.store(0, std::memory_order_relaxed);
-        }
-        if (current != previous)
-        {
-            requestSequencerReset(SequencerResetReason::StepCountChange);
+            int clampedStep = current > 0 ? std::min(currentStep, current - 1) : 0;
+            sequencerCurrentStep.store(clampedStep, std::memory_order_relaxed);
         }
     }
 }
