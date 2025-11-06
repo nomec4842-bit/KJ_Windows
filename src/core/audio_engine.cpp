@@ -873,11 +873,43 @@ void audioLoop() {
                 }
             }
 
-            for (const auto& trackInfo : trackInfos) {
-                auto& state = playbackStates[trackInfo.id];
+            for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
+                const auto& trackInfo = trackInfos[trackIndex];
+                int trackStepCount = trackIndex < trackStepCounts.size() ? trackStepCounts[trackIndex] : 0;
+                auto [stateIt, inserted] = playbackStates.try_emplace(trackInfo.id);
+                auto& state = stateIt->second;
                 TrackType previousType = state.type;
-                bool typeChanged = previousType != trackInfo.type;
+                bool typeChanged = inserted || previousType != trackInfo.type;
                 state.type = trackInfo.type;
+
+                if (inserted) {
+                    int globalStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+                    if (globalStep < 0) {
+                        globalStep = 0;
+                    }
+                    if (trackStepCount > 0) {
+                        state.currentStep = globalStep % trackStepCount;
+                    } else {
+                        state.currentStep = 0;
+                    }
+
+                    resetSamplePlaybackState(state);
+                    resetSynthPlaybackState(state);
+                    state.envelope = 0.0;
+                    state.pitchEnvelope = 0.0;
+                    state.currentMidiNote = 69;
+                    state.currentFrequency = midiNoteToFrequency(69);
+                    state.lastParameterStep = -1;
+                    state.stepVelocity = 1.0;
+                    state.stepPan = 0.0;
+                    state.stepPitchOffset = 0.0;
+                    state.resetScheduled = false;
+                    state.resetFadeGain = 1.0;
+                    state.resetFadeStep = 0.0;
+                    state.resetFadeSamples = 0;
+                    state.resetReason = SequencerResetReason::Manual;
+                    state.sidechain.reset();
+                }
 
                 if (trackInfo.type == TrackType::Sample) {
                     auto sampleBuffer = trackGetSampleBuffer(trackInfo.id);
