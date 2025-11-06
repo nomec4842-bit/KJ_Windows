@@ -284,32 +284,41 @@ double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack,
     double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     double value = currentValue;
     double safeSustain = std::clamp(sustain, 0.0, 1.0);
-    auto advanceLinear = [&](double target, double timeSeconds, bool rising) {
+    auto advanceCurved = [&](double target, double timeSeconds) {
         if (timeSeconds <= 0.0)
         {
             value = target;
             return true;
         }
-        double step = std::abs(target - value) / (timeSeconds * sr);
-        if (step <= 0.0)
-            step = 1.0 / (timeSeconds * sr);
-        if (rising)
+
+        double totalSamples = std::max(timeSeconds * sr, 1.0);
+        constexpr double epsilon = 1e-5;
+        double coefficient = std::exp(std::log(epsilon) / totalSamples);
+        if (!std::isfinite(coefficient) || coefficient < 0.0 || coefficient >= 1.0)
         {
-            value += step;
-            if (value >= target)
-            {
-                value = target;
-                return true;
-            }
+            coefficient = 0.0;
         }
-        else
+
+        double delta = (target - value) * (1.0 - coefficient);
+        if (!std::isfinite(delta))
         {
-            value -= step;
-            if (value <= target)
-            {
-                value = target;
-                return true;
-            }
+            value = target;
+            return true;
+        }
+
+        double next = value + delta;
+        if (target >= value)
+            next = std::min(next, target);
+        else
+            next = std::max(next, target);
+
+        value = next;
+
+        double tolerance = std::max(1e-5, std::abs(target) * 1e-5);
+        if (std::abs(value - target) <= tolerance)
+        {
+            value = target;
+            return true;
         }
         return false;
     };
@@ -320,18 +329,18 @@ double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack,
         value = 0.0;
         break;
     case EnvelopeStage::Attack:
-        if (advanceLinear(1.0, attack, true))
+        if (advanceCurved(1.0, attack))
             stage = EnvelopeStage::Decay;
         break;
     case EnvelopeStage::Decay:
-        if (advanceLinear(safeSustain, decay, false))
+        if (advanceCurved(safeSustain, decay))
             stage = EnvelopeStage::Sustain;
         break;
     case EnvelopeStage::Sustain:
         value = safeSustain;
         break;
     case EnvelopeStage::Release:
-        if (advanceLinear(0.0, release, false))
+        if (advanceCurved(0.0, release))
         {
             stage = EnvelopeStage::Idle;
             value = 0.0;
