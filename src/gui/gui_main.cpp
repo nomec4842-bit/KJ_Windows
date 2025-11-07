@@ -1198,6 +1198,37 @@ bool pointInRect(const RECT& rect, int x, int y)
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+template <typename Options, typename Predicate>
+bool computeDropdownBoundsIf(const Options& options, RECT& bounds, Predicate predicate)
+{
+    bool hasBounds = false;
+    for (const auto& option : options)
+    {
+        if (!predicate(option))
+            continue;
+
+        if (!hasBounds)
+        {
+            bounds = option.rect;
+            hasBounds = true;
+        }
+        else
+        {
+            bounds.left = std::min(bounds.left, option.rect.left);
+            bounds.top = std::min(bounds.top, option.rect.top);
+            bounds.right = std::max(bounds.right, option.rect.right);
+            bounds.bottom = std::max(bounds.bottom, option.rect.bottom);
+        }
+    }
+    return hasBounds;
+}
+
+template <typename Options>
+bool computeDropdownBounds(const Options& options, RECT& bounds)
+{
+    return computeDropdownBoundsIf(options, bounds, [](const auto&) { return true; });
+}
+
 const Track* findTrackById(const std::vector<Track>& tracks, int trackId)
 {
     auto it = std::find_if(tracks.begin(), tracks.end(), [trackId](const Track& track) {
@@ -5516,12 +5547,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 }
             }
 
+            RECT dropdownBounds;
+            if (computeDropdownBounds(gAudioDeviceOptions, dropdownBounds) && pointInRect(dropdownBounds, x, y))
+            {
+                return 0;
+            }
+
             if (!pointInRect(audioDeviceButton, x, y))
             {
                 audioDeviceDropdownOpen = false;
                 waveDropdownOpen = false;
                 waveDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
             }
         }
 
@@ -5603,6 +5641,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     return 0;
                 }
             }
+
+            RECT dropdownBounds;
+            if (computeDropdownBounds(gWaveOptions, dropdownBounds) && pointInRect(dropdownBounds, x, y))
+            {
+                return 0;
+            }
         }
 
         if (openTrackTypeTrackId != 0)
@@ -5621,6 +5665,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
+            }
+
+            RECT dropdownBounds;
+            if (computeDropdownBoundsIf(gTrackTypeDropdownOptions, dropdownBounds,
+                                        [trackId = openTrackTypeTrackId](const TrackTypeDropdownOption& option) {
+                                            return option.trackId == trackId;
+                                        }) &&
+                pointInRect(dropdownBounds, x, y))
+            {
+                return 0;
             }
         }
 
@@ -5813,6 +5867,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             openTrackTypeTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
 
         if (waveDropdownWasOpen && waveDropdownOpen && waveDropdownTrackId == previousWaveDropdownTrack)
@@ -5820,6 +5875,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
 
         if (pointInRect(playButton, x, y))
