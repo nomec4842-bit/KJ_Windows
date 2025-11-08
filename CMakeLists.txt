@@ -25,9 +25,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+add_subdirectory(external/vst3sdk)
 add_subdirectory(src/core)
 add_subdirectory(src/gui)
 
 add_executable(KJ src/main.cpp)
-target_include_directories(KJ PRIVATE include)
-target_link_libraries(KJ PRIVATE kj_core kj_gui)
+target_include_directories(KJ PRIVATE include ${CMAKE_SOURCE_DIR}/external/vst3sdk)
+target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
+target_link_libraries(KJ PRIVATE kj_core kj_gui sdk)

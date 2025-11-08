@@ -7,6 +7,7 @@
 #include "gui/menu_commands.h"
 #include "gui/compressor_window.h"
 #include "gui/waveform_window.h"
+#include "hosting/VST3Host.h"
 #include "wdl/lice/lice.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,6 +27,7 @@
 #include <filesystem>
 #include <cmath>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -146,7 +148,7 @@ constexpr int kAudioDeviceDropdownOptionHeight = 24;
 constexpr int kWaveDropdownSpacing = 4;
 constexpr int kWaveDropdownOptionHeight = 24;
 
-const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample};
+const std::array<TrackType, 3> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample, TrackType::VST};
 const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, SynthWaveType::Square,
                                                         SynthWaveType::Saw, SynthWaveType::Triangle};
 
@@ -178,6 +180,7 @@ LONG computeDropdownStartTop(const RECT& anchor, int optionCount, int optionHeig
 
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
+RECT loadVstButton = {200, 40, 340, 110};
 RECT waveSelectButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
@@ -1250,6 +1253,8 @@ std::string trackTypeToString(TrackType type)
         return "Synth";
     case TrackType::Sample:
         return "Sample";
+    case TrackType::VST:
+        return "VST";
     }
     return "Unknown";
 }
@@ -5218,22 +5223,28 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         fallbackTrack.synthRelease = trackGetSynthRelease(activeTrackId);
         fallbackTrack.sampleAttack = trackGetSampleAttack(activeTrackId);
         fallbackTrack.sampleRelease = trackGetSampleRelease(activeTrackId);
+        fallbackTrack.vstHost = trackGetVstHost(activeTrackId);
         activeTrackPtr = &fallbackTrack;
     }
 
     bool showSampleLoader = false;
+    bool showVstLoader = false;
     bool showWaveSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
     if (activeTrackPtr)
     {
-        if (activeTrackPtr->type == TrackType::Sample)
+        switch (activeTrackPtr->type)
         {
+        case TrackType::Sample:
             showSampleLoader = true;
-        }
-        else if (activeTrackPtr->type == TrackType::Synth)
-        {
+            break;
+        case TrackType::Synth:
             showWaveSelector = true;
             activeWaveType = activeTrackPtr->synthWaveType;
+            break;
+        case TrackType::VST:
+            showVstLoader = true;
+            break;
         }
     }
 
@@ -5248,6 +5259,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         drawButton(surface, loadSampleButton,
                    RGB(50, 50, 50), RGB(120, 120, 120),
                    "Load Sample");
+    }
+    else if (showVstLoader)
+    {
+        drawButton(surface, loadVstButton,
+                   RGB(50, 50, 50), RGB(120, 120, 120),
+                   "Load VST");
     }
     else if (showWaveSelector)
     {
@@ -5607,16 +5624,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         bool showSampleLoader = false;
+        bool showVstLoader = false;
         bool showWaveSelector = false;
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
         {
             showSampleLoader = activeTrack->type == TrackType::Sample;
+            showVstLoader = activeTrack->type == TrackType::VST;
             showWaveSelector = activeTrack->type == TrackType::Synth;
         }
         else if (activeTrackId > 0)
         {
             TrackType trackType = trackGetType(activeTrackId);
             showSampleLoader = trackType == TrackType::Sample;
+            showVstLoader = trackType == TrackType::VST;
             showWaveSelector = trackType == TrackType::Synth;
         }
 
@@ -5912,6 +5932,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                                 MB_OK | MB_ICONERROR);
                 }
                 InvalidateRect(hwnd, nullptr, FALSE);
+            }
+
+            return 0;
+        }
+
+        if (showVstLoader && pointInRect(loadVstButton, x, y))
+        {
+            wchar_t fileBuffer[MAX_PATH] = {0};
+            OPENFILENAMEW ofn = {0};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"VST3 Plug-ins\0*.vst3\0All Files\0*.*\0";
+            ofn.lpstrFile = fileBuffer;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            ofn.lpstrDefExt = L"vst3";
+
+            if (GetOpenFileNameW(&ofn))
+            {
+                std::filesystem::path selectedPath(fileBuffer);
+                auto host = trackEnsureVstHost(activeTrackId);
+                if (host && host->load(selectedPath.string()))
+                {
+                    std::cout << "Loaded plugin successfully." << std::endl;
+                }
+                else
+                {
+                    std::cout << "Failed to load VST3 plugin." << std::endl;
+                }
             }
 
             return 0;

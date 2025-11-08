@@ -7,10 +7,16 @@
 
 struct SampleBuffer;
 
+namespace kj
+{
+class VST3Host;
+}
+
 enum class TrackType
 {
     Synth,
     Sample,
+    VST,
 };
 
 enum class SynthWaveType
@@ -57,6 +63,7 @@ struct Track
     float synthRelease = 0.3f;
     float sampleAttack = 0.005f;
     float sampleRelease = 0.3f;
+    std::shared_ptr<kj::VST3Host> vstHost;
 };
 
 constexpr float kTrackStepVelocityMin = 0.0f;
@@ -81,6 +88,9 @@ void trackSetName(int trackId, const std::string& name);
 
 TrackType trackGetType(int trackId);
 void trackSetType(int trackId, TrackType type);
+
+std::shared_ptr<kj::VST3Host> trackGetVstHost(int trackId);
+std::shared_ptr<kj::VST3Host> trackEnsureVstHost(int trackId);
 
 SynthWaveType trackGetSynthWaveType(int trackId);
 void trackSetSynthWaveType(int trackId, SynthWaveType type);
