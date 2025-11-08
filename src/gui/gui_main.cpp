@@ -6142,3 +6142,7 @@ void initGUI()
     }
 }
 
+
+extern "C" void requestMainMenuRefresh() {
+    // placeholder
+}
