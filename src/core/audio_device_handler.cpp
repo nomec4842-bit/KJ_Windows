@@ -167,6 +167,8 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
     std::wstring resolvedDeviceId;
     std::wstring resolvedDeviceName;
     bool success = false;
+    bool fallbackUsed = false;
+    std::wstring selectedDeviceName;
 
     do {
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
@@ -183,9 +185,57 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
         } else {
             hr = enumerator->GetDevice(deviceId.c_str(), &device);
         }
+
         if (FAILED(hr) || !device) {
             logFailure(getDeviceAction, hr);
-            break;
+
+            if (deviceId.empty()) {
+                IMMDeviceCollection* collection = nullptr;
+                hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+                if (FAILED(hr) || !collection) {
+                    logFailure(L"IMMDeviceEnumerator::EnumAudioEndpoints", hr);
+                    break;
+                }
+
+                UINT count = 0;
+                hr = collection->GetCount(&count);
+                if (FAILED(hr)) {
+                    logFailure(L"IMMDeviceCollection::GetCount", hr);
+                    collection->Release();
+                    break;
+                }
+
+                if (count == 0) {
+                    logInfo(L"No active audio render devices were found");
+                    collection->Release();
+                    break;
+                }
+
+                logInfo(L"Falling back to the first available audio render device");
+
+                for (UINT index = 0; index < count; ++index) {
+                    IMMDevice* candidate = nullptr;
+                    hr = collection->Item(index, &candidate);
+                    if (FAILED(hr) || !candidate) {
+                        if (candidate) {
+                            candidate->Release();
+                        }
+                        continue;
+                    }
+                    device = candidate;
+                    fallbackUsed = true;
+                    break;
+                }
+
+                collection->Release();
+
+                if (!device) {
+                    logInfo(L"Unable to select a fallback audio render device");
+                    break;
+                }
+            } else {
+                break;
+            }
         }
 
         LPWSTR resolvedId = nullptr;
@@ -221,12 +271,14 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
             break;
         }
 
-        mixFormat->wFormatTag = WAVE_FORMAT_PCM;
-        mixFormat->nChannels = 2;
-        mixFormat->nSamplesPerSec = 44100;
-        mixFormat->wBitsPerSample = 16;
-        mixFormat->nBlockAlign = (mixFormat->wBitsPerSample / 8) * mixFormat->nChannels;
-        mixFormat->nAvgBytesPerSec = mixFormat->nSamplesPerSec * mixFormat->nBlockAlign;
+        if (mixFormat->nChannels == 0) {
+            logInfo(L"Mix format reported zero channels, defaulting to stereo output");
+            mixFormat->nChannels = 2;
+            mixFormat->wBitsPerSample = 16;
+            mixFormat->nSamplesPerSec = 44100;
+            mixFormat->nBlockAlign = (mixFormat->wBitsPerSample / 8) * mixFormat->nChannels;
+            mixFormat->nAvgBytesPerSec = mixFormat->nSamplesPerSec * mixFormat->nBlockAlign;
+        }
 
         hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, kStreamFlags, kBufferDuration, 0,
                                  mixFormat, NULL);
@@ -271,9 +323,14 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
             if (deviceName_.empty()) {
                 deviceName_ = L"Audio Device";
             }
+            selectedDeviceName = deviceName_;
         }
 
         logInfo(L"Audio device initialization succeeded");
+        if (fallbackUsed) {
+            std::wstring message = L"Using fallback audio device: " + selectedDeviceName;
+            logInfo(message);
+        }
 
         enumerator = nullptr;
         device = nullptr;
@@ -329,9 +386,15 @@ void AudioDeviceHandler::shutdown() {
 bool AudioDeviceHandler::start() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (initThreadActive_ && !initCompleted_) {
+        logInfo(L"Audio client start requested while initialization is still running");
         return false;
     }
     if (!initialized_ || !client_) {
+        logInfo(L"Audio client start requested before initialization completed successfully");
+        return false;
+    }
+    if (!mixFormat_ || mixFormat_->nChannels == 0) {
+        logInfo(L"Audio client start aborted because the output format has no channels");
         return false;
     }
     HRESULT hr = client_->Start();
