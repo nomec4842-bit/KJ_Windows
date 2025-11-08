@@ -9,6 +9,12 @@
 #include "gui/waveform_window.h"
 #include "wdl/lice/lice.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <commdlg.h>
 #include <commctrl.h>
