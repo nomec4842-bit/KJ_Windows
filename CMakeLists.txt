@@ -25,11 +25,32 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+add_executable(KJ src/main.cpp)
+target_include_directories(KJ PRIVATE include)
+target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
+
 add_subdirectory(external/vst3sdk)
+
+# === VST3 SDK Integration ===
+set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
+
+target_include_directories(KJ PRIVATE
+    ${VST3_SDK_DIR}
+    ${VST3_SDK_DIR}/pluginterfaces
+    ${VST3_SDK_DIR}/base
+    ${VST3_SDK_DIR}/base/source
+    ${VST3_SDK_DIR}/public.sdk/source/vst
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting
+    ${VST3_SDK_DIR}/public.sdk/source/vst/utility
+)
+
+target_link_libraries(KJ PRIVATE sdk)
+
+# Comment: Explicit subdirectories guarantee that headers such as
+# 'pluginterfaces/base/funknown.h' and 'public.sdk/source/vst/hosting/module.h'
+# are discoverable by the compiler regardless of relative include depth.
+
 add_subdirectory(src/core)
 add_subdirectory(src/gui)
 
-add_executable(KJ src/main.cpp)
-target_include_directories(KJ PRIVATE include ${CMAKE_SOURCE_DIR}/external/vst3sdk)
-target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
-target_link_libraries(KJ PRIVATE kj_core kj_gui sdk)
+target_link_libraries(KJ PRIVATE kj_core kj_gui)
