@@ -22,7 +22,7 @@ public:
     ~VST3Host();
 
     bool load(const std::string& path);
-    void showPluginUI();
+    void showPluginUI(void* parentWindowHandle);
     void unload();
 
     bool prepare(double sampleRate, int maxBlockSize);
