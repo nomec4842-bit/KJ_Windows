@@ -1,5 +1,8 @@
 #include "core/audio_device_handler.h"
 
+std::atomic<bool> AudioDeviceHandler::streamStarted_{false};
+std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
+
 #if defined(_WIN32) || defined(_MSC_VER) || defined(__MINGW32__)
 
 #include <functiondiscoverykeys_devpkey.h>
@@ -52,6 +55,76 @@ AudioDeviceHandler::AudioDeviceHandler() = default;
 
 AudioDeviceHandler::~AudioDeviceHandler() {
     shutdown();
+}
+
+void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
+    (void)callback;
+    (void)userData;
+    callbackInvoked_.store(false, std::memory_order_relaxed);
+}
+
+AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
+    return nullptr;
+}
+
+void* AudioDeviceHandler::streamCallbackContext() const {
+    return nullptr;
+}
+
+void AudioDeviceHandler::notifyCallbackExecuted() {
+    callbackInvoked_.store(true, std::memory_order_release);
+}
+
+void AudioDeviceHandler::resetCallbackMonitor() {
+    streamStarted_.store(false, std::memory_order_release);
+    callbackInvoked_.store(false, std::memory_order_release);
+}
+
+bool AudioDeviceHandler::streamStartedSuccessfully() {
+    return streamStarted_.load(std::memory_order_acquire);
+}
+
+bool AudioDeviceHandler::callbackHasFired() {
+    return callbackInvoked_.load(std::memory_order_acquire);
+}
+
+void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    callback_ = callback;
+    callbackContext_ = userData;
+    callbackInvoked_.store(false, std::memory_order_relaxed);
+    if (callback_) {
+        logInfo(L"Registered audio stream callback");
+    } else {
+        logInfo(L"Cleared audio stream callback");
+    }
+}
+
+AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return callback_;
+}
+
+void* AudioDeviceHandler::streamCallbackContext() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return callbackContext_;
+}
+
+void AudioDeviceHandler::notifyCallbackExecuted() {
+    callbackInvoked_.store(true, std::memory_order_release);
+}
+
+void AudioDeviceHandler::resetCallbackMonitor() {
+    streamStarted_.store(false, std::memory_order_release);
+    callbackInvoked_.store(false, std::memory_order_release);
+}
+
+bool AudioDeviceHandler::streamStartedSuccessfully() {
+    return streamStarted_.load(std::memory_order_acquire);
+}
+
+bool AudioDeviceHandler::callbackHasFired() {
+    return callbackInvoked_.load(std::memory_order_acquire);
 }
 
 void AudioDeviceHandler::FormatDeleter::operator()(WAVEFORMATEX* format) const {
@@ -381,6 +454,7 @@ void AudioDeviceHandler::shutdown() {
     if (pendingThread.joinable()) {
         pendingThread.join();
     }
+    streamStarted_.store(false, std::memory_order_release);
 }
 
 bool AudioDeviceHandler::start() {
@@ -403,6 +477,7 @@ bool AudioDeviceHandler::start() {
         return false;
     }
     logInfo(L"Audio client started successfully");
+    streamStarted_.store(true, std::memory_order_release);
     return true;
 }
 
@@ -416,6 +491,7 @@ void AudioDeviceHandler::stop() {
             logInfo(L"Audio client stopped");
         }
     }
+    streamStarted_.store(false, std::memory_order_release);
 }
 
 HRESULT AudioDeviceHandler::currentPadding(UINT32* padding) const {
@@ -517,6 +593,37 @@ AudioDeviceHandler::AudioDeviceHandler() = default;
 
 AudioDeviceHandler::~AudioDeviceHandler() {
     shutdown();
+}
+
+void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
+    (void)callback;
+    (void)userData;
+    callbackInvoked_.store(false, std::memory_order_relaxed);
+}
+
+AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
+    return nullptr;
+}
+
+void* AudioDeviceHandler::streamCallbackContext() const {
+    return nullptr;
+}
+
+void AudioDeviceHandler::notifyCallbackExecuted() {
+    callbackInvoked_.store(true, std::memory_order_release);
+}
+
+void AudioDeviceHandler::resetCallbackMonitor() {
+    streamStarted_.store(false, std::memory_order_release);
+    callbackInvoked_.store(false, std::memory_order_release);
+}
+
+bool AudioDeviceHandler::streamStartedSuccessfully() {
+    return streamStarted_.load(std::memory_order_acquire);
+}
+
+bool AudioDeviceHandler::callbackHasFired() {
+    return callbackInvoked_.load(std::memory_order_acquire);
 }
 
 void AudioDeviceHandler::FormatDeleter::operator()(WAVEFORMATEX* format) const {

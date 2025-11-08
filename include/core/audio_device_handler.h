@@ -34,6 +34,7 @@ struct WAVEFORMATEX {
 };
 #endif
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -68,6 +69,16 @@ public:
     const WAVEFORMATEX* format() const { return mixFormat_.get(); }
     UINT32 bufferFrameCount() const { return bufferFrameCount_; }
 
+    using AudioStreamCallback = void (*)(BYTE* buffer, UINT32 frameCount, const WAVEFORMATEX* format, void* userData);
+
+    void registerStreamCallback(AudioStreamCallback callback, void* userData);
+    AudioStreamCallback streamCallback() const;
+    void* streamCallbackContext() const;
+    void notifyCallbackExecuted();
+    static void resetCallbackMonitor();
+    static bool streamStartedSuccessfully();
+    static bool callbackHasFired();
+
     HRESULT currentPadding(UINT32* padding) const;
     HRESULT getBuffer(UINT32 frameCount, BYTE** data);
     void releaseBuffer(UINT32 frameCount);
@@ -98,5 +109,11 @@ private:
     bool initCompleted_ = false;
     bool initSuccess_ = false;
     bool cancelRequested_ = false;
+
+    AudioStreamCallback callback_ = nullptr;
+    void* callbackContext_ = nullptr;
+
+    static std::atomic<bool> streamStarted_;
+    static std::atomic<bool> callbackInvoked_;
 };
 
