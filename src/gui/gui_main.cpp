@@ -1,6 +1,3 @@
-#define UNICODE
-#define _UNICODE
-
 #include "gui/gui_main.h"
 #include "core/audio_engine.h"
 #include "core/project_io.h"
@@ -6139,10 +6136,5 @@ void initGUI()
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-}
-
-void requestMainMenuRefresh()
-{
-    // TODO: trigger main menu refresh or mark menu dirty
 }
 
