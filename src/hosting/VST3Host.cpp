@@ -160,8 +160,37 @@ void VST3Host::openEditor(void* hwnd)
 
 void VST3Host::showPluginUI()
 {
-    std::cout << "[KJ] Displaying plugin GUI window...\n";
-    // TODO: integrate IPlugView / VSTGUI later
+    if (!controller_)
+    {
+        std::cerr << "[KJ] No controller available for plugin GUI.\n";
+        return;
+    }
+
+    if (!view_)
+    {
+        view_ = controller_->createView(ViewType::kEditor);
+        if (!view_)
+        {
+            std::cerr << "[KJ] Plugin has no GUI view.\n";
+            return;
+        }
+    }
+
+    HWND parentWindow = GetForegroundWindow();
+    view_->attached(parentWindow, "HWND");
+
+    ViewRect rect{};
+    if (view_->getSize(&rect) == kResultTrue)
+    {
+        view_->onSize(&rect);
+    }
+
+    HWND hPlugin = static_cast<HWND>(parentWindow);
+    ShowWindow(hPlugin, SW_SHOW);
+    UpdateWindow(hPlugin);
+    SetFocus(hPlugin);
+
+    std::cout << "[KJ] Plugin GUI displayed.\n";
 }
 
 } // namespace kj
