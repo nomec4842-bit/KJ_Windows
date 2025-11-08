@@ -36,77 +36,88 @@ bool VST3Host::load(const std::string& pluginPath)
     }
 
     auto factory = module->getFactory();
-    auto infos = factory.classInfos();
+    auto classes = factory->classInfos();
+    const VST3::Hosting::ClassInfo* componentClass = nullptr;
+    const VST3::Hosting::ClassInfo* controllerClass = nullptr;
 
-    for (auto& info : infos)
+    for (const auto& c : classes)
     {
-        if (info.category() == kVstAudioEffectClass)
+        if (c.category() == kVstAudioEffectClass)
+            componentClass = &c;
+        else if (c.category() == kVstComponentControllerClass)
+            controllerClass = &c;
+    }
+
+    if (!componentClass)
+    {
+        std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
+        return false;
+    }
+
+    auto component = factory.createInstance<IComponent>(componentClass->ID());
+    if (!component)
+    {
+        std::cerr << "Failed to instantiate component: " << componentClass->name() << std::endl;
+        return false;
+    }
+
+    Steinberg::FObject hostContext;
+    if (component->initialize(&hostContext) != kResultOk)
+    {
+        std::cerr << "[KJ] Component initialization failed.\n";
+        return false;
+    }
+
+    auto controller = controllerClass ? factory.createInstance<IEditController>(controllerClass->ID()) : nullptr;
+    if (controller)
+    {
+        if (controller->initialize(&hostContext) != kResultOk)
         {
-            auto component = factory.createInstance<IComponent>(info.ID());
-            if (!component)
-            {
-                std::cerr << "Failed to instantiate component: " << info.name() << std::endl;
-                return false;
-            }
-
-            auto controller = factory.createInstance<IEditController>(info.ID());
-            if (!controller)
-            {
-                std::cerr << "[KJ] Failed to create IEditController.\n";
-                return false;
-            }
-
-            Steinberg::FObject hostContext;
-            if (component->initialize(&hostContext) != kResultOk)
-            {
-                std::cerr << "[KJ] Component initialization failed.\n";
-                return false;
-            }
-
-            if (controller->initialize(&hostContext) != kResultOk)
-            {
-                std::cerr << "[KJ] Controller initialization failed.\n";
-                return false;
-            }
-
-            Steinberg::FUID controllerClassId;
-            if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
-            {
-                Steinberg::FUID::String classIdString {};
-                if (persistent->getClassID(classIdString) == kResultOk)
-                {
-                    controllerClassId.fromString(classIdString);
-                }
-            }
-
-            if (!controllerClassId.isValid())
-            {
-                controllerClassId = Steinberg::FUID::fromTUID(info.ID().data());
-            }
-
-            if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
-            {
-                componentImpl->setControllerClass(controllerClassId);
-            }
-
-            FUnknownPtr<IAudioProcessor> processor(component);
-            if (processor)
-                std::cout << "AudioProcessor loaded successfully\n";
-            if (controller)
-                std::cout << "EditController loaded successfully\n";
-
-            module_ = module;
-            component_ = component;
-            processor_ = processor;
-            controller_ = controller;
-            view_ = nullptr;
-
-            return true;
+            std::cerr << "[KJ] Controller initialization failed.\n";
+            return false;
         }
     }
 
-    std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
-    return false;
+    Steinberg::FUID controllerClassId;
+    if (controller)
+    {
+        if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
+        {
+            Steinberg::FUID::String classIdString {};
+            if (persistent->getClassID(classIdString) == kResultOk)
+            {
+                controllerClassId.fromString(classIdString);
+            }
+        }
+    }
+
+    if (!controllerClassId.isValid() && controllerClass)
+    {
+        controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
+    }
+
+    if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
+    {
+        if (controllerClassId.isValid())
+            componentImpl->setControllerClass(controllerClassId);
+    }
+
+    FUnknownPtr<IAudioProcessor> processor(component);
+    if (processor)
+        std::cout << "AudioProcessor loaded successfully\n";
+    if (controller)
+        std::cout << "EditController loaded successfully\n";
+
+    module_ = module;
+    component_ = component;
+    processor_ = processor;
+    controller_ = controller;
+    view_ = nullptr;
+
+    if (!controller_)
+        std::cerr << "[KJ] Plugin has no controller class, skipping GUI.\n";
+
+    return true;
 }
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
