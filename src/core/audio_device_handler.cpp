@@ -7,12 +7,46 @@ std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
 
 #include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
+#include <mmreg.h>
+#include <ksmedia.h>
 #include <iomanip>
 #include <sstream>
 
 namespace {
 constexpr DWORD kStreamFlags = 0;
 constexpr REFERENCE_TIME kBufferDuration = 10000000; // 1 second
+
+bool isFloatFormat(const WAVEFORMATEX* format) {
+    if (!format) {
+        return false;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT && format->wBitsPerSample == 32) {
+        return true;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= (sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))) {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) &&
+               extensible->Format.wBitsPerSample == 32;
+    }
+    return false;
+}
+
+bool isPcm16Format(const WAVEFORMATEX* format) {
+    if (!format) {
+        return false;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_PCM && format->wBitsPerSample == 16) {
+        return true;
+    }
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= (sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))) {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) &&
+               extensible->Format.wBitsPerSample == 16;
+    }
+    return false;
+}
 
 void logMessage(const std::wstring& message) {
     std::wstring formatted = L"[AudioDeviceHandler] " + message + L"\n";
@@ -130,6 +164,7 @@ void AudioDeviceHandler::resetStateLocked() {
     deviceName_.clear();
     activeRenderBuffer_ = nullptr;
     activeRenderFrameCount_ = 0;
+    activeRenderBufferSizeBytes_ = 0;
     bufferPendingRelease_ = false;
 }
 
@@ -320,8 +355,79 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
             logInfo(L"Mix format reported zero channels, defaulting to stereo output");
             mixFormat->nChannels = 2;
             mixFormat->wBitsPerSample = 16;
+        }
+        if (mixFormat->nSamplesPerSec == 0) {
+            logInfo(L"Mix format reported zero sample rate, defaulting to 44100 Hz");
             mixFormat->nSamplesPerSec = 44100;
+        }
+        if (mixFormat->nBlockAlign == 0 && mixFormat->nChannels > 0) {
             mixFormat->nBlockAlign = (mixFormat->wBitsPerSample / 8) * mixFormat->nChannels;
+        }
+        if (mixFormat->nAvgBytesPerSec == 0) {
+            mixFormat->nAvgBytesPerSec = mixFormat->nSamplesPerSec * mixFormat->nBlockAlign;
+        }
+
+        WAVEFORMATEX* originalMixFormat = mixFormat;
+        bool originalMixFormatUsed = true;
+        WAVEFORMATEX* supportedClosest = nullptr;
+
+        if (!isFloatFormat(mixFormat)) {
+            UINT16 desiredChannels = mixFormat->nChannels ? mixFormat->nChannels : 2;
+            DWORD desiredSampleRate = mixFormat->nSamplesPerSec ? mixFormat->nSamplesPerSec : 44100;
+
+            WAVEFORMATEX desiredFloat{};
+            desiredFloat.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+            desiredFloat.nChannels = desiredChannels;
+            desiredFloat.nSamplesPerSec = desiredSampleRate;
+            desiredFloat.wBitsPerSample = 32;
+            desiredFloat.nBlockAlign = desiredFloat.nChannels * (desiredFloat.wBitsPerSample / 8);
+            desiredFloat.nAvgBytesPerSec = desiredFloat.nSamplesPerSec * desiredFloat.nBlockAlign;
+            desiredFloat.cbSize = 0;
+
+            HRESULT supportResult = client->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, &desiredFloat, &supportedClosest);
+            if (supportResult == S_OK) {
+                WAVEFORMATEX* floatFormat = reinterpret_cast<WAVEFORMATEX*>(CoTaskMemAlloc(sizeof(WAVEFORMATEX)));
+                if (floatFormat) {
+                    *floatFormat = desiredFloat;
+                    mixFormat = floatFormat;
+                    originalMixFormatUsed = false;
+                    std::wstringstream stream;
+                    stream << L"Using float render format: " << desiredChannels << L" channels at "
+                           << desiredSampleRate << L" Hz";
+                    logInfo(stream.str());
+                } else {
+                    logInfo(L"Failed to allocate memory for float audio format; falling back to device mix format");
+                }
+            } else if (supportResult == S_FALSE && supportedClosest) {
+                mixFormat = supportedClosest;
+                supportedClosest = nullptr;
+                originalMixFormatUsed = false;
+                std::wstringstream stream;
+                stream << L"Using closest supported audio format: " << mixFormat->nChannels
+                       << L" channels, " << mixFormat->wBitsPerSample << L" bits";
+                logInfo(stream.str());
+            } else if (FAILED(supportResult)) {
+                logFailure(L"IAudioClient::IsFormatSupported", supportResult);
+            }
+        } else {
+            std::wstringstream stream;
+            stream << L"Device mix format already uses 32-bit float with " << mixFormat->nChannels
+                   << L" channels at " << mixFormat->nSamplesPerSec << L" Hz";
+            logInfo(stream.str());
+        }
+
+        if (supportedClosest) {
+            CoTaskMemFree(supportedClosest);
+            supportedClosest = nullptr;
+        }
+        if (!originalMixFormatUsed && originalMixFormat) {
+            CoTaskMemFree(originalMixFormat);
+            originalMixFormat = nullptr;
+        }
+        if (mixFormat && mixFormat->nBlockAlign == 0 && mixFormat->nChannels > 0) {
+            mixFormat->nBlockAlign = (mixFormat->wBitsPerSample / 8) * mixFormat->nChannels;
+        }
+        if (mixFormat && mixFormat->nAvgBytesPerSec == 0) {
             mixFormat->nAvgBytesPerSec = mixFormat->nSamplesPerSec * mixFormat->nBlockAlign;
         }
 
@@ -499,6 +605,7 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
         bufferPendingRelease_ = false;
         activeRenderBuffer_ = nullptr;
         activeRenderFrameCount_ = 0;
+        activeRenderBufferSizeBytes_ = 0;
     }
     if (!streamStarted_.load(std::memory_order_acquire)) {
         logInfo(L"Render buffer requested but the audio stream has not been started."
@@ -508,6 +615,14 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
     if (SUCCEEDED(hr)) {
         activeRenderBuffer_ = *data;
         activeRenderFrameCount_ = frameCount;
+        UINT32 frameBytes = 0;
+        if (mixFormat_) {
+            frameBytes = mixFormat_->nBlockAlign;
+            if (frameBytes == 0 && mixFormat_->nChannels > 0) {
+                frameBytes = (mixFormat_->wBitsPerSample / 8) * mixFormat_->nChannels;
+            }
+        }
+        activeRenderBufferSizeBytes_ = frameBytes * frameCount;
         bufferPendingRelease_ = true;
     }
     return hr;
@@ -529,6 +644,20 @@ void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {
             logInfo(warning.str());
             framesToRelease = activeRenderFrameCount_;
         }
+        UINT32 bytesPerFrame = 0;
+        if (mixFormat_) {
+            bytesPerFrame = mixFormat_->nBlockAlign;
+            if (bytesPerFrame == 0 && mixFormat_->nChannels > 0) {
+                bytesPerFrame = (mixFormat_->wBitsPerSample / 8) * mixFormat_->nChannels;
+            }
+        }
+        UINT32 calculatedBytes = bytesPerFrame * framesToRelease;
+        if (activeRenderBufferSizeBytes_ != 0 && calculatedBytes != activeRenderBufferSizeBytes_) {
+            std::wstringstream warning;
+            warning << L"ReleaseBuffer byte count mismatch: expected " << activeRenderBufferSizeBytes_
+                    << L" bytes but calculated " << calculatedBytes << L" bytes based on format.";
+            logInfo(warning.str());
+        }
         HRESULT hr = renderClient_->ReleaseBuffer(framesToRelease, 0);
         if (FAILED(hr)) {
             logFailure(L"IAudioRenderClient::ReleaseBuffer", hr);
@@ -536,6 +665,7 @@ void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {
         bufferPendingRelease_ = false;
         activeRenderBuffer_ = nullptr;
         activeRenderFrameCount_ = 0;
+        activeRenderBufferSizeBytes_ = 0;
     }
 }
 
@@ -663,6 +793,7 @@ void AudioDeviceHandler::resetStateLocked() {
     deviceName_.clear();
     activeRenderBuffer_ = nullptr;
     activeRenderFrameCount_ = 0;
+    activeRenderBufferSizeBytes_ = 0;
     bufferPendingRelease_ = false;
 }
 
@@ -708,6 +839,7 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 /*frameCount*/, BYTE** data) {
     bufferPendingRelease_ = false;
     activeRenderBuffer_ = nullptr;
     activeRenderFrameCount_ = 0;
+    activeRenderBufferSizeBytes_ = 0;
     return static_cast<HRESULT>(0);
 }
 
@@ -715,6 +847,7 @@ void AudioDeviceHandler::releaseBuffer(UINT32 /*frameCount*/) {
     bufferPendingRelease_ = false;
     activeRenderBuffer_ = nullptr;
     activeRenderFrameCount_ = 0;
+    activeRenderBufferSizeBytes_ = 0;
 }
 
 std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderDevices() {

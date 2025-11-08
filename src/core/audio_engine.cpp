@@ -10,12 +10,16 @@
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <mmreg.h>
+#include <ksmedia.h>
 #include <thread>
 #include <chrono>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <cstring>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -54,6 +58,49 @@ static bool masterWaveformFilled = false;
 static std::mutex masterWaveformMutex;
 
 namespace {
+
+bool isFloatWaveFormat(const WAVEFORMATEX* format)
+{
+    if (!format)
+        return false;
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT && format->wBitsPerSample == 32)
+        return true;
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= (sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)))
+    {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) &&
+               extensible->Format.wBitsPerSample == 32;
+    }
+    return false;
+}
+
+bool isPcm16WaveFormat(const WAVEFORMATEX* format)
+{
+    if (!format)
+        return false;
+    if (format->wFormatTag == WAVE_FORMAT_PCM && format->wBitsPerSample == 16)
+        return true;
+    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        format->cbSize >= (sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)))
+    {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+        return IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) &&
+               extensible->Format.wBitsPerSample == 16;
+    }
+    return false;
+}
+
+UINT32 bytesPerFrame(const WAVEFORMATEX* format)
+{
+    if (!format)
+        return 0;
+    if (format->nBlockAlign != 0)
+        return format->nBlockAlign;
+    if (format->nChannels == 0 || format->wBitsPerSample == 0)
+        return 0;
+    return static_cast<UINT32>(format->nChannels) * (format->wBitsPerSample / 8);
+}
 
 std::filesystem::path getExecutableDirectory() {
     std::array<wchar_t, MAX_PATH> buffer{};
@@ -1022,7 +1069,52 @@ void audioLoop() {
                 void* context = deviceHandler->streamCallbackContext();
                 callback(data, available, format, context);
             }
-            short* samples = (short*)data;
+            BYTE* rawData = data;
+            bool bufferIsFloat = isFloatWaveFormat(format);
+            bool bufferIsPcm16 = isPcm16WaveFormat(format);
+            UINT32 channelCount = format && format->nChannels > 0 ? format->nChannels : 2;
+            if (channelCount == 0)
+                channelCount = 2;
+            UINT32 strideBytes = bytesPerFrame(format);
+            if (strideBytes == 0) {
+                UINT32 sampleSize = bufferIsFloat ? sizeof(float) : sizeof(std::int16_t);
+                strideBytes = channelCount * sampleSize;
+            }
+            float* floatSamples = bufferIsFloat ? reinterpret_cast<float*>(rawData) : nullptr;
+            std::int16_t* intSamples = bufferIsPcm16 ? reinterpret_cast<std::int16_t*>(rawData) : nullptr;
+            auto toInt16 = [](double value) -> std::int16_t {
+                double clamped = std::clamp(value, -1.0, 1.0);
+                return static_cast<std::int16_t>(std::lround(clamped * 32767.0));
+            };
+            auto writeFrame = [&](UINT32 frameIndex, double left, double right) {
+                if (bufferIsFloat && floatSamples) {
+                    UINT32 base = frameIndex * channelCount;
+                    float leftFloat = static_cast<float>(left);
+                    float rightFloat = static_cast<float>(right);
+                    if (channelCount == 1) {
+                        floatSamples[base] = (leftFloat + rightFloat) * 0.5f;
+                    } else {
+                        floatSamples[base] = leftFloat;
+                        floatSamples[base + 1] = rightFloat;
+                        for (UINT32 ch = 2; ch < channelCount; ++ch) {
+                            floatSamples[base + ch] = 0.0f;
+                        }
+                    }
+                } else if (bufferIsPcm16 && intSamples) {
+                    UINT32 base = frameIndex * channelCount;
+                    if (channelCount == 1) {
+                        intSamples[base] = toInt16((left + right) * 0.5);
+                    } else {
+                        intSamples[base] = toInt16(left);
+                        intSamples[base + 1] = toInt16(right);
+                        for (UINT32 ch = 2; ch < channelCount; ++ch) {
+                            intSamples[base + ch] = 0;
+                        }
+                    }
+                } else if (rawData && strideBytes > 0) {
+                    std::memset(rawData + static_cast<std::size_t>(frameIndex) * strideBytes, 0, strideBytes);
+                }
+            };
 #ifdef DEBUG_AUDIO
             double mixSumAbs = 0.0;
             double mixPeak = 0.0;
@@ -1733,13 +1825,11 @@ void audioLoop() {
 
                     float monoValue = static_cast<float>((leftValue + rightValue) * 0.5);
                     capturedSamples.push_back(monoValue);
-                    samples[i * 2] = static_cast<short>(leftValue * 32767.0);
-                    samples[i * 2 + 1] = static_cast<short>(rightValue * 32767.0);
+                    writeFrame(i, leftValue, rightValue);
                     continue;
                 }
                 capturedSamples.push_back(0.0f);
-                samples[i * 2] = 0;
-                samples[i * 2 + 1] = 0;
+                writeFrame(i, 0.0, 0.0);
             }
 
             if (!capturedSamples.empty())
