@@ -36,7 +36,7 @@ bool VST3Host::load(const std::string& pluginPath)
     }
 
     auto factory = module->getFactory();
-    auto classes = factory->classInfos();
+    auto classes = factory.classInfos();
     const VST3::Hosting::ClassInfo* componentClass = nullptr;
     const VST3::Hosting::ClassInfo* controllerClass = nullptr;
 
