@@ -5,20 +5,6 @@ project(KJ LANGUAGES CXX)
 # === Steinberg VST3 SDK Include Paths ===
 set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
 
-include_directories(
-    ${VST3_SDK_DIR}
-    ${VST3_SDK_DIR}/pluginterfaces
-    ${VST3_SDK_DIR}/base
-    ${VST3_SDK_DIR}/base/source
-    ${VST3_SDK_DIR}/public.sdk/source/vst
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting
-    ${VST3_SDK_DIR}/public.sdk/source/vst/utility
-)
-
-# Comment: These include directories make headers like
-# 'pluginterfaces/base/funknown.h' and 'public.sdk/source/vst/hosting/module.h'
-# visible to all targets in the project.
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -43,7 +29,12 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 add_executable(KJ src/main.cpp)
-target_include_directories(KJ PRIVATE include)
+target_include_directories(KJ PRIVATE
+    include
+    ${VST3_SDK_DIR}
+    ${VST3_SDK_DIR}/public.sdk
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting
+)
 target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
 
 add_subdirectory(external/vst3sdk)

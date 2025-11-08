@@ -4,7 +4,7 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "base/source/fobject.h" // for Steinberg::IPtr
-#include "public.sdk/source/vst/hosting/module.h" // defines Steinberg::Vst::Module
+#include "../../external/vst3sdk/public.sdk/source/vst/hosting/module.h" // defines Steinberg::Vst::Module
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 
 #include <memory>
