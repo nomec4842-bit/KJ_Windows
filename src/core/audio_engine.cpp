@@ -36,8 +36,10 @@
 #include "core/effects/sidechain_processor.h"
 
 std::atomic<bool> isPlaying = false;
-static bool running = true;
+static std::atomic<bool> running{true};
 static std::thread audioThread;
+static std::thread sequencerThread;
+static std::atomic<bool> audioSequencerReady{false};
 static std::mutex deviceMutex;
 static std::wstring requestedDeviceId;
 static std::wstring activeDeviceId;
@@ -708,6 +710,111 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
 
 } // namespace
 
+void sequencerWarmupLoop()
+{
+    using Clock = std::chrono::steady_clock;
+
+    Clock::time_point lastUpdate{};
+    double stepSampleCounter = 0.0;
+    int fallbackStep = 0;
+    bool previousPlaying = false;
+
+    while (running.load(std::memory_order_acquire))
+    {
+        if (audioSequencerReady.load(std::memory_order_acquire))
+        {
+            lastUpdate = Clock::time_point{};
+            stepSampleCounter = 0.0;
+            fallbackStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+            previousPlaying = isPlaying.load(std::memory_order_relaxed);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        auto now = Clock::now();
+        bool playing = isPlaying.load(std::memory_order_relaxed);
+
+        if (!playing)
+        {
+            if (previousPlaying)
+            {
+                requestSequencerReset();
+            }
+            previousPlaying = false;
+            stepSampleCounter = 0.0;
+            fallbackStep = 0;
+            sequencerCurrentStep.store(0, std::memory_order_relaxed);
+            lastUpdate = now;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        if (!previousPlaying)
+        {
+            requestSequencerReset();
+            previousPlaying = true;
+            stepSampleCounter = 0.0;
+            fallbackStep = sequencerCurrentStep.load(std::memory_order_relaxed);
+            lastUpdate = now;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        if (lastUpdate.time_since_epoch().count() == 0)
+        {
+            lastUpdate = now;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        double elapsedSeconds = std::chrono::duration<double>(now - lastUpdate).count();
+        lastUpdate = now;
+
+        double sampleRate = 44100.0;
+        int bpm = std::clamp(sequencerBPM.load(std::memory_order_relaxed), 30, 240);
+        double stepDurationSamples = sampleRate * 60.0 / (static_cast<double>(bpm) * 4.0);
+        if (stepDurationSamples < 1.0)
+            stepDurationSamples = 1.0;
+
+        bool resetNow = sequencerResetRequested.exchange(false, std::memory_order_acq_rel);
+        if (resetNow)
+        {
+            stepSampleCounter = 0.0;
+            fallbackStep = 0;
+            sequencerCurrentStep.store(0, std::memory_order_relaxed);
+        }
+
+        stepSampleCounter += elapsedSeconds * sampleRate;
+
+        int activeTrackId = getActiveSequencerTrackId();
+        int trackStepCount = getSequencerStepCount(activeTrackId);
+        trackStepCount = std::max(trackStepCount, 1);
+
+        if (fallbackStep >= trackStepCount)
+        {
+            fallbackStep %= trackStepCount;
+            sequencerCurrentStep.store(fallbackStep, std::memory_order_relaxed);
+        }
+
+        bool stepAdvanced = false;
+        while (stepSampleCounter >= stepDurationSamples)
+        {
+            stepSampleCounter -= stepDurationSamples;
+            stepAdvanced = true;
+            ++fallbackStep;
+            if (fallbackStep >= trackStepCount)
+                fallbackStep = 0;
+        }
+
+        if (stepAdvanced)
+        {
+            sequencerCurrentStep.store(fallbackStep, std::memory_order_relaxed);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
 void audioLoop() {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
@@ -725,7 +832,7 @@ void audioLoop() {
     std::chrono::steady_clock::time_point lastCallbackTime{};
 #endif
 
-    while (running) {
+    while (running.load(std::memory_order_acquire)) {
         bool changeRequested = deviceChangeRequested.exchange(false);
         std::wstring desiredDeviceId;
         {
@@ -734,6 +841,7 @@ void audioLoop() {
         }
 
         if (changeRequested || !deviceReady) {
+            audioSequencerReady.store(false, std::memory_order_release);
             if (deviceHandler) {
                 deviceHandler->stop();
                 deviceHandler->shutdown();
@@ -757,6 +865,7 @@ void audioLoop() {
                     }
                 }
                 deviceHandler.reset();
+                audioSequencerReady.store(false, std::memory_order_release);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
@@ -764,6 +873,7 @@ void audioLoop() {
             if (!deviceHandler->start()) {
                 deviceHandler->shutdown();
                 deviceHandler.reset();
+                audioSequencerReady.store(false, std::memory_order_release);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
@@ -806,15 +916,18 @@ void audioLoop() {
                     activeRequestedDeviceId = desiredDeviceId;
                 }
             }
+            audioSequencerReady.store(true, std::memory_order_release);
         }
 
         if (!deviceReady || bufferFrameCount == 0) {
+            audioSequencerReady.store(false, std::memory_order_release);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
 
         if (!deviceHandler) {
             deviceReady = false;
+            audioSequencerReady.store(false, std::memory_order_release);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
@@ -832,6 +945,7 @@ void audioLoop() {
             bufferFrameCount = 0;
             format = nullptr;
             deviceReady = false;
+            audioSequencerReady.store(false, std::memory_order_release);
             continue;
         } else if (FAILED(paddingResult)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -853,6 +967,7 @@ void audioLoop() {
                 bufferFrameCount = 0;
                 format = nullptr;
                 deviceReady = false;
+                audioSequencerReady.store(false, std::memory_order_release);
                 continue;
             } else if (FAILED(bufferResult)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1633,6 +1748,7 @@ void audioLoop() {
     for (auto& entry : playbackStates) {
         releaseDelayEffect(entry.second);
     }
+    audioSequencerReady.store(false, std::memory_order_release);
     CoUninitialize();
 }
 
@@ -1725,14 +1841,22 @@ void initAudio() {
             }
         }
     }
-    running = true;
+    running.store(true, std::memory_order_release);
+    audioSequencerReady.store(false, std::memory_order_release);
+    if (sequencerThread.joinable())
+        sequencerThread.join();
+    if (audioThread.joinable())
+        audioThread.join();
+    sequencerThread = std::thread(sequencerWarmupLoop);
     audioThread = std::thread(audioLoop);
 }
 
 void shutdownAudio() {
-    running = false;
-    isPlaying = false;
+    running.store(false, std::memory_order_release);
+    audioSequencerReady.store(false, std::memory_order_release);
+    isPlaying.store(false, std::memory_order_relaxed);
     if (audioThread.joinable()) audioThread.join();
+    if (sequencerThread.joinable()) sequencerThread.join();
 }
 
 bool loadSampleFile(int trackId, const std::filesystem::path& path) {
