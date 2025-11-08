@@ -152,7 +152,10 @@ void VST3Host::openEditor(void* hwnd)
         view_->onSize(&rect);
     }
 
-    ShowWindow(static_cast<HWND>(hwnd), SW_SHOW);
+    HWND hPlugin = static_cast<HWND>(hwnd);
+    ShowWindow(hPlugin, SW_SHOW);
+    UpdateWindow(hPlugin);
+    SetFocus(hPlugin);
 }
 
 void VST3Host::showPluginUI()
