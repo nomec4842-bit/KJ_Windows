@@ -6143,6 +6143,6 @@ void initGUI()
 }
 
 
-extern "C" void requestMainMenuRefresh() {
+void requestMainMenuRefresh() {
     // placeholder
 }
