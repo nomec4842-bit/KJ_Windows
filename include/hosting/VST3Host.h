@@ -1,12 +1,10 @@
 #pragma once
-
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
-#include "base/source/fobject.h"
-#include "../../external/vst3sdk/public.sdk/source/vst/hosting/module.h"
+#include "base/source/fobject.h"                     // for IPtr
+#include "public.sdk/source/vst/hosting/module.h"    // defines Steinberg::Vst::Module
 #include "public.sdk/source/vst/hosting/hostclasses.h"
-
 #include <memory>
 #include <iostream>
 
@@ -18,8 +16,7 @@ public:
     ~VST3Host();
 
 private:
-    Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
-    std::shared_ptr<Steinberg::Vst::Module> module_; // works now
+    Steinberg::IPtr<Steinberg::Vst::IComponent> component_{nullptr};
+    std::shared_ptr<Steinberg::Vst::Module> module_; // this now compiles
 };
-} // namespace kj
-
+}
