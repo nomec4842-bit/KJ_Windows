@@ -29,6 +29,8 @@ public:
 
     void openEditor(void* nativeWindowHandle);
 
+    bool isPluginLoaded() const;
+
 private:
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_;
