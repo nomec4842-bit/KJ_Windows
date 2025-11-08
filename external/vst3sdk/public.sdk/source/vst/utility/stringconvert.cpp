@@ -23,7 +23,7 @@
 #endif // SMTG_OS_WINDOWS
 
 #include "public.sdk/source/vst/utility/stringconvert.h"
-#include "public.sdk/source/vst/utility/common/commonstringconvert.h"
+#include "public.sdk/source/common/commonstringconvert.h"
 
 #include <codecvt>
 #include <istream>

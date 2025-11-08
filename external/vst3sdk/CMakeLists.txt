@@ -1,142 +1,193 @@
-cmake_minimum_required(VERSION 3.20)
-project(vstsdk LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+cmake_minimum_required (VERSION 3.25.0)
 
-# The trimmed SDK snapshot keeps only the pieces required for hosting VST3 plug-ins:
-# - pluginterfaces/:    Public VST interfaces shared between hosts and plug-ins.
-# - base/:              Steinberg foundation utilities depended on by the interfaces.
-# - public.sdk/...      Hosting helpers and utility code (including the former
-#                       public.sdk/source/common/ tree relocated under utility/common).
-#
-# Everything else from the upstream repository (samples, validators, wrappers, etc.)
-# has been removed to keep the vendored dependency light-weight for the KJ host build.
-
-set(VST3SDK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-
-set(VST3SDK_INCLUDE_DIRS
-    ${VST3SDK_ROOT}
-    ${VST3SDK_ROOT}/pluginterfaces
-    ${VST3SDK_ROOT}/base
-    ${VST3SDK_ROOT}/base/source
-    ${VST3SDK_ROOT}/base/thread/include
-    ${VST3SDK_ROOT}/public.sdk/source/vst/hosting
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/common
-)
-
-file(GLOB_RECURSE base_sources CONFIGURE_DEPENDS
-    ${VST3SDK_ROOT}/base/source/*.cpp
-    ${VST3SDK_ROOT}/base/source/*.c
-    ${VST3SDK_ROOT}/base/thread/source/*.cpp
-    ${VST3SDK_ROOT}/base/thread/source/*.c
-)
-
-file(GLOB_RECURSE pluginterfaces_sources CONFIGURE_DEPENDS
-    ${VST3SDK_ROOT}/pluginterfaces/*.cpp
-)
-
-file(GLOB_RECURSE hosting_sources CONFIGURE_DEPENDS
-    ${VST3SDK_ROOT}/public.sdk/source/vst/hosting/*.cpp
-    ${VST3SDK_ROOT}/public.sdk/source/vst/hosting/*.mm
-)
-
-file(GLOB_RECURSE utility_sources CONFIGURE_DEPENDS
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/*.cpp
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/*.c
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/*.mm
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/common/*.cpp
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/common/*.c
-    ${VST3SDK_ROOT}/public.sdk/source/vst/utility/common/*.mm
-)
-
-set(hosting_common_sources)
-set(hosting_platform_sources)
-foreach(src ${hosting_sources})
-    get_filename_component(filename ${src} NAME)
-    if(filename MATCHES "_win32\\.cpp$")
-        if(WIN32)
-            list(APPEND hosting_platform_sources ${src})
-        endif()
-    elseif(filename MATCHES "_linux\\.cpp$")
-        if(UNIX AND NOT APPLE)
-            list(APPEND hosting_platform_sources ${src})
-        endif()
-    elseif(filename MATCHES "_mac\\.(mm|cpp)$")
-        if(APPLE)
-            list(APPEND hosting_platform_sources ${src})
-        endif()
-    else()
-        list(APPEND hosting_common_sources ${src})
-    endif()
-endforeach()
-
-set(utility_common_sources)
-set(utility_platform_sources)
-foreach(src ${utility_sources})
-    get_filename_component(filename ${src} NAME)
-    if(filename MATCHES "_win32\\.cpp$")
-        if(WIN32)
-            list(APPEND utility_platform_sources ${src})
-        endif()
-    elseif(filename MATCHES "_linux\\.cpp$")
-        if(UNIX AND NOT APPLE)
-            list(APPEND utility_platform_sources ${src})
-        endif()
-    elseif(filename MATCHES "_mac\\.(mm|cpp)$")
-        if(APPLE)
-            list(APPEND utility_platform_sources ${src})
-        endif()
-    else()
-        list(APPEND utility_common_sources ${src})
-    endif()
-endforeach()
-
-add_library(sdk STATIC
-    ${base_sources}
-    ${pluginterfaces_sources}
-    ${hosting_common_sources}
-    ${utility_common_sources}
-    ${hosting_platform_sources}
-    ${utility_platform_sources}
-)
-
-target_include_directories(sdk
-    PUBLIC
-        ${VST3SDK_INCLUDE_DIRS}
-)
-
-target_compile_features(sdk PUBLIC cxx_std_17)
-
-target_compile_definitions(sdk
-    PUBLIC
-        DEVELOPMENT=1
-        $<$<CONFIG:Debug>:DEVELOPMENT=1>
-        $<$<CONFIG:RelWithDebInfo>:DEVELOPMENT=1>
-        $<$<CONFIG:Release>:DEVELOPMENT=0>
-        $<$<CONFIG:Release>:RELEASE=1>
-        $<$<CONFIG:Release>:NDEBUG>
-        $<$<CONFIG:MinSizeRel>:DEVELOPMENT=0>
-        $<$<CONFIG:MinSizeRel>:RELEASE=1>
-        $<$<CONFIG:MinSizeRel>:NDEBUG>
-)
-
-if(MSVC)
-    target_compile_definitions(sdk PRIVATE _CRT_SECURE_NO_WARNINGS)
+# Specify the minimum version of the target platform
+if(NOT DEFINED ENV{MACOSX_DEPLOYMENT_TARGET})
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "macOS deployment target")
 endif()
 
-if(WIN32)
-    target_link_libraries(sdk PUBLIC user32)
-elseif(UNIX AND NOT APPLE)
-    find_package(Threads REQUIRED)
-    target_link_libraries(sdk PUBLIC Threads::Threads dl)
-elseif(APPLE)
-    find_library(COCOA_LIBRARY Cocoa REQUIRED)
-    target_link_libraries(sdk PUBLIC ${COCOA_LIBRARY})
+# Global options which can bet set on command line e.g.: cmake -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF ...
+option(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES "Enable VST 3 Plug-in Examples" OFF)
+option(SMTG_ENABLE_VST3_HOSTING_EXAMPLES "Enable VST 3 Hosting Examples" OFF)
+option(SMTG_ENABLE_VSTGUI_SUPPORT "Enable VSTGUI Support" OFF)
+option(SMTG_ENABLE_WAYLAND_SUPPORT "Enable Wayland Support (Linux only)" OFF)
+
+# -------------------------------------------------------------------------------
+# Includes
+# -------------------------------------------------------------------------------
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+
+include(SMTG_VST3_SDK)
+
+# -------------------------------------------------------------------------------
+# SDK Project
+# -------------------------------------------------------------------------------
+project(vstsdk
+    VERSION 3.8.0
+    DESCRIPTION "Steinberg VST 3 Software Development Kit"
+    HOMEPAGE_URL "https://www.steinberg.net"
+)
+
+smtg_setup_platform_toolset()
+smtg_setup_symbol_visibility()
+
+set(ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Set the location of the VST 3 SDK
+set(SDK_ROOT "${ROOT}")
+set(public_sdk_SOURCE_DIR ${SDK_ROOT}/public.sdk)
+set(pluginterfaces_SOURCE_DIR ${SDK_ROOT}/pluginterfaces)
+
+if(SMTG_ENABLE_VSTGUI_SUPPORT AND EXISTS "${ROOT}/vstgui4")
+    set(VSTGUI_ENABLE_WAYLAND_SUPPORT ${SMTG_ENABLE_WAYLAND_SUPPORT})
+    smtg_enable_vstgui_support(VSTGUI_SOURCE_DIR "${ROOT}/vstgui4")
 endif()
 
-add_library(vstsdk::sdk ALIAS sdk)
+include_directories(${ROOT} ${SDK_ROOT})
 
-install(TARGETS sdk EXPORT vstsdkTargets)
+# -------------------------------------------------------------------------------
+# From Here this is optional...
+
+# -------------------------------------------------------------------------------
+# CORE AUDIO SDK, AAX SDK
+# -------------------------------------------------------------------------------
+setupCoreAudioSupport()
+setupAaxSupport()
+include(SMTG_FindJack)
+
+# -------------------------------------------------------------------------------
+# Projects
+# -------------------------------------------------------------------------------
+set(SDK_IDE_LIBS_FOLDER FOLDER "Libraries")
+
+#---Add base libraries---------------------------
+smtg_create_lib_base_target()
+smtg_create_pluginterfaces_target()
+smtg_create_public_sdk_common_target()
+smtg_create_public_sdk_target()
+smtg_create_public_sdk_hosting_target()
+
+set(VST_SDK TRUE) # used for pluginterfaces and public.sdk modules which provides only a subset of them for VST-SDK
+if(EXISTS "${SDK_ROOT}/public.sdk/source/vst/interappaudio/CMakeLists.txt")
+    add_subdirectory(public.sdk/source/vst/interappaudio)
+endif()
+
+#---Add Wrappers (AU, AAX)-----------------------
+if (NOT SMTG_ENABLE_AUV2_BUILDS AND EXISTS "${SDK_ROOT}/public.sdk/source/vst/auwrapper/CMakeLists.txt")
+    add_subdirectory(public.sdk/source/vst/auwrapper)
+endif()
+
+if(NOT "${SMTG_AAX_SDK_PATH}" STREQUAL "")
+    add_subdirectory(public.sdk/source/vst/aaxwrapper)
+endif()
+
+# Add hosting examples, it includes the validator (must be done before any plug-ins to support running the validator after building)
+if(SMTG_ENABLE_VST3_HOSTING_EXAMPLES AND EXISTS "${SDK_ROOT}/public.sdk/samples/vst-hosting/CMakeLists.txt")
+    set(SDK_IDE_HOSTING_EXAMPLES_FOLDER FOLDER "Hosting-Examples")
+    add_subdirectory(public.sdk/samples/vst-hosting)
+endif()
+
+# Add utilities
+if(EXISTS "${SDK_ROOT}/public.sdk/samples/vst-utilities/CMakeLists.txt")
+    set(SDK_IDE_UTILITIES_FOLDER FOLDER "Utilities")
+    add_subdirectory(public.sdk/samples/vst-utilities)
+endif()
+
+#---Add VST 3 examples (plug-ins and hosting)-----
+if(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES)
+    set(SDK_IDE_PLUGIN_EXAMPLES_FOLDER FOLDER "PlugIn-Examples")
+    add_subdirectory(public.sdk/samples/vst)
+    add_subdirectory(public.sdk/source/vst/auv3wrapper)
+endif()
+
+# -------------------------------------------------------------------------------
+# IDE sorting
+# -------------------------------------------------------------------------------
+include(SMTG_CustomModuleTarget)
+
+set_property(
+    TARGET
+        sdk
+        sdk_common
+        sdk_hosting
+        base
+        pluginterfaces
+        cmake_modules
+        cmake_VST_modules
+    PROPERTY 
+        ${SDK_IDE_LIBS_FOLDER}
+)
+
+if(TARGET base_ios)
+    set_property(
+        TARGET
+            base_ios
+            pluginterfaces_ios
+        PROPERTY 
+            ${SDK_IDE_LIBS_FOLDER}
+    )
+endif()
+
+if(SMTG_ENABLE_VSTGUI_SUPPORT)
+    set_property(
+        TARGET
+            vstgui
+            vstgui_support
+            vstgui_uidescription
+        PROPERTY 
+            ${SDK_IDE_LIBS_FOLDER}
+    )
+ 
+    if(TARGET vstgui_standalone)
+        set_target_properties(vstgui_standalone
+            PROPERTIES
+                ${SDK_IDE_LIBS_FOLDER}
+        )
+    endif()
+endif()
+
+if(TARGET aax_wrapper)
+    set_target_properties(aax_wrapper
+        PROPERTIES
+            ${SDK_IDE_LIBS_FOLDER}
+    )
+endif()
+
+# -------------------------------------------------------------------------------
+# macOS & iOS collection targets 
+# -------------------------------------------------------------------------------
+option(SMTG_VSTSDK_GENERATE_MACOS_IOS_COLLECTION_TARGETS "Create macOS and iOS collection targets" OFF)
+
+if(SMTG_VSTSDK_GENERATE_MACOS_IOS_COLLECTION_TARGETS)
+
+	function(get_all_targets var)
+		set(targets)
+		get_all_targets_recursive(targets ${CMAKE_CURRENT_SOURCE_DIR})
+		set(${var} ${targets} PARENT_SCOPE)
+	endfunction()
+
+	macro(get_all_targets_recursive targets dir)
+		get_property(subdirectories DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+		foreach(subdir ${subdirectories})
+			get_all_targets_recursive(${targets} ${subdir})
+		endforeach()
+
+		get_property(current_targets DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+		list(APPEND ${targets} ${current_targets})
+	endmacro()
+
+	get_all_targets(all_targets)
+
+	add_custom_target(iOS_Targets)
+	add_custom_target(macOS_Targets)
+
+	foreach(target_name ${all_targets})
+		if(${target_name} MATCHES "ios")
+			add_dependencies(iOS_Targets ${target_name})
+		else()
+			add_dependencies(macOS_Targets ${target_name})
+		endif()
+	endforeach()
+
+endif()

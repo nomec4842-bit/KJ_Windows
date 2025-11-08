@@ -7,17 +7,10 @@ add_executable(KJ src/main.cpp)
 # --- Force global include for Steinberg VST3 SDK ---
 set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
 
-include_directories(
-    ${VST3_SDK_DIR}
-    ${VST3_SDK_DIR}/pluginterfaces
-    ${VST3_SDK_DIR}/base
-    ${VST3_SDK_DIR}/base/source
-    ${VST3_SDK_DIR}/public.sdk
-    ${VST3_SDK_DIR}/public.sdk/source
-    ${VST3_SDK_DIR}/public.sdk/source/vst
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting
-    ${VST3_SDK_DIR}/public.sdk/source/vst/utility
-)
+include_directories(${VST3_SDK_DIR})
+include_directories(${VST3_SDK_DIR}/pluginterfaces)
+include_directories(${VST3_SDK_DIR}/public.sdk/source/vst)
+include_directories(${VST3_SDK_DIR}/public.sdk/source/vst/hosting)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,18 +26,19 @@ if(WIN32)
     )
 endif()
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    add_compile_options(/O2 /EHsc /permissive-)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(MINGW)
-        add_compile_options(-O2 -std=c++20 -Wall)
-    endif()
+if(NOT MSVC)
+    message(FATAL_ERROR "This project is configured for MSVC on Windows only when using the trimmed VST3 SDK.")
 endif()
+
+add_compile_options(/O2 /EHsc /permissive-)
+add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
 target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
 
 # Add Steinberg SDK
+set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "Enable Steinberg VST3 plug-in examples" FORCE)
+set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "Enable Steinberg VST3 hosting examples" FORCE)
+set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "Enable Steinberg VSTGUI support" FORCE)
 add_subdirectory(external/vst3sdk)
 target_link_libraries(KJ PRIVATE sdk)
 

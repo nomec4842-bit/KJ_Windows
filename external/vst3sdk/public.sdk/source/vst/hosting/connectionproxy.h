@@ -17,7 +17,7 @@
 #pragma once
 
 #include "pluginterfaces/vst/ivstmessage.h"
-#include "public.sdk/source/vst/utility/common/threadchecker.h"
+#include "public.sdk/source/common/threadchecker.h"
 
 namespace Steinberg {
 namespace Vst {
