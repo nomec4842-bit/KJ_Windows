@@ -58,37 +58,6 @@ AudioDeviceHandler::~AudioDeviceHandler() {
 }
 
 void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
-    (void)callback;
-    (void)userData;
-    callbackInvoked_.store(false, std::memory_order_relaxed);
-}
-
-AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
-    return nullptr;
-}
-
-void* AudioDeviceHandler::streamCallbackContext() const {
-    return nullptr;
-}
-
-void AudioDeviceHandler::notifyCallbackExecuted() {
-    callbackInvoked_.store(true, std::memory_order_release);
-}
-
-void AudioDeviceHandler::resetCallbackMonitor() {
-    streamStarted_.store(false, std::memory_order_release);
-    callbackInvoked_.store(false, std::memory_order_release);
-}
-
-bool AudioDeviceHandler::streamStartedSuccessfully() {
-    return streamStarted_.load(std::memory_order_acquire);
-}
-
-bool AudioDeviceHandler::callbackHasFired() {
-    return callbackInvoked_.load(std::memory_order_acquire);
-}
-
-void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     callback_ = callback;
     callbackContext_ = userData;
@@ -596,17 +565,20 @@ AudioDeviceHandler::~AudioDeviceHandler() {
 }
 
 void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
-    (void)callback;
-    (void)userData;
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    callback_ = callback;
+    callbackContext_ = userData;
     callbackInvoked_.store(false, std::memory_order_relaxed);
 }
 
 AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
-    return nullptr;
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return callback_;
 }
 
 void* AudioDeviceHandler::streamCallbackContext() const {
-    return nullptr;
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return callbackContext_;
 }
 
 void AudioDeviceHandler::notifyCallbackExecuted() {
