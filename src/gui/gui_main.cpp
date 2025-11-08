@@ -853,8 +853,10 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 
 void requestMainMenuRefresh()
 {
-    // Placeholder implementation to satisfy cross-module references.
-    // A fuller implementation can trigger menu redraws when available.
+    if (gMainWindow && IsWindow(gMainWindow))
+    {
+        InvalidateRect(gMainWindow, nullptr, FALSE);
+    }
 }
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
