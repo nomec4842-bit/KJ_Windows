@@ -840,23 +840,55 @@ void audioLoop() {
             desiredDeviceId = requestedDeviceId;
         }
 
-        if (changeRequested || !deviceReady) {
+        if (changeRequested) {
             audioSequencerReady.store(false, std::memory_order_release);
             if (deviceHandler) {
                 deviceHandler->stop();
                 deviceHandler->shutdown();
+                deviceHandler.reset();
             }
-            deviceHandler = std::make_unique<AudioDeviceHandler>();
             deviceReady = false;
+        }
+
+        if (!deviceHandler) {
+            deviceHandler = std::make_unique<AudioDeviceHandler>();
+        }
+
+        if (!deviceReady) {
+            if (deviceHandler->isInitializing()) {
+                audioSequencerReady.store(false, std::memory_order_release);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
 
             bool usedFallback = false;
             bool initialized = deviceHandler->initialize(desiredDeviceId);
-            if (!initialized && !desiredDeviceId.empty()) {
-                initialized = deviceHandler->initialize();
-                usedFallback = initialized;
+            if (!initialized) {
+                if (deviceHandler->isInitializing()) {
+                    audioSequencerReady.store(false, std::memory_order_release);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+                if (!desiredDeviceId.empty()) {
+                    initialized = deviceHandler->initialize();
+                    if (!initialized) {
+                        if (deviceHandler->isInitializing()) {
+                            audioSequencerReady.store(false, std::memory_order_release);
+                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                            continue;
+                        }
+                    } else {
+                        usedFallback = true;
+                    }
+                }
             }
 
             if (!initialized) {
+                if (deviceHandler->isInitializing()) {
+                    audioSequencerReady.store(false, std::memory_order_release);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
                 {
                     std::lock_guard<std::mutex> lock(deviceMutex);
                     if (!usedFallback) {
@@ -864,6 +896,7 @@ void audioLoop() {
                         activeDeviceName.clear();
                     }
                 }
+                deviceHandler->shutdown();
                 deviceHandler.reset();
                 audioSequencerReady.store(false, std::memory_order_release);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));

@@ -35,7 +35,9 @@ struct WAVEFORMATEX {
 #endif
 
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 class AudioDeviceHandler {
@@ -52,6 +54,7 @@ public:
     };
 
     bool initialize(const std::wstring& deviceId = L"");
+    bool isInitializing() const;
     void shutdown();
 
     bool start();
@@ -76,7 +79,9 @@ private:
         void operator()(WAVEFORMATEX* format) const;
     };
 
-    void resetComObjects();
+    void resetComObjectsLocked();
+    void resetStateLocked();
+    bool runInitialization(const std::wstring& deviceId);
 
     IMMDeviceEnumerator* enumerator_ = nullptr;
     IMMDevice* device_ = nullptr;
@@ -87,5 +92,11 @@ private:
     bool initialized_ = false;
     std::wstring deviceId_;
     std::wstring deviceName_;
+    mutable std::mutex stateMutex_;
+    std::thread initThread_;
+    bool initThreadActive_ = false;
+    bool initCompleted_ = false;
+    bool initSuccess_ = false;
+    bool cancelRequested_ = false;
 };
 
