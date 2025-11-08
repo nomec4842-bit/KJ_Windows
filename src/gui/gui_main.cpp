@@ -191,7 +191,8 @@ LONG computeDropdownStartTop(const RECT& anchor, int optionCount, int optionHeig
 
 RECT playButton = {40, 40, 180, 110};
 RECT loadSampleButton = {200, 40, 340, 110};
-RECT loadVstButton = {200, 40, 340, 110};
+RECT loadVstButton = {200, 40, 270, 110};
+RECT showVstButton = {270, 40, 340, 110};
 RECT waveSelectButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
@@ -5242,6 +5243,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     bool showVstLoader = false;
     bool showWaveSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
+    std::shared_ptr<kj::VST3Host> activeVstHost;
+    bool vstEditorAvailable = false;
     if (activeTrackPtr)
     {
         switch (activeTrackPtr->type)
@@ -5255,8 +5258,18 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
             break;
         case TrackType::VST:
             showVstLoader = true;
+            activeVstHost = activeTrackPtr->vstHost;
             break;
         }
+    }
+
+    if (!activeVstHost && activeTrackId > 0)
+    {
+        activeVstHost = trackGetVstHost(activeTrackId);
+    }
+    if (activeVstHost)
+    {
+        vstEditorAvailable = activeVstHost->isPluginLoaded();
     }
 
     if (waveDropdownOpen && (!showWaveSelector || waveDropdownTrackId != activeTrackId))
@@ -5276,6 +5289,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         drawButton(surface, loadVstButton,
                    RGB(50, 50, 50), RGB(120, 120, 120),
                    "Load VST");
+
+        COLORREF showFill = vstEditorAvailable ? RGB(50, 50, 50) : RGB(30, 30, 30);
+        COLORREF showOutline = vstEditorAvailable ? RGB(120, 120, 120) : RGB(80, 80, 80);
+        drawButton(surface, showVstButton, showFill, showOutline, "Show VST");
     }
     else if (showWaveSelector)
     {
@@ -5637,11 +5654,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool showSampleLoader = false;
         bool showVstLoader = false;
         bool showWaveSelector = false;
+        std::shared_ptr<kj::VST3Host> activeVstHost;
+        bool vstEditorAvailable = false;
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
         {
             showSampleLoader = activeTrack->type == TrackType::Sample;
             showVstLoader = activeTrack->type == TrackType::VST;
             showWaveSelector = activeTrack->type == TrackType::Synth;
+            if (showVstLoader)
+            {
+                activeVstHost = activeTrack->vstHost;
+            }
         }
         else if (activeTrackId > 0)
         {
@@ -5649,6 +5672,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showSampleLoader = trackType == TrackType::Sample;
             showVstLoader = trackType == TrackType::VST;
             showWaveSelector = trackType == TrackType::Synth;
+            if (showVstLoader)
+            {
+                activeVstHost = trackGetVstHost(activeTrackId);
+            }
+        }
+
+        if (activeVstHost)
+        {
+            vstEditorAvailable = activeVstHost->isPluginLoaded();
         }
 
         if (!showWaveSelector)
@@ -5945,6 +5977,34 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
 
+            return 0;
+        }
+
+        if (showVstLoader && pointInRect(showVstButton, x, y))
+        {
+            if (!activeVstHost)
+            {
+                activeVstHost = trackGetVstHost(activeTrackId);
+            }
+
+            if (!activeVstHost)
+            {
+                std::cout << "[GUI] No VST host available for track." << std::endl;
+                return 0;
+            }
+
+            if (!vstEditorAvailable)
+            {
+                vstEditorAvailable = activeVstHost->isPluginLoaded();
+            }
+
+            if (!vstEditorAvailable)
+            {
+                std::cout << "[GUI] No VST3 plug-in loaded to display." << std::endl;
+                return 0;
+            }
+
+            activeVstHost->openEditor(reinterpret_cast<void*>(hwnd));
             return 0;
         }
 

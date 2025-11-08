@@ -241,6 +241,11 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
     }
 }
 
+bool VST3Host::isPluginLoaded() const
+{
+    return static_cast<bool>(module_);
+}
+
 void VST3Host::openEditor(void* nativeWindowHandle)
 {
     if (!controller_ || !nativeWindowHandle)
