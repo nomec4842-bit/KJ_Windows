@@ -39,6 +39,7 @@ target_include_directories(KJ PRIVATE
     ${VST3_SDK_DIR}
     ${VST3_SDK_DIR}/public.sdk
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting
+    ${CMAKE_SOURCE_DIR}/external/vst3sdk/public.sdk/source/vst/hosting
 )
 target_sources(KJ PRIVATE src/hosting/VST3Host.cpp)
 

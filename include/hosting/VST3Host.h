@@ -3,8 +3,8 @@
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
-#include "base/source/fobject.h" // for Steinberg::IPtr
-#include "../../external/vst3sdk/public.sdk/source/vst/hosting/module.h" // defines Steinberg::Vst::Module
+#include "base/source/fobject.h"
+#include "../../external/vst3sdk/public.sdk/source/vst/hosting/module.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 
 #include <memory>
