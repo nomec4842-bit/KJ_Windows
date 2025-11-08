@@ -52,3 +52,11 @@ target_link_libraries(KJ PRIVATE sdk)
 add_subdirectory(src/core)
 add_subdirectory(src/gui)
 target_link_libraries(KJ PRIVATE kj_core kj_gui)
+
+# --- Fix include paths for your project headers ---
+target_include_directories(KJ PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/core
+    ${CMAKE_SOURCE_DIR}/include/hosting
+    ${CMAKE_SOURCE_DIR}/src
+)
