@@ -141,24 +141,10 @@ bool VST3Host::isPluginLoaded() const
 
 void VST3Host::openEditor(void* hwnd)
 {
-    if (!view_)
-        return;
-
-    view_->attached(hwnd, "HWND");
-
-    ViewRect rect{};
-    if (view_->getSize(&rect) == kResultTrue)
-    {
-        view_->onSize(&rect);
-    }
-
-    HWND hPlugin = static_cast<HWND>(hwnd);
-    ShowWindow(hPlugin, SW_SHOW);
-    UpdateWindow(hPlugin);
-    SetFocus(hPlugin);
+    showPluginUI(hwnd);
 }
 
-void VST3Host::showPluginUI()
+void VST3Host::showPluginUI(void* parentHWND)
 {
     if (!controller_)
     {
@@ -176,7 +162,7 @@ void VST3Host::showPluginUI()
         }
     }
 
-    HWND parentWindow = GetForegroundWindow();
+    HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
     view_->attached(parentWindow, "HWND");
 
     ViewRect rect{};
