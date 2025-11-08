@@ -186,7 +186,7 @@ a certain kind of object(s). The interface IPluginFactory provides methods
 to get information about the classes exported by the plug-in and a
 mechanism to create instances of these classes (that usually define the IPluginBase interface).
 
-<b> An implementation is provided in public.sdk/source/vst/utility/common/pluginfactory.cpp </b>
+<b> An implementation is provided in public.sdk/source/common/pluginfactory.cpp </b>
 \see GetPluginFactory
 */
 class IPluginFactory : public FUnknown

@@ -76,7 +76,7 @@ IAttribute level.
 
 The basic set/get methods make use of the FVariant class defined in 'funknown.h'.
 For a more convenient usage of this interface, you should use the functions defined
-in namespace PAttributes (public.sdk/source/vst/utility/common/pattributes.h+cpp) !! 
+in namespace PAttributes (public.sdk/source/common/pattributes.h+cpp) !! 
 
 \ingroup frameworkHostClasses
 */
