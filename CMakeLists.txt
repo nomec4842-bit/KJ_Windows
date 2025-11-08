@@ -2,8 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 
 project(KJ LANGUAGES CXX)
 
-# === Steinberg VST3 SDK Include Paths ===
 set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
+include_directories(
+    ${VST3_SDK_DIR}
+    ${VST3_SDK_DIR}/pluginterfaces
+)
+
+# === Steinberg VST3 SDK Include Paths ===
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
