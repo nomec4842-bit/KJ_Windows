@@ -2,10 +2,13 @@
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
 
+#include "hosting/VST3Host.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -124,6 +127,8 @@ struct TrackData
         track.synthRelease = kDefaultSynthRelease;
         track.sampleAttack = kDefaultSampleAttack;
         track.sampleRelease = kDefaultSampleRelease;
+        vstHost.reset();
+        track.vstHost = vstHost;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
         for (int i = 0; i < kMaxSequencerSteps; ++i)
@@ -191,6 +196,7 @@ struct TrackData
     std::atomic<int> stepCount{1};
     std::atomic<int> maxInitializedStepCount{kSequencerStepsPerPage};
     std::shared_ptr<const SampleBuffer> sampleBuffer;
+    std::shared_ptr<kj::VST3Host> vstHost;
     std::mutex noteMutex;
 };
 
@@ -235,6 +241,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.synthRelease = kDefaultSynthRelease;
     baseTrack.sampleAttack = kDefaultSampleAttack;
     baseTrack.sampleRelease = kDefaultSampleRelease;
+    baseTrack.vstHost.reset();
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
 
@@ -277,6 +284,7 @@ Track addTrack(const std::string& name)
     Track result = trackData->track;
     result.type = trackData->type.load(std::memory_order_relaxed);
     result.synthWaveType = trackData->waveType.load(std::memory_order_relaxed);
+    result.vstHost = trackData->vstHost;
     return result;
 }
 
@@ -320,6 +328,7 @@ std::vector<Track> getTracks()
         info.synthRelease = track->synthRelease.load(std::memory_order_relaxed);
         info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
         info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
+        info.vstHost = track->vstHost;
         result.push_back(std::move(info));
     }
     return result;
@@ -782,11 +791,34 @@ TrackType trackGetType(int trackId)
 
 void trackSetType(int trackId, TrackType type)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
+    std::unique_lock<std::shared_mutex> lock(gTrackMutex);
+    for (auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            track->type.store(type, std::memory_order_relaxed);
+            track->track.type = type;
 
-    track->type.store(type, std::memory_order_relaxed);
+            if (type == TrackType::VST)
+            {
+                if (!track->vstHost)
+                {
+                    track->vstHost = std::make_shared<kj::VST3Host>();
+                    std::cout << "VST track initialized" << std::endl;
+                }
+                track->track.vstHost = track->vstHost;
+            }
+            else
+            {
+                if (track->vstHost)
+                {
+                    track->vstHost->unload();
+                }
+                track->track.vstHost.reset();
+            }
+            return;
+        }
+    }
 }
 
 SynthWaveType trackGetSynthWaveType(int trackId)
@@ -805,6 +837,38 @@ void trackSetSynthWaveType(int trackId, SynthWaveType type)
         return;
 
     track->waveType.store(type, std::memory_order_relaxed);
+}
+
+std::shared_ptr<kj::VST3Host> trackGetVstHost(int trackId)
+{
+    std::shared_lock<std::shared_mutex> lock(gTrackMutex);
+    for (const auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            return track->vstHost;
+        }
+    }
+    return {};
+}
+
+std::shared_ptr<kj::VST3Host> trackEnsureVstHost(int trackId)
+{
+    std::unique_lock<std::shared_mutex> lock(gTrackMutex);
+    for (auto& track : gTracks)
+    {
+        if (track->track.id == trackId)
+        {
+            if (!track->vstHost)
+            {
+                track->vstHost = std::make_shared<kj::VST3Host>();
+                std::cout << "VST track initialized" << std::endl;
+            }
+            track->track.vstHost = track->vstHost;
+            return track->vstHost;
+        }
+    }
+    return {};
 }
 
 float trackGetVolume(int trackId)

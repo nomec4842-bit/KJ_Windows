@@ -67,6 +67,8 @@ std::string trackTypeToString(TrackType type)
         return "Synth";
     case TrackType::Sample:
         return "Sample";
+    case TrackType::VST:
+        return "VST";
     }
     return "Unknown";
 }
@@ -98,6 +100,8 @@ TrackType trackTypeFromString(const std::string& value)
 {
     if (value == "Sample")
         return TrackType::Sample;
+    if (value == "VST")
+        return TrackType::VST;
     return TrackType::Synth;
 }
 
