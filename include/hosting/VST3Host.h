@@ -1,14 +1,20 @@
 #pragma once
+
+// Steinberg base + VST interfaces (you'll likely use these in the .cpp later)
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
-#include "base/source/fobject.h"                     // for IPtr
-#include "public.sdk/source/vst/hosting/module.h"    // defines Steinberg::Vst::Module
-#include "public.sdk/source/vst/hosting/hostclasses.h"
+#include "base/source/fobject.h" // for Steinberg::IPtr
+
+// VST3 hosting layer (your module.h snippet)
+#include "public.sdk/source/vst/hosting/module.h"
+
 #include <memory>
+#include <string>
 #include <iostream>
 
 namespace kj {
+
 class VST3Host {
 public:
     bool load(const std::string& path);
@@ -16,7 +22,11 @@ public:
     ~VST3Host();
 
 private:
-    Steinberg::IPtr<Steinberg::Vst::IComponent> component_{nullptr};
-    std::shared_ptr<Steinberg::Vst::Module> module_; // this now compiles
+    // If you want to keep a raw component later, you can add:
+    // Steinberg::IPtr<Steinberg::Vst::IComponent> component_{nullptr};
+
+    // This is the **correct** type for the Module in your SDK:
+    VST3::Hosting::Module::Ptr module_;
 };
-}
+
+} // namespace kj
