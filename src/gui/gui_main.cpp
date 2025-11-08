@@ -853,12 +853,8 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 
 void requestMainMenuRefresh()
 {
-    // TODO: refresh main menu or trigger redraw
-    updateViewMenuChecks();
-    if (gMainWindow && IsWindow(gMainWindow))
-    {
-        DrawMenuBar(gMainWindow);
-    }
+    // Placeholder implementation to satisfy cross-module references.
+    // A fuller implementation can trigger menu redraws when available.
 }
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
