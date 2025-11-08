@@ -1,13 +1,51 @@
 #include "core/audio_device_handler.h"
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(_MSC_VER) || defined(__MINGW32__)
 
 #include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 constexpr DWORD kStreamFlags = 0;
 constexpr REFERENCE_TIME kBufferDuration = 10000000; // 1 second
+
+void logMessage(const std::wstring& message) {
+    std::wstring formatted = L"[AudioDeviceHandler] " + message + L"\n";
+    OutputDebugStringW(formatted.c_str());
+}
+
+std::wstring describeHResult(HRESULT hr) {
+    LPWSTR buffer = nullptr;
+    DWORD size = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, hr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    std::wstring description;
+    if (size != 0 && buffer) {
+        description.assign(buffer, size);
+        LocalFree(buffer);
+        while (!description.empty() && (description.back() == L'\r' || description.back() == L'\n')) {
+            description.pop_back();
+        }
+    }
+    return description;
+}
+
+void logFailure(const wchar_t* action, HRESULT hr) {
+    std::wstringstream stream;
+    stream << action << L" failed with HRESULT 0x" << std::uppercase << std::hex << std::setw(8)
+           << std::setfill(L'0') << static_cast<unsigned long>(hr);
+    std::wstring description = describeHResult(hr);
+    if (!description.empty()) {
+        stream << L" (" << description << L")";
+    }
+    logMessage(stream.str());
+}
+
+void logInfo(const std::wstring& message) {
+    logMessage(message);
+}
 }
 
 AudioDeviceHandler::AudioDeviceHandler() = default;
@@ -52,11 +90,6 @@ void AudioDeviceHandler::resetStateLocked() {
 
 bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
     std::unique_lock<std::mutex> lock(stateMutex_);
-    if (initialized_) {
-        if ((deviceId.empty() && deviceId_.empty()) || (!deviceId.empty() && deviceId == deviceId_)) {
-            return true;
-        }
-    }
 
     if (initThreadActive_) {
         if (!initCompleted_) {
@@ -72,10 +105,16 @@ bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
         }
         lock.lock();
         if (!success) {
+            logInfo(L"Audio device initialization thread reported failure");
             resetStateLocked();
             return false;
         }
-        return success;
+    }
+
+    if (initialized_) {
+        if ((deviceId.empty() && deviceId_.empty()) || (!deviceId.empty() && deviceId == deviceId_)) {
+            return true;
+        }
     }
 
     cancelRequested_ = false;
@@ -99,6 +138,7 @@ bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
         lock.lock();
     }
     initThread_ = std::move(worker);
+    logInfo(L"Started audio device initialization thread");
     return false;
 }
 
@@ -112,6 +152,7 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
     bool shouldUninitialize = SUCCEEDED(hr);
     if (FAILED(hr)) {
         if (hr != RPC_E_CHANGED_MODE) {
+            logFailure(L"CoInitializeEx", hr);
             return false;
         }
         shouldUninitialize = false;
@@ -131,15 +172,19 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
         hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
                               __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
         if (FAILED(hr) || !enumerator) {
+            logFailure(L"CoCreateInstance(IMMDeviceEnumerator)", hr);
             break;
         }
 
+        const wchar_t* getDeviceAction = L"IMMDeviceEnumerator::GetDevice";
         if (deviceId.empty()) {
             hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+            getDeviceAction = L"IMMDeviceEnumerator::GetDefaultAudioEndpoint";
         } else {
             hr = enumerator->GetDevice(deviceId.c_str(), &device);
         }
         if (FAILED(hr) || !device) {
+            logFailure(getDeviceAction, hr);
             break;
         }
 
@@ -166,11 +211,13 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
 
         hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, NULL, (void**)&client);
         if (FAILED(hr) || !client) {
+            logFailure(L"IMMDevice::Activate(IAudioClient)", hr);
             break;
         }
 
         hr = client->GetMixFormat(&mixFormat);
         if (FAILED(hr) || !mixFormat) {
+            logFailure(L"IAudioClient::GetMixFormat", hr);
             break;
         }
 
@@ -184,22 +231,26 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
         hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, kStreamFlags, kBufferDuration, 0,
                                  mixFormat, NULL);
         if (FAILED(hr)) {
+            logFailure(L"IAudioClient::Initialize", hr);
             break;
         }
 
         hr = client->GetBufferSize(&bufferFrameCount);
         if (FAILED(hr)) {
+            logFailure(L"IAudioClient::GetBufferSize", hr);
             break;
         }
 
         hr = client->GetService(__uuidof(IAudioRenderClient), (void**)&renderClient);
         if (FAILED(hr) || !renderClient) {
+            logFailure(L"IAudioClient::GetService(IAudioRenderClient)", hr);
             break;
         }
 
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (cancelRequested_) {
+                logInfo(L"Audio device initialization canceled");
                 break;
             }
 
@@ -221,6 +272,8 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
                 deviceName_ = L"Audio Device";
             }
         }
+
+        logInfo(L"Audio device initialization succeeded");
 
         enumerator = nullptr;
         device = nullptr;
@@ -282,13 +335,23 @@ bool AudioDeviceHandler::start() {
         return false;
     }
     HRESULT hr = client_->Start();
-    return SUCCEEDED(hr);
+    if (FAILED(hr)) {
+        logFailure(L"IAudioClient::Start", hr);
+        return false;
+    }
+    logInfo(L"Audio client started successfully");
+    return true;
 }
 
 void AudioDeviceHandler::stop() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (client_) {
-        client_->Stop();
+        HRESULT hr = client_->Stop();
+        if (FAILED(hr)) {
+            logFailure(L"IAudioClient::Stop", hr);
+        } else {
+            logInfo(L"Audio client stopped");
+        }
     }
 }
 
@@ -330,12 +393,14 @@ std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderD
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
                                   __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
     if (FAILED(hr)) {
+        logFailure(L"CoCreateInstance(IMMDeviceEnumerator)", hr);
         return devices;
     }
 
     IMMDeviceCollection* collection = nullptr;
     hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr)) {
+        logFailure(L"IMMDeviceEnumerator::EnumAudioEndpoints", hr);
         enumerator->Release();
         return devices;
     }
@@ -383,7 +448,7 @@ std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderD
     return devices;
 }
 
-#else  // !_WIN32
+#else  // !(_WIN32 || _MSC_VER || __MINGW32__)
 
 AudioDeviceHandler::AudioDeviceHandler() = default;
 
@@ -459,5 +524,5 @@ std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderD
     return {};
 }
 
-#endif  // _WIN32
+#endif  // defined(_WIN32) || defined(_MSC_VER) || defined(__MINGW32__)
 
