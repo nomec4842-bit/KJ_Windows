@@ -3,32 +3,26 @@
 #include <memory>
 #include <string>
 
-namespace Steinberg
-{
-template <class T>
-class IPtr;
-
-namespace Vst
-{
-class Module;
-class IComponent;
-} // namespace Vst
-} // namespace Steinberg
+#include "pluginterfaces/base/funknown.h"
+#include "pluginterfaces/vst/ivstcomponent.h"
+#include "pluginterfaces/vst/ivstaudioprocessor.h"
+// Required for Steinberg::IPtr template definition. Without this, MSVC reports IPtr as undefined.
+#include "base/source/fobject.h"
+#include "public.sdk/source/vst/hosting/module.h"
+#include "public.sdk/source/vst/hosting/hostclasses.h"
 
 namespace kj
 {
 class VST3Host
 {
 public:
-    VST3Host() = default;
-    ~VST3Host();
-
     bool load(const std::string& path);
     void unload();
+    ~VST3Host();
 
 private:
+    Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
     std::shared_ptr<Steinberg::Vst::Module> module_;
-    Steinberg::IPtr<Steinberg::Vst::IComponent> component_;
 };
 } // namespace kj
 
