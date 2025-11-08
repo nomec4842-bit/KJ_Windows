@@ -766,7 +766,8 @@ void audioLoop() {
             deviceReady = true;
             stepSampleCounter = 0.0;
             previousPlaying = false;
-            for (auto& [_, state] : playbackStates) {
+            for (auto& entry : playbackStates) {
+                auto& state = entry.second;
                 resetSynthPlaybackState(state);
                 resetSamplePlaybackState(state);
                 releaseDelayEffect(state);
@@ -885,8 +886,9 @@ void audioLoop() {
             for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
                 const auto& trackInfo = trackInfos[trackIndex];
                 int trackStepCount = trackIndex < trackStepCounts.size() ? trackStepCounts[trackIndex] : 0;
-                auto [stateIt, inserted] = playbackStates.try_emplace(trackInfo.id);
-                auto& state = stateIt->second;
+                auto insertResult = playbackStates.try_emplace(trackInfo.id);
+                auto& state = insertResult.first->second;
+                bool inserted = insertResult.second;
                 TrackType previousType = state.type;
                 bool typeChanged = inserted || previousType != trackInfo.type;
                 state.type = trackInfo.type;
@@ -982,7 +984,8 @@ void audioLoop() {
                     }
                     previousPlaying = false;
                     stepSampleCounter = 0.0;
-                    for (auto& [_, state] : playbackStates) {
+                    for (auto& entry : playbackStates) {
+                        auto& state = entry.second;
                         state.envelope *= 0.92;
                         if (state.envelope < 0.0001)
                             state.envelope = 0.0;
@@ -1013,7 +1016,8 @@ void audioLoop() {
                                 int fadeSamples = static_cast<int>(std::max(1.0, std::round(fadeSeconds * sr)));
                                 double fadeStep = 1.0 / static_cast<double>(fadeSamples);
 
-                                for (auto& [_, state] : playbackStates) {
+                                for (auto& entry : playbackStates) {
+                                    auto& state = entry.second;
                                     state.resetScheduled = true;
                                     state.resetFadeGain = 1.0;
                                     state.resetFadeSamples = fadeSamples;
@@ -1021,7 +1025,8 @@ void audioLoop() {
                                     state.resetReason = reason;
                                 }
                             } else {
-                                for (auto& [_, state] : playbackStates) {
+                                for (auto& entry : playbackStates) {
+                                    auto& state = entry.second;
                                     state.resetScheduled = false;
                                     state.resetFadeGain = 1.0;
                                     state.resetFadeSamples = 0;
@@ -1617,8 +1622,8 @@ void audioLoop() {
         deviceHandler->stop();
         deviceHandler->shutdown();
     }
-    for (auto& [_, state] : playbackStates) {
-        releaseDelayEffect(state);
+    for (auto& entry : playbackStates) {
+        releaseDelayEffect(entry.second);
     }
     CoUninitialize();
 }
