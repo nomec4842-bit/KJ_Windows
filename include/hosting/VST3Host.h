@@ -1,32 +1,44 @@
 #pragma once
 
-// Steinberg base + VST interfaces (you'll likely use these in the .cpp later)
+// Steinberg base + VST interfaces
 #include "pluginterfaces/base/funknown.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "base/source/fobject.h" // for Steinberg::IPtr
 
-// VST3 hosting layer (your module.h snippet)
+// VST3 hosting layer (module helper)
 #include "public.sdk/source/vst/hosting/module.h"
 
 #include <memory>
 #include <string>
-#include <iostream>
 
 namespace kj {
 
 class VST3Host {
 public:
-    bool load(const std::string& path);
-    void unload();
+    VST3Host() = default;
     ~VST3Host();
 
-private:
-    // If you want to keep a raw component later, you can add:
-    // Steinberg::IPtr<Steinberg::Vst::IComponent> component_{nullptr};
+    bool load(const std::string& path);
+    void unload();
 
-    // This is the **correct** type for the Module in your SDK:
+    bool prepare(double sampleRate, int maxBlockSize);
+    void process(float** outputs, int numChannels, int numSamples);
+
+    void openEditor(void* nativeWindowHandle);
+
+private:
     VST3::Hosting::Module::Ptr module_;
+    Steinberg::IPtr<Steinberg::Vst::IComponent> component_;
+    Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
+    Steinberg::IPtr<Steinberg::Vst::IEditController> controller_;
+    Steinberg::IPtr<Steinberg::IPlugView> view_;
+
+    double preparedSampleRate_ = 0.0;
+    int preparedMaxBlockSize_ = 0;
+    bool processingActive_ = false;
 };
 
 } // namespace kj

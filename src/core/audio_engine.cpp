@@ -38,6 +38,7 @@
 #include "core/audio_device_handler.h"
 #include "core/effects/delay_effect.h"
 #include "core/effects/sidechain_processor.h"
+#include "hosting/VST3Host.h"
 
 std::atomic<bool> isPlaying = false;
 static std::atomic<bool> running{true};
@@ -1207,6 +1208,26 @@ void audioLoop() {
                         state.stepPan = 0.0;
                         state.stepPitchOffset = 0.0;
                     }
+                } else if (trackInfo.type == TrackType::VST) {
+                    if (state.sampleBuffer) {
+                        state.sampleBuffer.reset();
+                        state.sampleFrameCount = 0;
+                    }
+                    if (typeChanged || samplerResetPending) {
+                        resetSamplePlaybackState(state);
+                        resetSynthPlaybackState(state);
+                        state.currentMidiNote = 69;
+                        state.currentFrequency = midiNoteToFrequency(69);
+                        state.lastParameterStep = -1;
+                        state.stepVelocity = 1.0;
+                        state.stepPan = 0.0;
+                        state.stepPitchOffset = 0.0;
+                    }
+
+                    auto host = trackInfo.vstHost;
+                    if (host) {
+                        host->prepare(sampleRate, static_cast<int>(bufferFrameCount));
+                    }
                 } else {
                     if (state.sampleBuffer) {
                         state.sampleBuffer.reset();
@@ -1523,6 +1544,16 @@ void audioLoop() {
                                     state.sampleLastLeft = 0.0;
                                     state.sampleLastRight = 0.0;
                                 }
+                            }
+                        } else if (trackInfo.type == TrackType::VST) {
+                            auto host = trackInfo.vstHost;
+                            if (host) {
+                                float left = 0.0f;
+                                float right = 0.0f;
+                                float* outputs[2] = { &left, &right };
+                                host->process(outputs, 2, 1);
+                                trackLeft = static_cast<double>(left);
+                                trackRight = static_cast<double>(right);
                             }
                         } else {
                             if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&

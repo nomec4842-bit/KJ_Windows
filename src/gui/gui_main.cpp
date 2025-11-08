@@ -92,6 +92,17 @@ std::string formatDelayPercentValue(float value)
     return stream.str();
 }
 
+std::filesystem::path getDefaultVstPluginPath()
+{
+    std::array<wchar_t, MAX_PATH> buffer{};
+    DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length == buffer.size())
+        return {};
+
+    std::filesystem::path exePath(buffer.data());
+    return exePath.parent_path() / L"plugins" / L"TestPlugin.vst3";
+}
+
 void notifyEffectsWindowTrackValuesChanged(int trackId)
 {
     (void)trackId;
@@ -5949,18 +5960,46 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
             ofn.lpstrDefExt = L"vst3";
 
+            std::filesystem::path pluginPath;
             if (GetOpenFileNameW(&ofn))
             {
-                std::filesystem::path selectedPath(fileBuffer);
-                auto host = trackEnsureVstHost(activeTrackId);
-                if (host && host->load(selectedPath.string()))
+                pluginPath = std::filesystem::path(fileBuffer);
+            }
+            else
+            {
+                pluginPath = getDefaultVstPluginPath();
+                if (!pluginPath.empty())
                 {
-                    std::cout << "Loaded plugin successfully." << std::endl;
+                    std::wcout << L"[GUI] Using default VST3 path: " << pluginPath.c_str() << std::endl;
                 }
-                else
-                {
-                    std::cout << "Failed to load VST3 plugin." << std::endl;
-                }
+            }
+
+            auto host = trackEnsureVstHost(activeTrackId);
+            if (!host)
+            {
+                std::cout << "[GUI] Failed to obtain VST3 host for track." << std::endl;
+                return 0;
+            }
+
+            if (pluginPath.empty())
+            {
+                std::cout << "[GUI] No VST3 plug-in selected." << std::endl;
+                return 0;
+            }
+
+            if (!std::filesystem::exists(pluginPath))
+            {
+                std::wcout << L"[GUI] Selected plug-in path does not exist: " << pluginPath.c_str() << std::endl;
+            }
+
+            if (host->load(pluginPath.string()))
+            {
+                std::cout << "[GUI] Loaded VST3 plug-in: " << pluginPath.string() << std::endl;
+                host->openEditor(reinterpret_cast<void*>(hwnd));
+            }
+            else
+            {
+                std::cout << "[GUI] Failed to load VST3 plug-in: " << pluginPath.string() << std::endl;
             }
 
             return 0;
