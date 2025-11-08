@@ -128,6 +128,9 @@ void AudioDeviceHandler::resetStateLocked() {
     initialized_ = false;
     deviceId_.clear();
     deviceName_.clear();
+    activeRenderBuffer_ = nullptr;
+    activeRenderFrameCount_ = 0;
+    bufferPendingRelease_ = false;
 }
 
 bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
@@ -484,13 +487,55 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
     if (!renderClient_) {
         return AUDCLNT_E_NOT_INITIALIZED;
     }
-    return renderClient_->GetBuffer(frameCount, data);
+    if (bufferPendingRelease_) {
+        std::wstringstream warning;
+        warning << L"Render buffer requested while a previous buffer is still pending release ("
+                << activeRenderFrameCount_ << L" frames). Releasing outstanding buffer.";
+        logInfo(warning.str());
+        HRESULT flushResult = renderClient_->ReleaseBuffer(activeRenderFrameCount_, AUDCLNT_BUFFERFLAGS_SILENT);
+        if (FAILED(flushResult)) {
+            logFailure(L"IAudioRenderClient::ReleaseBuffer (pending)", flushResult);
+        }
+        bufferPendingRelease_ = false;
+        activeRenderBuffer_ = nullptr;
+        activeRenderFrameCount_ = 0;
+    }
+    if (!streamStarted_.load(std::memory_order_acquire)) {
+        logInfo(L"Render buffer requested but the audio stream has not been started."
+                L" Ensure AudioDeviceHandler::start() has been called.");
+    }
+    HRESULT hr = renderClient_->GetBuffer(frameCount, data);
+    if (SUCCEEDED(hr)) {
+        activeRenderBuffer_ = *data;
+        activeRenderFrameCount_ = frameCount;
+        bufferPendingRelease_ = true;
+    }
+    return hr;
 }
 
 void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (renderClient_) {
-        renderClient_->ReleaseBuffer(frameCount, 0);
+        if (!bufferPendingRelease_) {
+            logInfo(L"ReleaseBuffer called without an active render buffer; ignoring request.");
+            return;
+        }
+        UINT32 framesToRelease = frameCount;
+        if (frameCount > activeRenderFrameCount_) {
+            std::wstringstream warning;
+            warning << L"Requested to release " << frameCount
+                    << L" frames, but only " << activeRenderFrameCount_
+                    << L" frames were acquired. Clamping to acquired size.";
+            logInfo(warning.str());
+            framesToRelease = activeRenderFrameCount_;
+        }
+        HRESULT hr = renderClient_->ReleaseBuffer(framesToRelease, 0);
+        if (FAILED(hr)) {
+            logFailure(L"IAudioRenderClient::ReleaseBuffer", hr);
+        }
+        bufferPendingRelease_ = false;
+        activeRenderBuffer_ = nullptr;
+        activeRenderFrameCount_ = 0;
     }
 }
 
@@ -616,6 +661,9 @@ void AudioDeviceHandler::resetStateLocked() {
     initialized_ = false;
     deviceId_.clear();
     deviceName_.clear();
+    activeRenderBuffer_ = nullptr;
+    activeRenderFrameCount_ = 0;
+    bufferPendingRelease_ = false;
 }
 
 bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
@@ -657,10 +705,17 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 /*frameCount*/, BYTE** data) {
     if (data) {
         *data = nullptr;
     }
+    bufferPendingRelease_ = false;
+    activeRenderBuffer_ = nullptr;
+    activeRenderFrameCount_ = 0;
     return static_cast<HRESULT>(0);
 }
 
-void AudioDeviceHandler::releaseBuffer(UINT32 /*frameCount*/) {}
+void AudioDeviceHandler::releaseBuffer(UINT32 /*frameCount*/) {
+    bufferPendingRelease_ = false;
+    activeRenderBuffer_ = nullptr;
+    activeRenderFrameCount_ = 0;
+}
 
 std::vector<AudioDeviceHandler::DeviceInfo> AudioDeviceHandler::enumerateRenderDevices() {
     return {};

@@ -103,6 +103,9 @@ private:
     bool initialized_ = false;
     std::wstring deviceId_;
     std::wstring deviceName_;
+    BYTE* activeRenderBuffer_ = nullptr;
+    UINT32 activeRenderFrameCount_ = 0;
+    bool bufferPendingRelease_ = false;
     mutable std::mutex stateMutex_;
     std::thread initThread_;
     bool initThreadActive_ = false;
