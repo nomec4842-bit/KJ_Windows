@@ -81,6 +81,15 @@ std::filesystem::path findDefaultSamplePath() {
     return {};
 }
 
+void audioDriverProbeCallback(BYTE*, UINT32, const WAVEFORMATEX*, void* userData)
+{
+    auto* handler = static_cast<AudioDeviceHandler*>(userData);
+    if (handler)
+    {
+        handler->notifyCallbackExecuted();
+    }
+}
+
 #ifdef DEBUG_AUDIO
 std::string narrowFromWide(const std::wstring& value)
 {
@@ -852,6 +861,7 @@ void audioLoop() {
 
         if (!deviceHandler) {
             deviceHandler = std::make_unique<AudioDeviceHandler>();
+            deviceHandler->registerStreamCallback(&audioDriverProbeCallback, deviceHandler.get());
         }
 
         if (!deviceReady) {
@@ -902,6 +912,8 @@ void audioLoop() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 continue;
             }
+
+            AudioDeviceHandler::resetCallbackMonitor();
 
             if (!deviceHandler->start()) {
                 deviceHandler->shutdown();
@@ -1005,6 +1017,10 @@ void audioLoop() {
             } else if (FAILED(bufferResult)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
+            }
+            if (auto callback = deviceHandler->streamCallback()) {
+                void* context = deviceHandler->streamCallbackContext();
+                callback(data, available, format, context);
             }
             short* samples = (short*)data;
 #ifdef DEBUG_AUDIO
