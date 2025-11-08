@@ -1,4 +1,12 @@
 #include "core/audio_engine.h"
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
