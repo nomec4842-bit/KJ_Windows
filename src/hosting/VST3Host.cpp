@@ -206,16 +206,31 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     if (!view_)
     {
-        view_ = controller_->createView(ViewType::kEditor);
-        if (!view_)
+        auto view = controller_->createView("editor");
+        if (!view)
         {
-            std::cerr << "[KJ] Plugin has no GUI view.\n";
+            std::cerr << "[KJ] Plugin has no editor view.\n";
             return;
         }
+
+        view_ = view;
+    }
+
+    if (!component_ || !controller_)
+    {
+        std::cerr << "[KJ] Cannot show GUI before plugin is fully loaded.\n";
+        return;
     }
 
     HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
-    view_->attached(parentWindow, "HWND");
+    if (!parentWindow)
+    {
+        std::cerr << "[KJ] No parent window provided for plugin GUI.\n";
+        return;
+    }
+
+    if (view_->attached(parentWindow, "HWND") != kResultOk)
+        std::cerr << "[KJ] Failed to attach VST3 editor view.\n";
 
     ViewRect rect{};
     if (view_->getSize(&rect) == kResultTrue)
