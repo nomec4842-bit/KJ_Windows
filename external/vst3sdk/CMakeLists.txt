@@ -39,6 +39,16 @@ set(SDK_ROOT "${ROOT}")
 set(public_sdk_SOURCE_DIR ${SDK_ROOT}/public.sdk)
 set(pluginterfaces_SOURCE_DIR ${SDK_ROOT}/pluginterfaces)
 
+if(WIN32)
+    set(SMTG_PLATFORM_SPECIFIC_SOURCES
+        ${SDK_ROOT}/public.sdk/source/common/systemclipboard_win32.cpp
+        ${SDK_ROOT}/public.sdk/source/common/threadchecker_win32.cpp
+        ${SDK_ROOT}/public.sdk/source/common/systemtime_win32.cpp
+    )
+else()
+    set(SMTG_PLATFORM_SPECIFIC_SOURCES "")
+endif()
+
 if(SMTG_ENABLE_VSTGUI_SUPPORT AND EXISTS "${ROOT}/vstgui4")
     set(VSTGUI_ENABLE_WAYLAND_SUPPORT ${SMTG_ENABLE_WAYLAND_SUPPORT})
     smtg_enable_vstgui_support(VSTGUI_SOURCE_DIR "${ROOT}/vstgui4")

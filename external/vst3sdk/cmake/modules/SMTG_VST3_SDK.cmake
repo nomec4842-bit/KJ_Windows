@@ -199,6 +199,13 @@ endfunction()
 #------------------------------------------------------------------------
 function(smtg_create_public_sdk_common_target)
 
+    set(sdk_common_platform_sources)
+    foreach(source ${SMTG_PLATFORM_SPECIFIC_SOURCES})
+        if(EXISTS ${source})
+            list(APPEND sdk_common_platform_sources ${source})
+        endif()
+    endforeach()
+
     add_library(sdk_common
         STATIC
             ${SDK_ROOT}/public.sdk/source/common/commoniids.cpp
@@ -207,24 +214,19 @@ function(smtg_create_public_sdk_common_target)
             ${SDK_ROOT}/public.sdk/source/common/openurl.cpp
             ${SDK_ROOT}/public.sdk/source/common/openurl.h
             ${SDK_ROOT}/public.sdk/source/common/systemclipboard.h
-            ${SDK_ROOT}/public.sdk/source/common/systemclipboard_linux.cpp
-            ${SDK_ROOT}/public.sdk/source/common/systemclipboard_win32.cpp
             ${SDK_ROOT}/public.sdk/source/common/threadchecker.h
-            ${SDK_ROOT}/public.sdk/source/common/threadchecker_linux.cpp
-            ${SDK_ROOT}/public.sdk/source/common/threadchecker_win32.cpp
             ${SDK_ROOT}/public.sdk/source/common/readfile.cpp
             ${SDK_ROOT}/public.sdk/source/common/readfile.h
             ${SDK_ROOT}/public.sdk/source/vst/vstpresetfile.cpp
             ${SDK_ROOT}/public.sdk/source/vst/vstpresetfile.h
     )
 
-    if(SMTG_MAC)
-        target_sources(sdk_common 
+    if(sdk_common_platform_sources)
+        target_sources(sdk_common
             PRIVATE
-                ${SDK_ROOT}/public.sdk/source/common/threadchecker_mac.mm
-                ${SDK_ROOT}/public.sdk/source/common/systemclipboard_mac.mm
+                ${sdk_common_platform_sources}
         )
-    endif(SMTG_MAC)
+    endif()
 
     # add dependencies
     target_link_libraries(sdk_common 
