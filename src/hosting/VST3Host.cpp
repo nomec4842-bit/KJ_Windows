@@ -5,6 +5,8 @@
 
 #include <pluginterfaces/vst/ivstprocesscontext.h>
 #include <pluginterfaces/gui/iplugview.h>
+#include <pluginterfaces/base/ipersistent.h>
+#include <public.sdk/source/vst/vstcomponent.h>
 
 #include <windows.h>
 
@@ -47,8 +49,47 @@ bool VST3Host::load(const std::string& pluginPath)
                 return false;
             }
 
+            auto controller = factory.createInstance<IEditController>(info.ID());
+            if (!controller)
+            {
+                std::cerr << "[KJ] Failed to create IEditController.\n";
+                return false;
+            }
+
+            Steinberg::FObject hostContext;
+            if (component->initialize(&hostContext) != kResultOk)
+            {
+                std::cerr << "[KJ] Component initialization failed.\n";
+                return false;
+            }
+
+            if (controller->initialize(&hostContext) != kResultOk)
+            {
+                std::cerr << "[KJ] Controller initialization failed.\n";
+                return false;
+            }
+
+            Steinberg::FUID controllerClassId;
+            if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
+            {
+                Steinberg::FUID::String classIdString {};
+                if (persistent->getClassID(classIdString) == kResultOk)
+                {
+                    controllerClassId.fromString(classIdString);
+                }
+            }
+
+            if (!controllerClassId.isValid())
+            {
+                controllerClassId = Steinberg::FUID::fromTUID(info.ID().data());
+            }
+
+            if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
+            {
+                componentImpl->setControllerClass(controllerClassId);
+            }
+
             FUnknownPtr<IAudioProcessor> processor(component);
-            FUnknownPtr<IEditController> controller(component);
             if (processor)
                 std::cout << "AudioProcessor loaded successfully\n";
             if (controller)
