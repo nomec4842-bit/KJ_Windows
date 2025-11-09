@@ -14,6 +14,11 @@
 #include <memory>
 #include <string>
 
+#ifdef _WIN32
+struct HWND__;
+using HWND = HWND__*;
+#endif
+
 namespace kj {
 
 class VST3Host {
@@ -33,11 +38,23 @@ public:
     bool isPluginLoaded() const;
 
 private:
+#ifdef _WIN32
+    class PlugFrame;
+    void destroyPluginUI();
+#endif
+
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_;
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
+
+#ifdef _WIN32
+    PlugFrame* plugFrame_ = nullptr;
+    HWND childWindow_ = nullptr;
+    bool frameAttached_ = false;
+    bool viewAttached_ = false;
+#endif
 
     double preparedSampleRate_ = 0.0;
     int preparedMaxBlockSize_ = 0;
