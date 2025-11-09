@@ -2,12 +2,17 @@
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 
 #include <pluginterfaces/vst/ivstprocesscontext.h>
 #include <pluginterfaces/gui/iplugview.h>
 #include <pluginterfaces/base/ipersistent.h>
 #include <public.sdk/source/vst/vstcomponent.h>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #define SMTG_OS_WINDOWS 1
@@ -18,7 +23,99 @@ using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+#ifdef _WIN32
+namespace {
+constexpr wchar_t kPluginChildWindowClassName[] = L"STATIC";
+constexpr DWORD kPluginChildWindowStyle = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+constexpr DWORD kPluginChildWindowExStyle = WS_EX_NOPARENTNOTIFY;
+}
+#endif
+
 namespace kj {
+
+#ifdef _WIN32
+class VST3Host::PlugFrame : public Steinberg::IPlugFrame
+{
+public:
+    explicit PlugFrame(VST3Host& host) : host_(host) {}
+
+    tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+    {
+        if (!obj)
+            return kInvalidArgument;
+
+        *obj = nullptr;
+
+        if (std::memcmp(iid, IPlugFrame::iid, sizeof(TUID)) == 0 || std::memcmp(iid, FUnknown::iid, sizeof(TUID)) == 0)
+        {
+            *obj = static_cast<IPlugFrame*>(this);
+            addRef();
+            return kResultOk;
+        }
+
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override
+    {
+        return ++refCount_;
+    }
+
+    uint32 PLUGIN_API release() override
+    {
+        uint32 newCount = --refCount_;
+        if (newCount == 0)
+            delete this;
+        return newCount;
+    }
+
+    tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override
+    {
+        if (!newSize)
+            return kInvalidArgument;
+
+        if (!host_.childWindow_ || !::IsWindow(host_.childWindow_))
+            return kResultFalse;
+
+        const int width = std::max<int>(1, newSize->getWidth());
+        const int height = std::max<int>(1, newSize->getHeight());
+
+        BOOL moved = ::MoveWindow(host_.childWindow_, newSize->left, newSize->top, width, height, TRUE);
+        if (!moved)
+        {
+            moved = ::SetWindowPos(host_.childWindow_, nullptr, newSize->left, newSize->top, width, height,
+                                   SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        if (!moved)
+            return kResultFalse;
+
+        Steinberg::IPlugView* targetView = view ? view : host_.view_.get();
+        if (targetView)
+        {
+            Steinberg::ViewRect currentSize;
+            bool sizeChanged = true;
+            if (targetView->getSize(&currentSize) == kResultTrue)
+            {
+                sizeChanged = currentSize.left != newSize->left || currentSize.top != newSize->top ||
+                              currentSize.right != newSize->right || currentSize.bottom != newSize->bottom;
+            }
+
+            if (sizeChanged)
+            {
+                Steinberg::ViewRect newRect = *newSize;
+                targetView->onSize(&newRect);
+            }
+        }
+
+        return kResultOk;
+    }
+
+private:
+    std::atomic<uint32> refCount_ {1};
+    VST3Host& host_;
+};
+#endif
 
 VST3Host::~VST3Host()
 {
@@ -170,11 +267,11 @@ void VST3Host::process(float** outputs, int numChannels, int numFrames)
 
 void VST3Host::unload()
 {
-    if (view_)
-    {
-        view_->removed();
-        view_ = nullptr;
-    }
+    #ifdef _WIN32
+    destroyPluginUI();
+    #endif
+
+    view_ = nullptr;
 
     controller_ = nullptr;
     processor_ = nullptr;
@@ -198,6 +295,11 @@ void VST3Host::openEditor(void* hwnd)
 
 void VST3Host::showPluginUI(void* parentHWND)
 {
+#ifndef _WIN32
+    (void)parentHWND;
+    std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
+    return;
+#else
     if (!controller_)
     {
         std::cerr << "[KJ] No controller available for plugin GUI.\n";
@@ -229,21 +331,111 @@ void VST3Host::showPluginUI(void* parentHWND)
         return;
     }
 
-    if (view_->attached(parentWindow, "HWND") != kResultOk)
-        std::cerr << "[KJ] Failed to attach VST3 editor view.\n";
-
-    ViewRect rect{};
-    if (view_->getSize(&rect) == kResultTrue)
+    ViewRect initialRect {};
+    if (view_->getSize(&initialRect) != kResultTrue)
     {
-        view_->onSize(&rect);
+        initialRect.left = 0;
+        initialRect.top = 0;
+        initialRect.right = 400;
+        initialRect.bottom = 300;
     }
 
-    HWND hPlugin = static_cast<HWND>(parentWindow);
-    ShowWindow(hPlugin, SW_SHOW);
-    UpdateWindow(hPlugin);
-    SetFocus(hPlugin);
+    if (!plugFrame_)
+    {
+        plugFrame_ = new PlugFrame(*this);
+    }
+
+    if (!childWindow_ || !::IsWindow(childWindow_))
+    {
+        childWindow_ = ::CreateWindowExW(kPluginChildWindowExStyle, kPluginChildWindowClassName, L"",
+                                         kPluginChildWindowStyle, initialRect.left, initialRect.top,
+                                         std::max<int>(initialRect.getWidth(), 1), std::max<int>(initialRect.getHeight(), 1),
+                                         parentWindow, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+
+        if (!childWindow_)
+        {
+            std::cerr << "[KJ] Failed to create child window for plugin GUI.\n";
+            return;
+        }
+    }
+    else
+    {
+        ::SetParent(childWindow_, parentWindow);
+    }
+
+    if (!frameAttached_)
+    {
+        plugFrame_->addRef();
+        if (view_->setFrame(plugFrame_) != kResultOk)
+        {
+            std::cerr << "[KJ] Failed to set VST3 plug frame.\n";
+            plugFrame_->release();
+            return;
+        }
+        frameAttached_ = true;
+    }
+
+    if (!viewAttached_)
+    {
+        if (view_->attached(childWindow_, Steinberg::kPlatformTypeHWND) != kResultOk)
+        {
+            std::cerr << "[KJ] Failed to attach VST3 editor view.\n";
+            view_->setFrame(nullptr);
+            frameAttached_ = false;
+            plugFrame_->release();
+            plugFrame_ = nullptr;
+            if (childWindow_ && ::IsWindow(childWindow_))
+            {
+                ::DestroyWindow(childWindow_);
+            }
+            childWindow_ = nullptr;
+            return;
+        }
+
+        viewAttached_ = true;
+    }
+
+    ViewRect appliedRect = initialRect;
+    if (view_->getSize(&appliedRect) != kResultTrue)
+        appliedRect = initialRect;
+
+    plugFrame_->resizeView(view_, &appliedRect);
+
+    ::ShowWindow(childWindow_, SW_SHOW);
+    ::UpdateWindow(childWindow_);
+    ::SetFocus(childWindow_);
 
     std::cout << "[KJ] Plugin GUI displayed.\n";
+#endif
 }
+
+#ifdef _WIN32
+void VST3Host::destroyPluginUI()
+{
+    if (view_ && frameAttached_)
+    {
+        view_->setFrame(nullptr);
+        frameAttached_ = false;
+    }
+
+    if (plugFrame_)
+    {
+        plugFrame_->release();
+        plugFrame_ = nullptr;
+    }
+
+    if (view_ && viewAttached_)
+    {
+        view_->removed();
+        viewAttached_ = false;
+    }
+
+    if (childWindow_ && ::IsWindow(childWindow_))
+    {
+        ::DestroyWindow(childWindow_);
+    }
+    childWindow_ = nullptr;
+}
+#endif
 
 } // namespace kj
