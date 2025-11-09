@@ -30,6 +30,20 @@ using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+namespace {
+
+bool IsInvalidNormalizedValue(Steinberg::Vst::ParamValue value)
+{
+    return std::isnan(value);
+}
+
+bool IsInvalidPlainValue(Steinberg::Vst::ParamValue value)
+{
+    return std::isnan(value);
+}
+
+} // namespace
+
 #ifdef _WIN32
 namespace {
 constexpr wchar_t kContainerWindowClassName[] = L"KJ_VST3_CONTAINER";
@@ -424,7 +438,7 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
 
 void VST3Host::queueParameterChange(ParamID paramId, ParamValue value)
 {
-    if (paramId == kNoParamId)
+    if (paramId == kNoParamId || IsInvalidNormalizedValue(value))
         return;
 
     ParamValue clamped = std::clamp(value, 0.0, 1.0);
@@ -1201,7 +1215,7 @@ std::wstring VST3Host::getFallbackDisplayString(const FallbackParameter& param) 
     }
 
     auto plainValue = controller_->normalizedParamToPlain(param.info.id, param.normalizedValue);
-    if (!std::isnan(plainValue))
+    if (!IsInvalidPlainValue(plainValue))
     {
         std::wstringstream stream;
         stream << std::fixed << std::setprecision(3) << plainValue;
@@ -1231,8 +1245,10 @@ std::wstring VST3Host::getParameterName(const FallbackParameter& param) const
 void VST3Host::syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value)
 {
     (void)paramId;
-    (void)value;
     if (!fallbackWindow_ || !::IsWindow(fallbackWindow_))
+        return;
+
+    if (IsInvalidNormalizedValue(value))
         return;
 
     ::PostMessageW(fallbackWindow_, kFallbackRefreshMessage, 0, 0);
