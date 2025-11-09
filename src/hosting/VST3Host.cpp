@@ -205,6 +205,10 @@ bool VST3Host::load(const std::string& pluginPath)
     if (controller)
         std::cout << "EditController loaded successfully\n";
 
+    #ifdef _WIN32
+    destroyPluginUI();
+    #endif
+
     module_ = module;
     component_ = component;
     processor_ = processor;
