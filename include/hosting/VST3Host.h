@@ -1,5 +1,12 @@
 #pragma once
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 // Steinberg base + VST interfaces
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/gui/iplugview.h"
@@ -14,11 +21,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-struct HWND__;
-using HWND = HWND__*;
-#endif
 
 namespace kj {
 
