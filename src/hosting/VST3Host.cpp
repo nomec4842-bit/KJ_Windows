@@ -214,7 +214,7 @@ private:
 };
 #endif
 
-class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler2
+class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler, public Steinberg::Vst::IComponentHandler2
 {
 public:
     explicit ComponentHandler(VST3Host& host) : host_(host) {}
@@ -225,11 +225,21 @@ public:
             return kInvalidArgument;
 
         *obj = nullptr;
-        if (std::memcmp(iid, IComponentHandler2::iid, sizeof(TUID)) == 0 ||
-            std::memcmp(iid, IComponentHandler::iid, sizeof(TUID)) == 0 ||
-            std::memcmp(iid, FUnknown::iid, sizeof(TUID)) == 0)
+        if (std::memcmp(iid, IComponentHandler2::iid, sizeof(TUID)) == 0)
         {
             *obj = static_cast<IComponentHandler2*>(this);
+            addRef();
+            return kResultOk;
+        }
+        if (std::memcmp(iid, IComponentHandler::iid, sizeof(TUID)) == 0)
+        {
+            *obj = static_cast<IComponentHandler*>(this);
+            addRef();
+            return kResultOk;
+        }
+        if (std::memcmp(iid, FUnknown::iid, sizeof(TUID)) == 0)
+        {
+            *obj = static_cast<FUnknown*>(static_cast<IComponentHandler*>(this));
             addRef();
             return kResultOk;
         }
