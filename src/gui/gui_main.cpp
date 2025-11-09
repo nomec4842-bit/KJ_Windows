@@ -159,9 +159,17 @@ constexpr int kAudioDeviceDropdownOptionHeight = 24;
 constexpr int kWaveDropdownSpacing = 4;
 constexpr int kWaveDropdownOptionHeight = 24;
 
-const std::array<TrackType, 3> kTrackTypeOptions = {TrackType::Synth, TrackType::Sample, TrackType::VST};
+const std::array<TrackType, 4> kTrackTypeOptions = {
+    TrackType::Synth,
+    TrackType::Sample,
+    TrackType::MidiOut,
+    TrackType::VST,
+};
 const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, SynthWaveType::Square,
                                                         SynthWaveType::Saw, SynthWaveType::Triangle};
+
+constexpr int kMidiChannelDropdownSpacing = 4;
+constexpr int kMidiChannelDropdownOptionHeight = 24;
 
 LONG computeDropdownStartTop(const RECT& anchor, int optionCount, int optionHeight, int spacing, const RECT& client)
 {
@@ -194,6 +202,7 @@ RECT loadSampleButton = {200, 40, 340, 110};
 RECT loadVstButton = {200, 40, 270, 110};
 RECT showVstButton = {270, 40, 340, 110};
 RECT waveSelectButton = {200, 40, 340, 110};
+RECT midiChannelButton = {200, 40, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
 RECT stepCountDownButton = {470, 55, 510, 95};
@@ -213,6 +222,8 @@ int openTrackTypeTrackId = 0;
 bool audioDeviceDropdownOpen = false;
 bool waveDropdownOpen = false;
 int waveDropdownTrackId = 0;
+bool midiChannelDropdownOpen = false;
+int midiChannelDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
@@ -897,6 +908,16 @@ struct WaveDropdownOption
 
 std::vector<WaveDropdownOption> gWaveOptions;
 
+struct MidiChannelDropdownOption
+{
+    RECT rect{};
+    int trackId = 0;
+    int channel = 1;
+    bool isSelected = false;
+};
+
+std::vector<MidiChannelDropdownOption> gMidiChannelOptions;
+
 struct TrackTypeDropdownOption
 {
     RECT rect{};
@@ -1265,6 +1286,8 @@ std::string trackTypeToString(TrackType type)
         return "Synth";
     case TrackType::Sample:
         return "Sample";
+    case TrackType::MidiOut:
+        return "MIDI Out";
     case TrackType::VST:
         return "VST";
     }
@@ -1365,6 +1388,8 @@ void showLoadProjectDialog(HWND hwnd)
         openTrackTypeTrackId = 0;
         waveDropdownOpen = false;
         waveDropdownTrackId = 0;
+        midiChannelDropdownOpen = false;
+        midiChannelDropdownTrackId = 0;
         audioDeviceDropdownOpen = false;
 
         notifyEffectsWindowTrackListChanged();
@@ -5196,6 +5221,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
     gAudioDeviceOptions.clear();
     gWaveOptions.clear();
+    gMidiChannelOptions.clear();
     gTrackTypeDropdownOptions.clear();
 
     drawButton(surface, playButton,
@@ -5235,6 +5261,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         fallbackTrack.synthRelease = trackGetSynthRelease(activeTrackId);
         fallbackTrack.sampleAttack = trackGetSampleAttack(activeTrackId);
         fallbackTrack.sampleRelease = trackGetSampleRelease(activeTrackId);
+        fallbackTrack.midiChannel = trackGetMidiChannel(activeTrackId);
         fallbackTrack.vstHost = trackGetVstHost(activeTrackId);
         activeTrackPtr = &fallbackTrack;
     }
@@ -5242,9 +5269,11 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     bool showSampleLoader = false;
     bool showVstLoader = false;
     bool showWaveSelector = false;
+    bool showMidiChannelSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
     std::shared_ptr<kj::VST3Host> activeVstHost;
     bool vstEditorAvailable = false;
+    int activeMidiChannel = 1;
     if (activeTrackPtr)
     {
         switch (activeTrackPtr->type)
@@ -5255,6 +5284,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         case TrackType::Synth:
             showWaveSelector = true;
             activeWaveType = activeTrackPtr->synthWaveType;
+            break;
+        case TrackType::MidiOut:
+            showMidiChannelSelector = true;
+            activeMidiChannel = activeTrackPtr->midiChannel;
             break;
         case TrackType::VST:
             showVstLoader = true;
@@ -5278,6 +5311,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         waveDropdownTrackId = 0;
     }
 
+    if (midiChannelDropdownOpen && (!showMidiChannelSelector || midiChannelDropdownTrackId != activeTrackId))
+    {
+        midiChannelDropdownOpen = false;
+        midiChannelDropdownTrackId = 0;
+    }
+
     if (showSampleLoader)
     {
         drawButton(surface, loadSampleButton,
@@ -5293,6 +5332,37 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         COLORREF showFill = vstEditorAvailable ? RGB(50, 50, 50) : RGB(30, 30, 30);
         COLORREF showOutline = vstEditorAvailable ? RGB(120, 120, 120) : RGB(80, 80, 80);
         drawButton(surface, showVstButton, showFill, showOutline, "Show VST");
+    }
+    else if (showMidiChannelSelector)
+    {
+        int displayChannel = std::clamp(activeMidiChannel, 1, 16);
+        std::string midiLabel = "MIDI Ch: " + std::to_string(displayChannel);
+        drawButton(surface, midiChannelButton,
+                   RGB(50, 50, 50), RGB(120, 120, 120),
+                   midiLabel.c_str());
+
+        if (midiChannelDropdownOpen && midiChannelDropdownTrackId == activeTrackId)
+        {
+            const int optionCount = 16;
+            RECT optionRect = midiChannelButton;
+            optionRect.top = computeDropdownStartTop(midiChannelButton, optionCount,
+                                                     kMidiChannelDropdownOptionHeight,
+                                                     kMidiChannelDropdownSpacing, client);
+            optionRect.bottom = optionRect.top + kMidiChannelDropdownOptionHeight;
+
+            for (int channel = 1; channel <= optionCount; ++channel)
+            {
+                MidiChannelDropdownOption option{};
+                option.trackId = activeTrackId;
+                option.channel = channel;
+                option.rect = optionRect;
+                option.isSelected = (channel == displayChannel);
+                gMidiChannelOptions.push_back(option);
+
+                optionRect.top = optionRect.bottom + kMidiChannelDropdownSpacing;
+                optionRect.bottom = optionRect.top + kMidiChannelDropdownOptionHeight;
+            }
+        }
     }
     else if (showWaveSelector)
     {
@@ -5498,6 +5568,14 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
     }
 
+    for (const auto& option : gMidiChannelOptions)
+    {
+        COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string optionLabel = "Channel " + std::to_string(option.channel);
+        drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
+    }
+
     for (const auto& option : gTrackTypeDropdownOptions)
     {
         COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
@@ -5588,6 +5666,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     audioDeviceDropdownOpen = false;
                     waveDropdownOpen = false;
                     waveDropdownTrackId = 0;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
@@ -5604,6 +5684,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 audioDeviceDropdownOpen = false;
                 waveDropdownOpen = false;
                 waveDropdownTrackId = 0;
+                midiChannelDropdownOpen = false;
+                midiChannelDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
@@ -5618,6 +5700,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -5628,6 +5712,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             audioDeviceDropdownOpen = false;
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -5638,6 +5724,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             audioDeviceDropdownOpen = false;
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -5654,6 +5742,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool showSampleLoader = false;
         bool showVstLoader = false;
         bool showWaveSelector = false;
+        bool showMidiChannelSelector = false;
         std::shared_ptr<kj::VST3Host> activeVstHost;
         bool vstEditorAvailable = false;
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
@@ -5661,6 +5750,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showSampleLoader = activeTrack->type == TrackType::Sample;
             showVstLoader = activeTrack->type == TrackType::VST;
             showWaveSelector = activeTrack->type == TrackType::Synth;
+            showMidiChannelSelector = activeTrack->type == TrackType::MidiOut;
             if (showVstLoader)
             {
                 activeVstHost = activeTrack->vstHost;
@@ -5672,6 +5762,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showSampleLoader = trackType == TrackType::Sample;
             showVstLoader = trackType == TrackType::VST;
             showWaveSelector = trackType == TrackType::Synth;
+            showMidiChannelSelector = trackType == TrackType::MidiOut;
             if (showVstLoader)
             {
                 activeVstHost = trackGetVstHost(activeTrackId);
@@ -5689,8 +5780,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             waveDropdownTrackId = 0;
         }
 
+        if (!showMidiChannelSelector)
+        {
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
+        }
+
         bool waveDropdownWasOpen = waveDropdownOpen;
         int previousWaveDropdownTrack = waveDropdownTrackId;
+        bool midiDropdownWasOpen = midiChannelDropdownOpen;
+        int previousMidiDropdownTrack = midiChannelDropdownTrackId;
 
         if (waveDropdownOpen && waveDropdownTrackId == activeTrackId)
         {
@@ -5713,6 +5812,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
         }
 
+        if (midiChannelDropdownOpen && midiChannelDropdownTrackId == activeTrackId)
+        {
+            for (const auto& option : gMidiChannelOptions)
+            {
+                if (option.trackId == activeTrackId && pointInRect(option.rect, x, y))
+                {
+                    trackSetMidiChannel(option.trackId, option.channel);
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+
+            RECT dropdownBounds;
+            if (computeDropdownBoundsIf(gMidiChannelOptions, dropdownBounds,
+                                        [trackId = activeTrackId](const MidiChannelDropdownOption& option) {
+                                            return option.trackId == trackId;
+                                        }) &&
+                pointInRect(dropdownBounds, x, y))
+            {
+                return 0;
+            }
+        }
+
         if (openTrackTypeTrackId != 0)
         {
             for (const auto& option : gTrackTypeDropdownOptions)
@@ -5724,6 +5848,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     {
                         waveDropdownOpen = false;
                         waveDropdownTrackId = 0;
+                    }
+                    if (option.type != TrackType::MidiOut && midiChannelDropdownTrackId == option.trackId)
+                    {
+                        midiChannelDropdownOpen = false;
+                        midiChannelDropdownTrackId = 0;
                     }
                     openTrackTypeTrackId = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
@@ -5740,6 +5869,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 return 0;
             }
+        }
+
+        if (showMidiChannelSelector && pointInRect(midiChannelButton, x, y))
+        {
+            if (midiChannelDropdownOpen && midiChannelDropdownTrackId == activeTrackId)
+            {
+                midiChannelDropdownOpen = false;
+                midiChannelDropdownTrackId = 0;
+            }
+            else
+            {
+                midiChannelDropdownOpen = true;
+                midiChannelDropdownTrackId = activeTrackId;
+            }
+            openTrackTypeTrackId = 0;
+            audioDeviceDropdownOpen = false;
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
 
         if (showWaveSelector && pointInRect(waveSelectButton, x, y))
@@ -5768,6 +5917,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthFormant, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5778,6 +5929,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthFeedback, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5788,6 +5941,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthPitch, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5798,6 +5953,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthPitchRange, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5808,6 +5965,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthAttack, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5818,6 +5977,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthDecay, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5828,6 +5989,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthSustain, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5838,6 +6001,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SynthRelease, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5850,6 +6015,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SampleAttack, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5860,6 +6027,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     openTrackTypeTrackId = 0;
                     waveDropdownOpen = false;
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     audioDeviceDropdownOpen = false;
                     beginSliderDrag(hwnd, SliderDragTarget::SampleRelease, activeTrackId);
                     updateSliderDrag(hwnd, x);
@@ -5887,6 +6056,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 }
                 waveDropdownOpen = false;
                 waveDropdownTrackId = 0;
+                midiChannelDropdownOpen = false;
+                midiChannelDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
@@ -5904,6 +6075,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     waveDropdownOpen = false;
                     waveDropdownTrackId = 0;
+                    stateChanged = true;
+                }
+
+                if (midiChannelDropdownOpen)
+                {
+                    midiChannelDropdownOpen = false;
+                    midiChannelDropdownTrackId = 0;
                     stateChanged = true;
                 }
 
@@ -5938,6 +6116,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        if (midiDropdownWasOpen && midiChannelDropdownOpen &&
+            midiChannelDropdownTrackId == previousMidiDropdownTrack)
+        {
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }

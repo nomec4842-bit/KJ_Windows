@@ -1228,6 +1228,21 @@ void audioLoop() {
                     if (host) {
                         host->prepare(sampleRate, static_cast<int>(bufferFrameCount));
                     }
+                } else if (trackInfo.type == TrackType::MidiOut) {
+                    if (state.sampleBuffer) {
+                        state.sampleBuffer.reset();
+                        state.sampleFrameCount = 0;
+                    }
+                    if (typeChanged || samplerResetPending) {
+                        resetSamplePlaybackState(state);
+                        resetSynthPlaybackState(state);
+                        state.currentMidiNote = 69;
+                        state.currentFrequency = midiNoteToFrequency(69);
+                        state.lastParameterStep = -1;
+                        state.stepVelocity = 1.0;
+                        state.stepPan = 0.0;
+                        state.stepPitchOffset = 0.0;
+                    }
                 } else {
                     if (state.sampleBuffer) {
                         state.sampleBuffer.reset();
@@ -1555,6 +1570,14 @@ void audioLoop() {
                                 trackLeft = static_cast<double>(left);
                                 trackRight = static_cast<double>(right);
                             }
+                        } else if (trackInfo.type == TrackType::MidiOut) {
+                            if (!gate) {
+                                state.synthEnvelopeStage = EnvelopeStage::Idle;
+                                state.sampleEnvelopeStage = EnvelopeStage::Idle;
+                            }
+                            state.samplePlaying = false;
+                            state.sampleTailActive = false;
+                            state.voices.clear();
                         } else {
                             if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&
                                 state.synthEnvelopeStage != EnvelopeStage::Release) {

@@ -16,6 +16,7 @@ enum class TrackType
 {
     Synth,
     Sample,
+    MidiOut,
     VST,
 };
 
@@ -63,6 +64,7 @@ struct Track
     float synthRelease = 0.3f;
     float sampleAttack = 0.005f;
     float sampleRelease = 0.3f;
+    int midiChannel = 1;
     std::shared_ptr<kj::VST3Host> vstHost;
 };
 
@@ -183,6 +185,9 @@ void trackSetSampleAttack(int trackId, float value);
 
 float trackGetSampleRelease(int trackId);
 void trackSetSampleRelease(int trackId, float value);
+
+int trackGetMidiChannel(int trackId);
+void trackSetMidiChannel(int trackId, int channel);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);
