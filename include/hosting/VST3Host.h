@@ -4,30 +4,26 @@
 #ifndef _WIN32_IE
 #define _WIN32_IE 0x0600
 #endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #include <windows.h>
 #include <commctrl.h>
 #endif
 
 #include <algorithm>
+#include <mutex>
+#include <string>
+#include <vector>
 
-// Steinberg base + VST interfaces
 #include "pluginterfaces/base/fplatform.h"
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
-#include "base/source/fobject.h" // for Steinberg::IPtr
+#include "base/source/fobject.h"
 
-// VST3 hosting layer (module helper)
 #include "public.sdk/source/vst/hosting/module.h"
-
-#include <memory>
-#include <string>
-#include <vector>
+#include "public.sdk/source/vst/hosting/parameterchanges.h"
 
 namespace kj {
 
@@ -51,12 +47,23 @@ public:
     bool isPluginLoaded() const;
 
 private:
+    struct PendingParameterChange {
+        Steinberg::Vst::ParamID id {Steinberg::Vst::kNoParamId};
+        Steinberg::Vst::ParamValue value {0.0};
+    };
+
 #ifdef _WIN32
     struct FallbackParameter {
         Steinberg::Vst::ParameterInfo info {};
         Steinberg::Vst::ParamValue normalizedValue = 0.0;
     };
+
     class PlugFrame;
+#endif
+
+    class ComponentHandler;
+
+#ifdef _WIN32
     void destroyPluginUI();
     bool ensureWindowClasses();
     bool ensureCommonControls();
@@ -80,16 +87,22 @@ private:
     void resetFallbackEditState();
     std::wstring getFallbackDisplayString(const FallbackParameter& param) const;
     std::wstring getParameterName(const FallbackParameter& param) const;
+    void syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
+
+    void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
+    void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
+    void onRestartComponent(Steinberg::int32 flags);
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
+    ComponentHandler* componentHandler_ = nullptr;
 
 #ifdef _WIN32
     PlugFrame* plugFrame_ = nullptr;
@@ -121,6 +134,10 @@ private:
     double preparedSampleRate_ = 0.0;
     int preparedMaxBlockSize_ = 0;
     bool processingActive_ = false;
+
+    Steinberg::Vst::ParameterChanges inputParameterChanges_;
+    std::vector<PendingParameterChange> pendingParameterChanges_;
+    mutable std::mutex parameterMutex_;
 
 #ifdef _WIN32
     std::wstring pluginNameW_;
