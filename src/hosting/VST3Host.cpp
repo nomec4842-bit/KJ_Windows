@@ -11,6 +11,7 @@
 #include <pluginterfaces/vst/ivstprocesscontext.h>
 #include <pluginterfaces/gui/iplugview.h>
 #include <pluginterfaces/base/ipersistent.h>
+#include <pluginterfaces/base/ustring.h>
 #include <public.sdk/source/vst/vstcomponent.h>
 
 #ifndef NOMINMAX
@@ -22,10 +23,6 @@
 #ifdef _WIN32
 #pragma comment(lib, "Comctl32.lib")
 #endif
-
-#define SMTG_OS_WINDOWS 1
-#define SMTG_PLATFORM_WINDOWS 1
-#define SMTG_EXPORT_MODULE_ENTRY 1
 
 using namespace VST3::Hosting;
 using namespace Steinberg;
@@ -59,11 +56,14 @@ std::wstring Utf8ToWide(const std::string& value)
 
 std::wstring String128ToWide(const Steinberg::Vst::String128& value)
 {
+    Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), VST3_STRING128_SIZE);
+    Steinberg::char16 buffer[VST3_STRING128_SIZE] {};
+    string.copyTo(buffer, VST3_STRING128_SIZE);
+
     std::wstring result;
-    result.reserve(Steinberg::Vst::kString128Size);
-    for (int i = 0; i < Steinberg::Vst::kString128Size; ++i)
+    result.reserve(VST3_STRING128_SIZE);
+    for (Steinberg::char16 character : buffer)
     {
-        Steinberg::Vst::TChar character = value[i];
         if (character == 0)
             break;
         result.push_back(static_cast<wchar_t>(character));
@@ -74,14 +74,6 @@ std::wstring String128ToWide(const Steinberg::Vst::String128& value)
 #endif
 
 namespace kj {
-
-#ifdef _WIN32
-struct VST3Host::FallbackParameter
-{
-    Steinberg::Vst::ParamID id = Steinberg::Vst::kNoParamId;
-    Steinberg::Vst::ParameterInfo info {};
-    double normalizedValue = 0.0;
-};
 
 class VST3Host::PlugFrame : public Steinberg::IPlugFrame
 {
@@ -324,7 +316,7 @@ void VST3Host::onContainerDestroyed()
     fallbackVisible_ = false;
     fallbackSelectedIndex_ = -1;
     fallbackEditing_ = false;
-    fallbackEditingParamId_ = Steinberg::Vst::kNoParamId;
+    fallbackEditingParamId_ = 0;
 }
 
 void VST3Host::ensurePluginViewHost()
@@ -506,17 +498,14 @@ void VST3Host::refreshFallbackParameters()
 
     for (int32 index = 0; index < parameterCount; ++index)
     {
-        ParameterInfo info {};
+        Steinberg::Vst::ParameterInfo info {};
         if (controller_->getParameterInfo(index, info) != kResultOk)
             continue;
 
         if ((info.flags & ParameterInfo::kIsReadOnly) != 0)
             continue;
 
-        FallbackParameter parameter {};
-        parameter.id = info.id;
-        parameter.info = info;
-        parameter.normalizedValue = controller_->getParamNormalized(info.id);
+        FallbackParameter parameter {info, controller_->getParamNormalized(info.id)};
         fallbackParameters_.push_back(parameter);
     }
 
@@ -614,15 +603,15 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
 
     if (!fallbackEditing_)
     {
-        controller_->beginEdit(parameter.id);
+        controller_->beginEdit(parameter.info.id);
         fallbackEditing_ = true;
-        fallbackEditingParamId_ = parameter.id;
+        fallbackEditingParamId_ = parameter.info.id;
     }
 
-    controller_->setParamNormalized(parameter.id, normalized);
-    controller_->performEdit(parameter.id, normalized);
+    controller_->setParamNormalized(parameter.info.id, normalized);
+    controller_->performEdit(parameter.info.id, normalized);
     if (component_)
-        component_->setParamNormalized(parameter.id, normalized);
+        component_->setParamNormalized(parameter.info.id, normalized);
 
     parameter.normalizedValue = normalized;
 
@@ -638,9 +627,9 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
 
     if (finalChange && fallbackEditing_)
     {
-        controller_->endEdit(parameter.id);
+        controller_->endEdit(parameter.info.id);
         fallbackEditing_ = false;
-        fallbackEditingParamId_ = Steinberg::Vst::kNoParamId;
+        fallbackEditingParamId_ = 0;
     }
 }
 
@@ -674,12 +663,12 @@ void VST3Host::updateFallbackValueLabel()
 
 void VST3Host::resetFallbackEditState()
 {
-    if (fallbackEditing_ && controller_ && fallbackEditingParamId_ != Steinberg::Vst::kNoParamId)
+    if (fallbackEditing_ && controller_ && fallbackEditingParamId_ != 0)
     {
         controller_->endEdit(fallbackEditingParamId_);
     }
     fallbackEditing_ = false;
-    fallbackEditingParamId_ = Steinberg::Vst::kNoParamId;
+    fallbackEditingParamId_ = 0;
 }
 
 std::wstring VST3Host::getFallbackDisplayString(const FallbackParameter& param) const
@@ -688,7 +677,7 @@ std::wstring VST3Host::getFallbackDisplayString(const FallbackParameter& param) 
         return {};
 
     Steinberg::Vst::String128 buffer {};
-    if (controller_->normalizedParamToPlain(param.id, param.normalizedValue, buffer) == kResultOk)
+    if (controller_->normalizedParamToPlain(param.info.id, param.normalizedValue, buffer) == kResultOk)
     {
         std::wstring text = String128ToWide(buffer);
         if (!text.empty())
@@ -711,7 +700,7 @@ std::wstring VST3Host::getParameterName(const FallbackParameter& param) const
         return name;
 
     std::wstringstream stream;
-    stream << L"Param " << param.id;
+    stream << L"Param " << param.info.id;
     return stream.str();
 }
 
