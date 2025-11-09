@@ -5,9 +5,13 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <commctrl.h>
 #endif
 
+#include <algorithm>
+
 // Steinberg base + VST interfaces
+#include "pluginterfaces/base/fplatform.h"
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -23,6 +27,9 @@
 #include <vector>
 
 namespace kj {
+
+constexpr size_t VST3_STRING128_SIZE = 128;
+using String128 = Steinberg::Vst::TChar[VST3_STRING128_SIZE];
 
 class VST3Host {
 public:
@@ -43,11 +50,8 @@ public:
 private:
 #ifdef _WIN32
     struct FallbackParameter {
-        std::string name;
-        Steinberg::Vst::ParamID id;
-        double value = 0.0;
-        bool isBoolean = false;
-        Steinberg::Vst::ParamValue defaultValue = 0.0;
+        Steinberg::Vst::ParameterInfo info {};
+        Steinberg::Vst::ParamValue normalizedValue = 0.0;
     };
     class PlugFrame;
     void destroyPluginUI();
@@ -79,9 +83,9 @@ private:
 #endif
 
     VST3::Hosting::Module::Ptr module_;
-    Steinberg::IPtr<Steinberg::Vst::IComponent> component_;
+    Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
-    Steinberg::IPtr<Steinberg::Vst::IEditController> controller_;
+    Steinberg::IPtr<Steinberg::Vst::IEditController> controller_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
 
 #ifdef _WIN32
@@ -108,7 +112,7 @@ private:
     bool fallbackVisible_ = false;
     int fallbackSelectedIndex_ = -1;
     bool fallbackEditing_ = false;
-    Steinberg::Vst::ParamID fallbackEditingParamId_ = Steinberg::Vst::kNoParamId;
+    Steinberg::Vst::ParamID fallbackEditingParamId_ = 0;
 #endif
 
     double preparedSampleRate_ = 0.0;
