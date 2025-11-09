@@ -14,6 +14,7 @@ using namespace kj;
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -213,7 +214,7 @@ private:
 };
 #endif
 
-class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler
+class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler2
 {
 public:
     explicit ComponentHandler(VST3Host& host) : host_(host) {}
@@ -224,10 +225,11 @@ public:
             return kInvalidArgument;
 
         *obj = nullptr;
-        if (std::memcmp(iid, IComponentHandler::iid, sizeof(TUID)) == 0 ||
+        if (std::memcmp(iid, IComponentHandler2::iid, sizeof(TUID)) == 0 ||
+            std::memcmp(iid, IComponentHandler::iid, sizeof(TUID)) == 0 ||
             std::memcmp(iid, FUnknown::iid, sizeof(TUID)) == 0)
         {
-            *obj = static_cast<IComponentHandler*>(this);
+            *obj = static_cast<IComponentHandler2*>(this);
             addRef();
             return kResultOk;
         }
@@ -266,6 +268,27 @@ public:
     tresult PLUGIN_API restartComponent(int32 flags) override
     {
         host_.onRestartComponent(flags);
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API setDirty(TBool) override
+    {
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API requestOpenEditor(FIDString name) override
+    {
+        host_.onComponentRequestOpenEditor(name);
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API startGroupEdit() override
+    {
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API finishGroupEdit() override
+    {
         return kResultOk;
     }
 
@@ -476,6 +499,22 @@ void VST3Host::onRestartComponent(int32 flags)
 #endif
 }
 
+void VST3Host::onComponentRequestOpenEditor(const char* viewType)
+{
+    const char* requested = (viewType && *viewType) ? viewType : Steinberg::Vst::ViewType::kEditor;
+    requestedViewType_ = requested;
+
+#ifdef _WIN32
+    HWND targetParent = nullptr;
+    if (lastParentWindow_ && ::IsWindow(lastParentWindow_))
+        targetParent = lastParentWindow_;
+
+    showPluginUI(targetParent);
+#else
+    (void)requested;
+#endif
+}
+
 void VST3Host::process(float** outputs, int numChannels, int numSamples)
 {
     if (!processor_ || !processingActive_ || !outputs)
@@ -563,6 +602,12 @@ void VST3Host::unload()
     inputParameterChanges_.setMaxParameters(0);
     inputParameterChanges_.clearQueue();
 
+    requestedViewType_ = Steinberg::Vst::ViewType::kEditor;
+
+#ifdef _WIN32
+    lastParentWindow_ = nullptr;
+#endif
+
     std::lock_guard<std::mutex> lock(parameterMutex_);
     pendingParameterChanges_.clear();
 }
@@ -586,6 +631,19 @@ void VST3Host::showPluginUI(void* parentHWND)
     }
 
     HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
+    if (parentWindow)
+    {
+        lastParentWindow_ = parentWindow;
+    }
+    else if (lastParentWindow_ && ::IsWindow(lastParentWindow_))
+    {
+        parentWindow = lastParentWindow_;
+    }
+    else
+    {
+        lastParentWindow_ = nullptr;
+    }
+
     if (!createContainerWindow(parentWindow))
     {
         std::cerr << "[KJ] Failed to create container window for plug-in GUI.\n";
@@ -594,10 +652,20 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     if (!view_ && controller_)
     {
-        if (auto view = controller_->createView("editor"))
+        const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
+                                                               : requestedViewType_.c_str();
+        auto view = controller_->createView(preferredType);
+        if (!view && std::strcmp(preferredType, Steinberg::Vst::ViewType::kEditor) != 0)
+            view = controller_->createView(Steinberg::Vst::ViewType::kEditor);
+
+        if (view)
+        {
             view_ = view;
+        }
         else
+        {
             std::cerr << "[KJ] Plugin has no editor view. Using fallback controls.\n";
+        }
     }
 
     if (view_)
