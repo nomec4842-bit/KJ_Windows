@@ -56,12 +56,13 @@ std::wstring Utf8ToWide(const std::string& value)
 
 std::wstring String128ToWide(const Steinberg::Vst::String128& value)
 {
-    Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), VST3_STRING128_SIZE);
-    Steinberg::char16 buffer[VST3_STRING128_SIZE] {};
-    string.copyTo(buffer, VST3_STRING128_SIZE);
+    constexpr size_t kStringLength = kj::VST3_STRING128_SIZE;
+    Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), kStringLength);
+    Steinberg::char16 buffer[kStringLength] {};
+    string.copyTo(buffer, kStringLength);
 
     std::wstring result;
-    result.reserve(VST3_STRING128_SIZE);
+    result.reserve(kStringLength);
     for (Steinberg::char16 character : buffer)
     {
         if (character == 0)
@@ -69,6 +70,21 @@ std::wstring String128ToWide(const Steinberg::Vst::String128& value)
         result.push_back(static_cast<wchar_t>(character));
     }
     return result;
+}
+
+void SetListViewItemTextWide(HWND listView, int itemIndex, int subItemIndex, const std::wstring& text)
+{
+    if (!listView || !::IsWindow(listView))
+        return;
+
+    LVITEMW item {};
+    item.iItem = itemIndex;
+    item.iSubItem = subItemIndex;
+    item.mask = LVIF_TEXT;
+    item.pszText = text.empty() ? const_cast<wchar_t*>(L"") : const_cast<wchar_t*>(text.c_str());
+
+    ::SendMessageW(listView, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex),
+                   reinterpret_cast<LPARAM>(&item));
 }
 }
 #endif
@@ -529,9 +545,7 @@ void VST3Host::refreshFallbackParameters()
         if (inserted >= 0)
         {
             std::wstring value = getFallbackDisplayString(parameter);
-            ::ListView_SetItemTextW(fallbackListView_, inserted, 1,
-                                    value.empty() ? const_cast<wchar_t*>(L"")
-                                                  : const_cast<wchar_t*>(value.c_str()));
+            SetListViewItemTextWide(fallbackListView_, inserted, 1, value);
         }
         ++row;
     }
@@ -618,9 +632,7 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
     if (fallbackListView_ && ::IsWindow(fallbackListView_))
     {
         std::wstring value = getFallbackDisplayString(parameter);
-        ::ListView_SetItemTextW(fallbackListView_, fallbackSelectedIndex_, 1,
-                                value.empty() ? const_cast<wchar_t*>(L"")
-                                              : const_cast<wchar_t*>(value.c_str()));
+        SetListViewItemTextWide(fallbackListView_, fallbackSelectedIndex_, 1, value);
     }
 
     updateFallbackValueLabel();
