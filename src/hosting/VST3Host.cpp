@@ -1097,8 +1097,8 @@ void VST3Host::updateFallbackSlider(bool resetSelection)
         fallbackSelectedIndex_ >= static_cast<int>(fallbackParameters_.size()))
     {
         fallbackSelectedIndex_ = 0;
-        ::ListView_SetItemState(fallbackListView_, fallbackSelectedIndex_, LVIS_SELECTED, LVIS_SELECTED);
-        ::ListView_EnsureVisible(fallbackListView_, fallbackSelectedIndex_, FALSE);
+        ListView_SetItemState(fallbackListView_, fallbackSelectedIndex_, LVIS_SELECTED, LVIS_SELECTED);
+        ListView_EnsureVisible(fallbackListView_, fallbackSelectedIndex_, FALSE);
     }
 
     onFallbackParameterSelected(fallbackSelectedIndex_);
@@ -1119,13 +1119,13 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
 
     if (!fallbackEditing_)
     {
-        controller_->beginEdit(parameter.info.id);
+        if (auto hostEditing = Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing>(controller_))
+            hostEditing->beginEditFromHost(parameter.info.id);
         fallbackEditing_ = true;
         fallbackEditingParamId_ = parameter.info.id;
     }
 
     controller_->setParamNormalized(parameter.info.id, normalized);
-    controller_->performEdit(parameter.info.id, normalized);
 
     queueParameterChange(parameter.info.id, normalized);
 
@@ -1141,7 +1141,8 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
 
     if (finalChange && fallbackEditing_)
     {
-        controller_->endEdit(parameter.info.id);
+        if (auto hostEditing = Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing>(controller_))
+            hostEditing->endEditFromHost(parameter.info.id);
         fallbackEditing_ = false;
         fallbackEditingParamId_ = 0;
     }
@@ -1179,7 +1180,8 @@ void VST3Host::resetFallbackEditState()
 {
     if (fallbackEditing_ && controller_ && fallbackEditingParamId_ != 0)
     {
-        controller_->endEdit(fallbackEditingParamId_);
+        if (auto hostEditing = Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing>(controller_))
+            hostEditing->endEditFromHost(fallbackEditingParamId_);
     }
     fallbackEditing_ = false;
     fallbackEditingParamId_ = 0;
@@ -1191,11 +1193,19 @@ std::wstring VST3Host::getFallbackDisplayString(const FallbackParameter& param) 
         return {};
 
     Steinberg::Vst::String128 buffer {};
-    if (controller_->normalizedParamToPlain(param.info.id, param.normalizedValue, buffer) == kResultOk)
+    if (controller_->getParamStringByValue(param.info.id, param.normalizedValue, buffer) == kResultTrue)
     {
         std::wstring text = String128ToWide(buffer);
         if (!text.empty())
             return text;
+    }
+
+    auto plainValue = controller_->normalizedParamToPlain(param.info.id, param.normalizedValue);
+    if (plainValue != Steinberg::Vst::kParamValueInvalid)
+    {
+        std::wstringstream stream;
+        stream << std::fixed << std::setprecision(3) << plainValue;
+        return stream.str();
     }
 
     std::wstringstream stream;
