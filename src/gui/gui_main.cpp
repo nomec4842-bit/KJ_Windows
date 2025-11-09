@@ -2,6 +2,7 @@
 #include "core/audio_engine.h"
 #include "core/project_io.h"
 #include "core/sequencer.h"
+#include "core/midi_ports.h"
 #include "core/tracks.h"
 #include "gui/gui_refresh.h"
 #include "gui/menu_commands.h"
@@ -202,7 +203,8 @@ RECT loadSampleButton = {200, 40, 340, 110};
 RECT loadVstButton = {200, 40, 270, 110};
 RECT showVstButton = {270, 40, 340, 110};
 RECT waveSelectButton = {200, 40, 340, 110};
-RECT midiChannelButton = {200, 40, 340, 110};
+RECT midiPortButton = {200, 40, 340, 75};
+RECT midiChannelButton = {200, 80, 340, 110};
 RECT bpmDownButton = {360, 55, 400, 95};
 RECT bpmUpButton = {410, 55, 450, 95};
 RECT stepCountDownButton = {470, 55, 510, 95};
@@ -222,6 +224,8 @@ int openTrackTypeTrackId = 0;
 bool audioDeviceDropdownOpen = false;
 bool waveDropdownOpen = false;
 int waveDropdownTrackId = 0;
+bool midiPortDropdownOpen = false;
+int midiPortDropdownTrackId = 0;
 bool midiChannelDropdownOpen = false;
 int midiChannelDropdownTrackId = 0;
 HWND gMainWindow = nullptr;
@@ -899,6 +903,20 @@ std::vector<AudioDeviceDropdownOption> gAudioDeviceOptions;
 std::vector<AudioOutputDevice> gCachedAudioDevices;
 std::chrono::steady_clock::time_point gLastAudioDeviceRefresh = std::chrono::steady_clock::time_point::min();
 
+struct MidiPortDropdownOption
+{
+    RECT rect{};
+    int trackId = 0;
+    int portId = -1;
+    std::wstring label;
+    bool isSelected = false;
+    bool isAvailable = true;
+};
+
+std::vector<MidiPortDropdownOption> gMidiPortOptions;
+std::vector<MidiOutPort> gCachedMidiPorts;
+std::chrono::steady_clock::time_point gLastMidiPortRefresh = std::chrono::steady_clock::time_point::min();
+
 struct WaveDropdownOption
 {
     RECT rect;
@@ -1065,6 +1083,19 @@ void refreshAudioDeviceList(bool forceRefresh)
 
     gCachedAudioDevices = getAvailableAudioOutputDevices();
     gLastAudioDeviceRefresh = now;
+}
+
+void refreshMidiPortList(bool forceRefresh)
+{
+    auto now = std::chrono::steady_clock::now();
+    if (!forceRefresh && gLastMidiPortRefresh != std::chrono::steady_clock::time_point::min())
+    {
+        if (now - gLastMidiPortRefresh < std::chrono::seconds(2))
+            return;
+    }
+
+    gCachedMidiPorts = getAvailableMidiOutPorts();
+    gLastMidiPortRefresh = now;
 }
 
 void buildStepRects()
@@ -5221,6 +5252,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     LICE_Clear(&surface, LICE_ColorFromCOLORREF(RGB(20, 20, 20)));
     gAudioDeviceOptions.clear();
     gWaveOptions.clear();
+    gMidiPortOptions.clear();
     gMidiChannelOptions.clear();
     gTrackTypeDropdownOptions.clear();
 
@@ -5262,6 +5294,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         fallbackTrack.sampleAttack = trackGetSampleAttack(activeTrackId);
         fallbackTrack.sampleRelease = trackGetSampleRelease(activeTrackId);
         fallbackTrack.midiChannel = trackGetMidiChannel(activeTrackId);
+        fallbackTrack.midiPort = trackGetMidiPort(activeTrackId);
+        fallbackTrack.midiPortName = trackGetMidiPortName(activeTrackId);
         fallbackTrack.vstHost = trackGetVstHost(activeTrackId);
         activeTrackPtr = &fallbackTrack;
     }
@@ -5270,10 +5304,13 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     bool showVstLoader = false;
     bool showWaveSelector = false;
     bool showMidiChannelSelector = false;
+    bool showMidiPortSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
     std::shared_ptr<kj::VST3Host> activeVstHost;
     bool vstEditorAvailable = false;
     int activeMidiChannel = 1;
+    int activeMidiPort = -1;
+    std::wstring activeMidiPortName;
     if (activeTrackPtr)
     {
         switch (activeTrackPtr->type)
@@ -5287,7 +5324,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
             break;
         case TrackType::MidiOut:
             showMidiChannelSelector = true;
+            showMidiPortSelector = true;
             activeMidiChannel = activeTrackPtr->midiChannel;
+            activeMidiPort = activeTrackPtr->midiPort;
+            activeMidiPortName = activeTrackPtr->midiPortName;
             break;
         case TrackType::VST:
             showVstLoader = true;
@@ -5309,6 +5349,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     {
         waveDropdownOpen = false;
         waveDropdownTrackId = 0;
+    }
+
+    if (midiPortDropdownOpen && (!showMidiPortSelector || midiPortDropdownTrackId != activeTrackId))
+    {
+        midiPortDropdownOpen = false;
+        midiPortDropdownTrackId = 0;
     }
 
     if (midiChannelDropdownOpen && (!showMidiChannelSelector || midiChannelDropdownTrackId != activeTrackId))
@@ -5335,6 +5381,110 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     }
     else if (showMidiChannelSelector)
     {
+        if (showMidiPortSelector)
+        {
+            refreshMidiPortList(false);
+            std::wstring portLabel = L"None";
+            bool portInList = false;
+            if (activeMidiPort >= 0)
+            {
+                for (const auto& port : gCachedMidiPorts)
+                {
+                    if (port.id == activeMidiPort)
+                    {
+                        portLabel = port.name.empty() ? L"MIDI Port" : port.name;
+                        portInList = true;
+                        break;
+                    }
+                }
+                if (!portInList)
+                {
+                    if (!activeMidiPortName.empty())
+                        portLabel = activeMidiPortName + L" (offline)";
+                    else
+                        portLabel = L"Port " + std::to_wstring(activeMidiPort) + L" (offline)";
+                }
+            }
+            else if (!activeMidiPortName.empty())
+            {
+                portLabel = activeMidiPortName;
+            }
+
+            std::string midiPortLabel = "MIDI Port: " + FromWideString(portLabel);
+            if (midiPortLabel.empty())
+                midiPortLabel = "MIDI Port";
+            drawButton(surface, midiPortButton,
+                       RGB(50, 50, 50), RGB(120, 120, 120),
+                       midiPortLabel.c_str());
+
+            if (midiPortDropdownOpen && midiPortDropdownTrackId == activeTrackId)
+            {
+                refreshMidiPortList(false);
+                bool activePortAvailable = false;
+                for (const auto& port : gCachedMidiPorts)
+                {
+                    if (port.id == activeMidiPort)
+                    {
+                        activePortAvailable = true;
+                        break;
+                    }
+                }
+
+                int optionCount = 1 + static_cast<int>(gCachedMidiPorts.size());
+                bool includeOfflineOption = (activeMidiPort >= 0 && !activePortAvailable);
+                if (includeOfflineOption)
+                    ++optionCount;
+
+                RECT optionRect = midiPortButton;
+                optionRect.top = computeDropdownStartTop(midiPortButton, optionCount,
+                                                         kMidiChannelDropdownOptionHeight,
+                                                         kMidiChannelDropdownSpacing, client);
+                optionRect.bottom = optionRect.top + kMidiChannelDropdownOptionHeight;
+
+                MidiPortDropdownOption noneOption{};
+                noneOption.trackId = activeTrackId;
+                noneOption.portId = -1;
+                noneOption.label = L"None";
+                noneOption.isSelected = activeMidiPort < 0;
+                noneOption.isAvailable = true;
+                noneOption.rect = optionRect;
+                gMidiPortOptions.push_back(noneOption);
+
+                optionRect.top = optionRect.bottom + kMidiChannelDropdownSpacing;
+                optionRect.bottom = optionRect.top + kMidiChannelDropdownOptionHeight;
+
+                for (const auto& port : gCachedMidiPorts)
+                {
+                    MidiPortDropdownOption option{};
+                    option.trackId = activeTrackId;
+                    option.portId = port.id;
+                    option.label = port.name.empty() ? L"MIDI Port" : port.name;
+                    option.isSelected = port.id == activeMidiPort;
+                    option.isAvailable = true;
+                    option.rect = optionRect;
+                    gMidiPortOptions.push_back(option);
+
+                    optionRect.top = optionRect.bottom + kMidiChannelDropdownSpacing;
+                    optionRect.bottom = optionRect.top + kMidiChannelDropdownOptionHeight;
+                }
+
+                if (includeOfflineOption)
+                {
+                    MidiPortDropdownOption offlineOption{};
+                    offlineOption.trackId = activeTrackId;
+                    offlineOption.portId = activeMidiPort;
+                    if (!activeMidiPortName.empty())
+                        offlineOption.label = activeMidiPortName + L" (offline)";
+                    else
+                        offlineOption.label = L"Port " + std::to_wstring(activeMidiPort) + L" (offline)";
+                    offlineOption.isSelected = true;
+                    offlineOption.isAvailable = false;
+                    offlineOption.rect = optionRect;
+                    gMidiPortOptions.push_back(offlineOption);
+                }
+            }
+        }
+
         int displayChannel = std::clamp(activeMidiChannel, 1, 16);
         std::string midiLabel = "MIDI Ch: " + std::to_string(displayChannel);
         drawButton(surface, midiChannelButton,
@@ -5568,6 +5718,18 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
     }
 
+    for (const auto& option : gMidiPortOptions)
+    {
+        COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
+        COLORREF optionOutline = option.isSelected ? RGB(20, 20, 20) : RGB(120, 120, 120);
+        std::string optionLabel = FromWideString(option.label);
+        if (optionLabel.empty())
+        {
+            optionLabel = option.portId < 0 ? "None" : "MIDI Port";
+        }
+        drawButton(surface, option.rect, optionFill, optionOutline, optionLabel.c_str());
+    }
+
     for (const auto& option : gMidiChannelOptions)
     {
         COLORREF optionFill = option.isSelected ? RGB(0, 120, 200) : RGB(50, 50, 50);
@@ -5666,6 +5828,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     audioDeviceDropdownOpen = false;
                     waveDropdownOpen = false;
                     waveDropdownTrackId = 0;
+                    midiPortDropdownOpen = false;
+                    midiPortDropdownTrackId = 0;
                     midiChannelDropdownOpen = false;
                     midiChannelDropdownTrackId = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
@@ -5684,6 +5848,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 audioDeviceDropdownOpen = false;
                 waveDropdownOpen = false;
                 waveDropdownTrackId = 0;
+                midiPortDropdownOpen = false;
+                midiPortDropdownTrackId = 0;
                 midiChannelDropdownOpen = false;
                 midiChannelDropdownTrackId = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -5700,6 +5866,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiPortDropdownOpen = false;
+            midiPortDropdownTrackId = 0;
             midiChannelDropdownOpen = false;
             midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -5712,6 +5880,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             audioDeviceDropdownOpen = false;
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiPortDropdownOpen = false;
+            midiPortDropdownTrackId = 0;
             midiChannelDropdownOpen = false;
             midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -5724,6 +5894,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             audioDeviceDropdownOpen = false;
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            midiPortDropdownOpen = false;
+            midiPortDropdownTrackId = 0;
             midiChannelDropdownOpen = false;
             midiChannelDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -5743,6 +5915,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool showVstLoader = false;
         bool showWaveSelector = false;
         bool showMidiChannelSelector = false;
+        bool showMidiPortSelector = false;
         std::shared_ptr<kj::VST3Host> activeVstHost;
         bool vstEditorAvailable = false;
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
@@ -5751,6 +5924,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showVstLoader = activeTrack->type == TrackType::VST;
             showWaveSelector = activeTrack->type == TrackType::Synth;
             showMidiChannelSelector = activeTrack->type == TrackType::MidiOut;
+            showMidiPortSelector = activeTrack->type == TrackType::MidiOut;
             if (showVstLoader)
             {
                 activeVstHost = activeTrack->vstHost;
@@ -5763,6 +5937,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showVstLoader = trackType == TrackType::VST;
             showWaveSelector = trackType == TrackType::Synth;
             showMidiChannelSelector = trackType == TrackType::MidiOut;
+            showMidiPortSelector = trackType == TrackType::MidiOut;
             if (showVstLoader)
             {
                 activeVstHost = trackGetVstHost(activeTrackId);
@@ -5780,6 +5955,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             waveDropdownTrackId = 0;
         }
 
+        if (!showMidiPortSelector)
+        {
+            midiPortDropdownOpen = false;
+            midiPortDropdownTrackId = 0;
+        }
+
         if (!showMidiChannelSelector)
         {
             midiChannelDropdownOpen = false;
@@ -5788,6 +5969,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         bool waveDropdownWasOpen = waveDropdownOpen;
         int previousWaveDropdownTrack = waveDropdownTrackId;
+        bool midiPortDropdownWasOpen = midiPortDropdownOpen;
+        int previousMidiPortDropdownTrack = midiPortDropdownTrackId;
         bool midiDropdownWasOpen = midiChannelDropdownOpen;
         int previousMidiDropdownTrack = midiChannelDropdownTrackId;
 
@@ -5807,6 +5990,45 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             RECT dropdownBounds;
             if (computeDropdownBounds(gWaveOptions, dropdownBounds) && pointInRect(dropdownBounds, x, y))
+            {
+                return 0;
+            }
+        }
+
+        if (midiPortDropdownOpen && midiPortDropdownTrackId == activeTrackId)
+        {
+            for (const auto& option : gMidiPortOptions)
+            {
+                if (option.trackId == activeTrackId && pointInRect(option.rect, x, y))
+                {
+                    std::wstring selectedName = option.label;
+                    if (option.portId < 0)
+                    {
+                        selectedName.clear();
+                    }
+                    else if (!option.isAvailable)
+                    {
+                        const std::wstring offlineSuffix = L" (offline)";
+                        if (selectedName.size() >= offlineSuffix.size() &&
+                            selectedName.compare(selectedName.size() - offlineSuffix.size(), offlineSuffix.size(), offlineSuffix) == 0)
+                        {
+                            selectedName.erase(selectedName.size() - offlineSuffix.size());
+                        }
+                    }
+                    trackSetMidiPort(option.trackId, option.portId, selectedName);
+                    midiPortDropdownOpen = false;
+                    midiPortDropdownTrackId = 0;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+
+            RECT dropdownBounds;
+            if (computeDropdownBoundsIf(gMidiPortOptions, dropdownBounds,
+                                        [trackId = activeTrackId](const MidiPortDropdownOption& option) {
+                                            return option.trackId == trackId;
+                                        }) &&
+                pointInRect(dropdownBounds, x, y))
             {
                 return 0;
             }
@@ -5854,6 +6076,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         midiChannelDropdownOpen = false;
                         midiChannelDropdownTrackId = 0;
                     }
+                    if (option.type != TrackType::MidiOut && midiPortDropdownTrackId == option.trackId)
+                    {
+                        midiPortDropdownOpen = false;
+                        midiPortDropdownTrackId = 0;
+                    }
                     openTrackTypeTrackId = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
@@ -5869,6 +6096,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 return 0;
             }
+        }
+
+        if (showMidiPortSelector && pointInRect(midiPortButton, x, y))
+        {
+            if (midiPortDropdownOpen && midiPortDropdownTrackId == activeTrackId)
+            {
+                midiPortDropdownOpen = false;
+                midiPortDropdownTrackId = 0;
+            }
+            else
+            {
+                midiPortDropdownOpen = true;
+                midiPortDropdownTrackId = activeTrackId;
+                refreshMidiPortList(true);
+            }
+            openTrackTypeTrackId = 0;
+            audioDeviceDropdownOpen = false;
+            waveDropdownOpen = false;
+            waveDropdownTrackId = 0;
+            midiChannelDropdownOpen = false;
+            midiChannelDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         }
 
         if (showMidiChannelSelector && pointInRect(midiChannelButton, x, y))
@@ -6116,6 +6366,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             waveDropdownOpen = false;
             waveDropdownTrackId = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+
+        if (midiPortDropdownWasOpen && midiPortDropdownOpen &&
+            midiPortDropdownTrackId == previousMidiPortDropdownTrack)
+        {
+            midiPortDropdownOpen = false;
+            midiPortDropdownTrackId = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
