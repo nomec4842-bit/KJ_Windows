@@ -42,7 +42,6 @@ public:
 
 private:
 #ifdef _WIN32
-    class PlugFrame;
     struct FallbackParameter {
         std::string name;
         Steinberg::Vst::ParamID id;
@@ -50,6 +49,7 @@ private:
         bool isBoolean = false;
         Steinberg::Vst::ParamValue defaultValue = 0.0;
     };
+    class PlugFrame;
     void destroyPluginUI();
     bool ensureWindowClasses();
     bool ensureCommonControls();
