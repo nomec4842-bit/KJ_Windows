@@ -1201,7 +1201,7 @@ std::wstring VST3Host::getFallbackDisplayString(const FallbackParameter& param) 
     }
 
     auto plainValue = controller_->normalizedParamToPlain(param.info.id, param.normalizedValue);
-    if (plainValue != Steinberg::Vst::kParamValueInvalid)
+    if (!std::isnan(plainValue))
     {
         std::wstringstream stream;
         stream << std::fixed << std::setprecision(3) << plainValue;
