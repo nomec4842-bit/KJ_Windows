@@ -38,6 +38,7 @@
 #include "core/audio_device_handler.h"
 #include "core/effects/delay_effect.h"
 #include "core/effects/sidechain_processor.h"
+#include "core/midi_output.h"
 #include "hosting/VST3Host.h"
 
 std::atomic<bool> isPlaying = false;
@@ -502,6 +503,9 @@ struct TrackPlaybackState {
         double velocity = 1.0;
     };
     std::vector<SynthVoice> voices;
+    int midiChannel = 0;
+    int midiPort = -1;
+    std::vector<int> activeMidiNotes;
 };
 
 void releaseDelayEffect(TrackPlaybackState& state)
@@ -763,6 +767,25 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     state.sidechain.setAmount(newSidechainAmount);
     state.sidechain.setAttack(newSidechainAttack);
     state.sidechain.setRelease(newSidechainRelease);
+}
+
+void sendMidiNotesOffForState(TrackPlaybackState& state, int port, int channel)
+{
+    if (state.activeMidiNotes.empty())
+        return;
+
+    if (port < 0)
+    {
+        state.activeMidiNotes.clear();
+        return;
+    }
+
+    channel = std::clamp(channel, 0, 15);
+    for (int note : state.activeMidiNotes)
+    {
+        midiOutputSendNoteOff(port, channel, note, 0);
+    }
+    state.activeMidiNotes.clear();
 }
 
 } // namespace
@@ -1141,6 +1164,8 @@ void audioLoop() {
                     return track.id == trackId;
                 });
                 if (!exists) {
+                    if (it->second.type == TrackType::MidiOut)
+                        sendMidiNotesOffForState(it->second, it->second.midiPort, it->second.midiChannel);
                     releaseDelayEffect(it->second);
                     it = playbackStates.erase(it);
                 } else {
@@ -1157,6 +1182,26 @@ void audioLoop() {
                 TrackType previousType = state.type;
                 bool typeChanged = inserted || previousType != trackInfo.type;
                 state.type = trackInfo.type;
+
+                int previousMidiChannel = state.midiChannel;
+                int previousMidiPort = state.midiPort;
+                int desiredMidiChannel = std::clamp(trackInfo.midiChannel, 1, 16) - 1;
+                int desiredMidiPort = trackInfo.midiPort;
+                bool midiSettingsChanged = (previousMidiChannel != desiredMidiChannel) ||
+                                            (previousMidiPort != desiredMidiPort);
+
+                if (previousType == TrackType::MidiOut &&
+                    (trackInfo.type != TrackType::MidiOut || midiSettingsChanged))
+                {
+                    sendMidiNotesOffForState(state, previousMidiPort, previousMidiChannel);
+                }
+
+                state.midiChannel = desiredMidiChannel;
+                state.midiPort = desiredMidiPort;
+                if (trackInfo.type != TrackType::MidiOut || midiSettingsChanged)
+                {
+                    state.activeMidiNotes.clear();
+                }
 
                 if (inserted) {
                     int globalStep = sequencerCurrentStep.load(std::memory_order_relaxed);
@@ -1298,6 +1343,8 @@ void audioLoop() {
                         state.stepPan = 0.0;
                         state.stepPitchOffset = 0.0;
                         state.sidechain.reset();
+                        if (state.type == TrackType::MidiOut)
+                            sendMidiNotesOffForState(state, state.midiPort, state.midiChannel);
                     }
                 } else {
                     if (!previousPlaying) {
@@ -1377,6 +1424,8 @@ void audioLoop() {
                             auto& state = stateIt->second;
                             int trackStepCount = trackStepCounts[trackIndex];
                             if (trackStepCount <= 0) {
+                                if (trackInfo.type == TrackType::MidiOut)
+                                    sendMidiNotesOffForState(state, state.midiPort, state.midiChannel);
                                 state.currentStep = 0;
                                 continue;
                             }
@@ -1439,7 +1488,7 @@ void audioLoop() {
                             if (getTrackStepState(trackInfo.id, stepIndex)) {
                                 gate = true;
                                 if (stepAdvanced) {
-                                    if (trackInfo.type == TrackType::Synth) {
+                                    if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut) {
                                         triggeredNotes = getNotesForStep(trackInfo.id, stepIndex);
                                         triggered = !triggeredNotes.empty();
                                     } else {
@@ -1571,13 +1620,82 @@ void audioLoop() {
                                 trackRight = static_cast<double>(right);
                             }
                         } else if (trackInfo.type == TrackType::MidiOut) {
-                            if (!gate) {
-                                state.synthEnvelopeStage = EnvelopeStage::Idle;
-                                state.sampleEnvelopeStage = EnvelopeStage::Idle;
-                            }
                             state.samplePlaying = false;
                             state.sampleTailActive = false;
                             state.voices.clear();
+
+                            if (!gate) {
+                                state.synthEnvelopeStage = EnvelopeStage::Idle;
+                                state.sampleEnvelopeStage = EnvelopeStage::Idle;
+                                sendMidiNotesOffForState(state, state.midiPort, state.midiChannel);
+                            } else if (triggered) {
+                                struct MidiNoteEvent {
+                                    int note = 0;
+                                    int velocity = 0;
+                                };
+
+                                std::vector<MidiNoteEvent> noteEvents;
+                                noteEvents.reserve(triggeredNotes.size());
+                                for (const auto& noteInfo : triggeredNotes) {
+                                    MidiNoteEvent event;
+                                    event.note = std::clamp(noteInfo.midiNote, 0, 127);
+                                    double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                  static_cast<double>(kTrackStepVelocityMin),
+                                                                  static_cast<double>(kTrackStepVelocityMax));
+                                    event.velocity = static_cast<int>(std::lround(velocity * 127.0));
+                                    event.velocity = std::clamp(event.velocity, 0, 127);
+                                    noteEvents.push_back(event);
+                                }
+
+                                std::vector<int> notesThisStep;
+                                notesThisStep.reserve(noteEvents.size());
+                                for (const auto& event : noteEvents) {
+                                    if (event.velocity > 0)
+                                        notesThisStep.push_back(event.note);
+                                }
+                                std::sort(notesThisStep.begin(), notesThisStep.end());
+                                notesThisStep.erase(std::unique(notesThisStep.begin(), notesThisStep.end()), notesThisStep.end());
+
+                                std::vector<int> sustainedNotes;
+                                if (trackStepCount > 0) {
+                                    int previousStep = stepIndex - 1;
+                                    if (previousStep < 0)
+                                        previousStep = trackStepCount - 1;
+                                    if (previousStep >= 0 && previousStep < trackStepCount && previousStep != stepIndex &&
+                                        getTrackStepState(trackInfo.id, previousStep)) {
+                                        auto previousNotes = getNotesForStep(trackInfo.id, previousStep);
+                                        for (const auto& event : noteEvents) {
+                                            if (event.velocity <= 0)
+                                                continue;
+                                            auto match = std::find_if(previousNotes.begin(), previousNotes.end(),
+                                                [&event](const StepNoteInfo& previous) {
+                                                    return previous.midiNote == event.note;
+                                                });
+                                            if (match != previousNotes.end()) {
+                                                sustainedNotes.push_back(event.note);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                for (int activeNote : state.activeMidiNotes) {
+                                    if (!std::binary_search(notesThisStep.begin(), notesThisStep.end(), activeNote)) {
+                                        midiOutputSendNoteOff(state.midiPort, state.midiChannel, activeNote, 0);
+                                    }
+                                }
+
+                                for (const auto& event : noteEvents) {
+                                    if (event.velocity <= 0)
+                                        continue;
+                                    bool wasActive = std::find(state.activeMidiNotes.begin(), state.activeMidiNotes.end(), event.note) != state.activeMidiNotes.end();
+                                    bool isSustained = std::find(sustainedNotes.begin(), sustainedNotes.end(), event.note) != sustainedNotes.end();
+                                    if (!wasActive || !isSustained) {
+                                        midiOutputSendNoteOn(state.midiPort, state.midiChannel, event.note, event.velocity);
+                                    }
+                                }
+
+                                state.activeMidiNotes = notesThisStep;
+                            }
                         } else {
                             if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&
                                 state.synthEnvelopeStage != EnvelopeStage::Release) {
