@@ -96,6 +96,7 @@ private:
     void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onRestartComponent(Steinberg::int32 flags);
+    void onComponentRequestOpenEditor(const char* viewType);
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -139,10 +140,13 @@ private:
     std::vector<PendingParameterChange> pendingParameterChanges_;
     mutable std::mutex parameterMutex_;
 
+    std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
+
 #ifdef _WIN32
     std::wstring pluginNameW_;
     std::wstring pluginVendorW_;
     std::vector<FallbackParameter> fallbackParameters_;
+    HWND lastParentWindow_ = nullptr;
 #endif
 };
 
