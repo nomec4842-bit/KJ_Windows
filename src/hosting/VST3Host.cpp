@@ -1,28 +1,30 @@
-#include "hosting/VST3Host.h"
-#include <iostream>
-#include <filesystem>
-#include <algorithm>
-#include <atomic>
-#include <cstring>
-#include <cmath>
-#include <iomanip>
-#include <sstream>
-
-#include <pluginterfaces/vst/ivstprocesscontext.h>
-#include <pluginterfaces/gui/iplugview.h>
-#include <pluginterfaces/base/ipersistent.h>
-#include <pluginterfaces/base/ustring.h>
-#include <public.sdk/source/vst/vstcomponent.h>
-
-#ifndef NOMINMAX
-#define NOMINMAX
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
-
-#ifdef _WIN32
-#pragma comment(lib, "Comctl32.lib")
+#pragma comment(lib, "comctl32.lib")
 #endif
+
+#include "hosting/VST3Host.h"
+using namespace kj;
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "pluginterfaces/base/ipersistent.h"
+#include "pluginterfaces/base/ustring.h"
+#include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/vst/ivstprocesscontext.h"
+#include "public.sdk/source/vst/vstcomponent.h"
 
 using namespace VST3::Hosting;
 using namespace Steinberg;
@@ -39,6 +41,7 @@ constexpr UINT_PTR kHeaderCloseButtonId = 1002;
 constexpr UINT_PTR kFallbackListViewId = 2001;
 constexpr UINT_PTR kFallbackSliderId = 2002;
 constexpr int kFallbackSliderRange = 1000;
+constexpr UINT kFallbackRefreshMessage = WM_APP + 101;
 
 std::wstring Utf8ToWide(const std::string& value)
 {
@@ -56,13 +59,12 @@ std::wstring Utf8ToWide(const std::string& value)
 
 std::wstring String128ToWide(const Steinberg::Vst::String128& value)
 {
-    constexpr size_t kStringLength = kj::VST3_STRING128_SIZE;
-    Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), kStringLength);
-    Steinberg::char16 buffer[kStringLength] {};
-    string.copyTo(buffer, kStringLength);
+    Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), VST3_STRING128_SIZE);
+    Steinberg::char16 buffer[VST3_STRING128_SIZE] {};
+    string.copyTo(buffer, VST3_STRING128_SIZE);
 
     std::wstring result;
-    result.reserve(kStringLength);
+    result.reserve(VST3_STRING128_SIZE);
     for (Steinberg::char16 character : buffer)
     {
         if (character == 0)
@@ -86,11 +88,47 @@ void SetListViewItemTextWide(HWND listView, int itemIndex, int subItemIndex, con
     ::SendMessageW(listView, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex),
                    reinterpret_cast<LPARAM>(&item));
 }
+
+float GetContentScaleForWindow(HWND hwnd)
+{
+    if (!hwnd)
+        return 1.0f;
+
+    float scale = 1.0f;
+
+    HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    if (user32)
+    {
+        using GetDpiForWindowProc = UINT(WINAPI*)(HWND);
+        auto* getDpiForWindow = reinterpret_cast<GetDpiForWindowProc>(::GetProcAddress(user32, "GetDpiForWindow"));
+        if (getDpiForWindow)
+        {
+            UINT dpi = getDpiForWindow(hwnd);
+            if (dpi > 0)
+                scale = static_cast<float>(dpi) / 96.0f;
+        }
+    }
+
+    if (scale == 1.0f)
+    {
+        HDC dc = ::GetDC(hwnd);
+        if (dc)
+        {
+            int dpiX = ::GetDeviceCaps(dc, LOGPIXELSX);
+            ::ReleaseDC(hwnd, dc);
+            if (dpiX > 0)
+                scale = static_cast<float>(dpiX) / 96.0f;
+        }
+    }
+
+    return std::max(scale, 1.0f);
 }
+} // namespace
 #endif
 
 namespace kj {
 
+#ifdef _WIN32
 class VST3Host::PlugFrame : public Steinberg::IPlugFrame
 {
 public:
@@ -159,6 +197,474 @@ private:
     std::atomic<uint32> refCount_ {1};
     VST3Host& host_;
 };
+#endif
+
+class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler
+{
+public:
+    explicit ComponentHandler(VST3Host& host) : host_(host) {}
+
+    tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+    {
+        if (!obj)
+            return kInvalidArgument;
+
+        *obj = nullptr;
+        if (std::memcmp(iid, IComponentHandler::iid, sizeof(TUID)) == 0 ||
+            std::memcmp(iid, FUnknown::iid, sizeof(TUID)) == 0)
+        {
+            *obj = static_cast<IComponentHandler*>(this);
+            addRef();
+            return kResultOk;
+        }
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override
+    {
+        return ++refCount_;
+    }
+
+    uint32 PLUGIN_API release() override
+    {
+        uint32 newCount = --refCount_;
+        if (newCount == 0)
+            delete this;
+        return newCount;
+    }
+
+    tresult PLUGIN_API beginEdit(ParamID) override
+    {
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API performEdit(ParamID paramId, ParamValue value) override
+    {
+        host_.onControllerParameterChanged(paramId, value);
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API endEdit(ParamID) override
+    {
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API restartComponent(int32 flags) override
+    {
+        host_.onRestartComponent(flags);
+        return kResultOk;
+    }
+
+private:
+    std::atomic<uint32> refCount_ {1};
+    VST3Host& host_;
+};
+
+VST3Host::~VST3Host()
+{
+    unload();
+}
+
+bool VST3Host::load(const std::string& pluginPath)
+{
+    unload();
+
+    std::string error;
+
+#ifdef _WIN32
+    pluginNameW_.clear();
+    pluginVendorW_.clear();
+    fallbackParameters_.clear();
+    fallbackVisible_ = false;
+    fallbackSelectedIndex_ = -1;
+    resetFallbackEditState();
+#endif
+
+    auto module = Module::create(pluginPath, error);
+    if (!module)
+    {
+        std::cerr << "Failed to load plugin: " << error << std::endl;
+        return false;
+    }
+
+    auto factory = module->getFactory();
+    auto classes = factory.classInfos();
+    const ClassInfo* componentClass = nullptr;
+    const ClassInfo* controllerClass = nullptr;
+
+    for (const auto& info : classes)
+    {
+        if (info.category() == kVstAudioEffectClass)
+            componentClass = &info;
+        else if (info.category() == kVstComponentControllerClass)
+            controllerClass = &info;
+    }
+
+    if (!componentClass)
+    {
+        std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
+        return false;
+    }
+
+#ifdef _WIN32
+    pluginNameW_ = Utf8ToWide(componentClass->name());
+    pluginVendorW_ = Utf8ToWide(componentClass->vendor());
+#endif
+
+    auto component = factory.createInstance<IComponent>(componentClass->ID());
+    if (!component)
+    {
+        std::cerr << "Failed to instantiate component: " << componentClass->name() << std::endl;
+        return false;
+    }
+
+    Steinberg::FObject hostContext;
+    if (component->initialize(&hostContext) != kResultOk)
+    {
+        std::cerr << "[KJ] Component initialization failed.\n";
+        return false;
+    }
+
+    auto controller = controllerClass ? factory.createInstance<IEditController>(controllerClass->ID()) : nullptr;
+    if (controller)
+    {
+        if (controller->initialize(&hostContext) != kResultOk)
+        {
+            std::cerr << "[KJ] Controller initialization failed.\n";
+            return false;
+        }
+    }
+
+    Steinberg::FUID controllerClassId;
+    if (controller)
+    {
+        if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
+        {
+            Steinberg::FUID::String classIdString {};
+            if (persistent->getClassID(classIdString) == kResultOk)
+            {
+                controllerClassId.fromString(classIdString);
+            }
+        }
+    }
+
+    if (!controllerClassId.isValid() && controllerClass)
+    {
+        controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
+    }
+
+    if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
+    {
+        if (controllerClassId.isValid())
+            componentImpl->setControllerClass(controllerClassId);
+    }
+
+    auto processor = Steinberg::FUnknownPtr<IAudioProcessor>(component);
+    if (!processor)
+    {
+        std::cerr << "Component does not implement IAudioProcessor.\n";
+        return false;
+    }
+
+    module_ = module;
+    component_ = component;
+    processor_ = processor;
+    controller_ = controller;
+    view_ = nullptr;
+
+    if (controller_)
+    {
+        componentHandler_ = new ComponentHandler(*this);
+        controller_->setComponentHandler(componentHandler_);
+        inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
+    }
+    else
+    {
+        inputParameterChanges_.setMaxParameters(0);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(parameterMutex_);
+        pendingParameterChanges_.clear();
+    }
+
+#ifdef _WIN32
+    refreshFallbackParameters();
+    updateHeaderTexts();
+#endif
+
+    return true;
+}
+
+bool VST3Host::prepare(double sampleRate, int blockSize)
+{
+    if (!processor_)
+        return false;
+
+    if (component_)
+        component_->setActive(true);
+
+    ProcessSetup setup {};
+    setup.processMode = kRealtime;
+    setup.symbolicSampleSize = kSample32;
+    setup.maxSamplesPerBlock = blockSize;
+    setup.sampleRate = sampleRate;
+
+    auto result = processor_->setupProcessing(setup);
+    if (result != kResultOk)
+        return false;
+
+    processor_->setProcessing(true);
+
+    preparedSampleRate_ = sampleRate;
+    preparedMaxBlockSize_ = blockSize;
+    processingActive_ = true;
+    return true;
+}
+
+void VST3Host::queueParameterChange(ParamID paramId, ParamValue value)
+{
+    if (paramId == kNoParamId)
+        return;
+
+    ParamValue clamped = std::clamp(value, 0.0, 1.0);
+
+    std::lock_guard<std::mutex> lock(parameterMutex_);
+    auto it = std::find_if(pendingParameterChanges_.begin(), pendingParameterChanges_.end(),
+                           [paramId](const PendingParameterChange& change) { return change.id == paramId; });
+    if (it != pendingParameterChanges_.end())
+    {
+        it->value = clamped;
+    }
+    else
+    {
+        pendingParameterChanges_.push_back({paramId, clamped});
+    }
+}
+
+void VST3Host::onControllerParameterChanged(ParamID paramId, ParamValue value)
+{
+    queueParameterChange(paramId, value);
+#ifdef _WIN32
+    syncFallbackParameterValue(paramId, value);
+#endif
+}
+
+void VST3Host::onRestartComponent(int32 flags)
+{
+    if ((flags & kParamValuesChanged) == 0)
+        return;
+
+#ifdef _WIN32
+    refreshFallbackParameters();
+    updateFallbackSlider(false);
+    updateFallbackValueLabel();
+#endif
+}
+
+void VST3Host::process(float** outputs, int numChannels, int numSamples)
+{
+    if (!processor_ || !processingActive_ || !outputs)
+        return;
+
+    for (int channel = 0; channel < numChannels; ++channel)
+    {
+        if (outputs[channel])
+            std::fill(outputs[channel], outputs[channel] + numSamples, 0.0f);
+    }
+
+    std::vector<PendingParameterChange> changes;
+    {
+        std::lock_guard<std::mutex> lock(parameterMutex_);
+        changes = pendingParameterChanges_;
+        pendingParameterChanges_.clear();
+    }
+
+    inputParameterChanges_.clearQueue();
+    for (const auto& change : changes)
+    {
+        if (change.id == kNoParamId)
+            continue;
+
+        int32 index = 0;
+        if (auto* queue = inputParameterChanges_.addParameterData(change.id, index))
+        {
+            queue->addPoint(0, change.value, index);
+        }
+    }
+
+    AudioBusBuffers outputBus {};
+    outputBus.numChannels = numChannels;
+    outputBus.channelBuffers32 = outputs;
+
+    ProcessData data {};
+    data.processMode = kRealtime;
+    data.symbolicSampleSize = kSample32;
+    data.numSamples = numSamples;
+    data.numOutputs = 1;
+    data.outputs = &outputBus;
+    if (inputParameterChanges_.getParameterCount() > 0)
+        data.inputParameterChanges = &inputParameterChanges_;
+
+    processor_->process(data);
+}
+
+void VST3Host::unload()
+{
+#ifdef _WIN32
+    destroyPluginUI();
+#endif
+
+    if (processor_)
+        processor_->setProcessing(false);
+    if (component_)
+        component_->setActive(false);
+
+    processingActive_ = false;
+
+    if (controller_ && componentHandler_)
+        controller_->setComponentHandler(nullptr);
+
+    view_ = nullptr;
+
+    if (controller_)
+        controller_->terminate();
+    if (component_)
+        component_->terminate();
+
+    controller_ = nullptr;
+    processor_ = nullptr;
+    component_ = nullptr;
+    module_ = nullptr;
+
+    if (componentHandler_)
+    {
+        componentHandler_->release();
+        componentHandler_ = nullptr;
+    }
+
+    preparedSampleRate_ = 0.0;
+    preparedMaxBlockSize_ = 0;
+
+    inputParameterChanges_.setMaxParameters(0);
+    inputParameterChanges_.clearQueue();
+
+    std::lock_guard<std::mutex> lock(parameterMutex_);
+    pendingParameterChanges_.clear();
+}
+
+bool VST3Host::isPluginLoaded() const
+{
+    return component_ != nullptr;
+}
+
+void VST3Host::openEditor(void* hwnd)
+{
+    showPluginUI(hwnd);
+}
+void VST3Host::showPluginUI(void* parentHWND)
+{
+#ifdef _WIN32
+    if (!component_ || !controller_)
+    {
+        std::cerr << "[KJ] Cannot show GUI before plugin is fully loaded.\n";
+        return;
+    }
+
+    HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
+    if (!createContainerWindow(parentWindow))
+    {
+        std::cerr << "[KJ] Failed to create container window for plug-in GUI.\n";
+        return;
+    }
+
+    if (!view_ && controller_)
+    {
+        if (auto view = controller_->createView("editor"))
+            view_ = view;
+        else
+            std::cerr << "[KJ] Plugin has no editor view. Using fallback controls.\n";
+    }
+
+    if (view_)
+    {
+        ensurePluginViewHost();
+
+        if (!plugFrame_)
+            plugFrame_ = new PlugFrame(*this);
+
+        if (!frameAttached_)
+        {
+            plugFrame_->addRef();
+            if (view_->setFrame(plugFrame_) != kResultOk)
+            {
+                std::cerr << "[KJ] Failed to set VST3 plug frame. Falling back to generic controls.\n";
+                plugFrame_->release();
+                plugFrame_ = nullptr;
+                frameAttached_ = false;
+                view_ = nullptr;
+            }
+            else
+            {
+                frameAttached_ = true;
+            }
+        }
+
+        if (view_ && frameAttached_ && !viewAttached_ && pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+        {
+            if (view_->attached(pluginViewWindow_, Steinberg::kPlatformTypeHWND) != kResultOk)
+            {
+                std::cerr << "[KJ] Failed to attach VST3 editor view. Falling back to generic controls.\n";
+                view_->setFrame(nullptr);
+                frameAttached_ = false;
+                if (plugFrame_)
+                {
+                    plugFrame_->release();
+                    plugFrame_ = nullptr;
+                }
+                view_ = nullptr;
+            }
+            else
+            {
+                viewAttached_ = true;
+                ViewRect rect {};
+                if (view_->getSize(&rect) != kResultTrue)
+                {
+                    rect.left = 0;
+                    rect.top = 0;
+                    rect.right = 400;
+                    rect.bottom = 300;
+                }
+                applyViewRect(rect);
+                view_->onSize(&rect);
+
+                if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+                {
+                    float scale = GetContentScaleForWindow(pluginViewWindow_);
+                    scaleSupport->setContentScaleFactor(scale);
+                }
+            }
+        }
+    }
+
+    refreshFallbackParameters();
+    showFallbackControls(fallbackVisible_);
+
+    if (containerWindow_ && ::IsWindow(containerWindow_))
+    {
+        ::ShowWindow(containerWindow_, SW_SHOWNORMAL);
+        ::SetWindowPos(containerWindow_, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+        ::UpdateWindow(containerWindow_);
+        ::SetForegroundWindow(containerWindow_);
+    }
+    std::cout << "[KJ] Plugin GUI displayed.\n";
+#else
+    (void)parentHWND;
+    std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
+#endif
+}
+
+#ifdef _WIN32
 
 bool VST3Host::ensureWindowClasses()
 {
@@ -334,7 +840,6 @@ void VST3Host::onContainerDestroyed()
     fallbackEditing_ = false;
     fallbackEditingParamId_ = 0;
 }
-
 void VST3Host::ensurePluginViewHost()
 {
     if (!contentWindow_ || !::IsWindow(contentWindow_))
@@ -435,9 +940,7 @@ void VST3Host::handleHeaderCommand(UINT commandId)
     {
     case kHeaderFallbackButtonId:
         if (view_)
-        {
             showFallbackControls(!fallbackVisible_);
-        }
         break;
     case kHeaderCloseButtonId:
         closeContainerWindow();
@@ -550,7 +1053,6 @@ void VST3Host::refreshFallbackParameters()
         ++row;
     }
 }
-
 void VST3Host::onFallbackParameterSelected(int index)
 {
     if (index < 0 || index >= static_cast<int>(fallbackParameters_.size()))
@@ -624,8 +1126,8 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
 
     controller_->setParamNormalized(parameter.info.id, normalized);
     controller_->performEdit(parameter.info.id, normalized);
-    if (component_)
-        component_->setParamNormalized(parameter.info.id, normalized);
+
+    queueParameterChange(parameter.info.id, normalized);
 
     parameter.normalizedValue = normalized;
 
@@ -714,6 +1216,16 @@ std::wstring VST3Host::getParameterName(const FallbackParameter& param) const
     std::wstringstream stream;
     stream << L"Param " << param.info.id;
     return stream.str();
+}
+
+void VST3Host::syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value)
+{
+    (void)paramId;
+    (void)value;
+    if (!fallbackWindow_ || !::IsWindow(fallbackWindow_))
+        return;
+
+    ::PostMessageW(fallbackWindow_, kFallbackRefreshMessage, 0, 0);
 }
 
 LRESULT CALLBACK VST3Host::ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -872,7 +1384,6 @@ LRESULT CALLBACK VST3Host::HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
-
 LRESULT CALLBACK VST3Host::FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_NCCREATE)
@@ -940,21 +1451,15 @@ LRESULT CALLBACK VST3Host::FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
         {
             int width = static_cast<int>(LOWORD(lParam));
             int height = static_cast<int>(HIWORD(lParam));
-            int margin = 10;
-            int sliderHeight = 30;
-            int valueHeight = 22;
-            int listHeight = std::max(0, height - (margin * 3) - sliderHeight - valueHeight);
+            int listHeight = std::max(0, height - 80);
+            int sliderTop = listHeight + 8;
 
             if (host->fallbackListView_ && ::IsWindow(host->fallbackListView_))
-                ::MoveWindow(host->fallbackListView_, margin, margin, width - 2 * margin, listHeight, TRUE);
-
-            int sliderTop = margin + listHeight + margin;
+                ::MoveWindow(host->fallbackListView_, 8, 8, width - 16, listHeight, TRUE);
             if (host->fallbackSlider_ && ::IsWindow(host->fallbackSlider_))
-                ::MoveWindow(host->fallbackSlider_, margin, sliderTop, width - 2 * margin, sliderHeight, TRUE);
-
-            int valueTop = sliderTop + sliderHeight + 4;
+                ::MoveWindow(host->fallbackSlider_, 8, sliderTop, width - 16, 24, TRUE);
             if (host->fallbackValueStatic_ && ::IsWindow(host->fallbackValueStatic_))
-                ::MoveWindow(host->fallbackValueStatic_, margin, valueTop, width - 2 * margin, valueHeight, TRUE);
+                ::MoveWindow(host->fallbackValueStatic_, 8, sliderTop + 30, width - 16, 18, TRUE);
         }
         return 0;
 
@@ -981,6 +1486,15 @@ LRESULT CALLBACK VST3Host::FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
         }
         break;
 
+    case kFallbackRefreshMessage:
+        if (host)
+        {
+            host->refreshFallbackParameters();
+            host->updateFallbackSlider(false);
+            host->updateFallbackValueLabel();
+        }
+        return 0;
+
     case WM_DESTROY:
         if (host)
         {
@@ -997,308 +1511,7 @@ LRESULT CALLBACK VST3Host::FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
-#endif
 
-VST3Host::~VST3Host()
-{
-    unload();
-}
-
-bool VST3Host::load(const std::string& pluginPath)
-{
-    std::string error;
-#ifdef _WIN32
-    destroyPluginUI();
-    pluginNameW_.clear();
-    pluginVendorW_.clear();
-    fallbackParameters_.clear();
-    fallbackVisible_ = false;
-    fallbackSelectedIndex_ = -1;
-    resetFallbackEditState();
-#endif
-
-    auto module = Module::create(pluginPath, error);
-    if (!module)
-    {
-        std::cerr << "Failed to load plugin: " << error << std::endl;
-        return false;
-    }
-
-    auto factory = module->getFactory();
-    auto classes = factory.classInfos();
-    const VST3::Hosting::ClassInfo* componentClass = nullptr;
-    const VST3::Hosting::ClassInfo* controllerClass = nullptr;
-
-    for (const auto& c : classes)
-    {
-        if (c.category() == kVstAudioEffectClass)
-            componentClass = &c;
-        else if (c.category() == kVstComponentControllerClass)
-            controllerClass = &c;
-    }
-
-    if (!componentClass)
-    {
-        std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
-        return false;
-    }
-
-#ifdef _WIN32
-    pluginNameW_ = Utf8ToWide(componentClass->name());
-    pluginVendorW_ = Utf8ToWide(componentClass->vendor());
-    updateHeaderTexts();
-#endif
-
-    auto component = factory.createInstance<IComponent>(componentClass->ID());
-    if (!component)
-    {
-        std::cerr << "Failed to instantiate component: " << componentClass->name() << std::endl;
-        return false;
-    }
-
-    Steinberg::FObject hostContext;
-    if (component->initialize(&hostContext) != kResultOk)
-    {
-        std::cerr << "[KJ] Component initialization failed.\n";
-        return false;
-    }
-
-    auto controller = controllerClass ? factory.createInstance<IEditController>(controllerClass->ID()) : nullptr;
-    if (controller)
-    {
-        if (controller->initialize(&hostContext) != kResultOk)
-        {
-            std::cerr << "[KJ] Controller initialization failed.\n";
-            return false;
-        }
-    }
-
-    Steinberg::FUID controllerClassId;
-    if (controller)
-    {
-        if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
-        {
-            Steinberg::FUID::String classIdString {};
-            if (persistent->getClassID(classIdString) == kResultOk)
-            {
-                controllerClassId.fromString(classIdString);
-            }
-        }
-    }
-
-    if (!controllerClassId.isValid() && controllerClass)
-    {
-        controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
-    }
-
-    if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
-    {
-        if (controllerClassId.isValid())
-            componentImpl->setControllerClass(controllerClassId);
-    }
-
-    FUnknownPtr<IAudioProcessor> processor(component);
-    if (processor)
-        std::cout << "AudioProcessor loaded successfully\n";
-    if (controller)
-        std::cout << "EditController loaded successfully\n";
-
-    module_ = module;
-    component_ = component;
-    processor_ = processor;
-    controller_ = controller;
-    view_ = nullptr;
-
-#ifdef _WIN32
-    refreshFallbackParameters();
-    updateHeaderTexts();
-#endif
-
-    if (!controller_)
-        std::cerr << "[KJ] Plugin has no controller class, skipping GUI.\n";
-
-    return true;
-}
-
-bool VST3Host::prepare(double sampleRate, int blockSize)
-{
-    if (!processor_)
-        return false;
-
-    ProcessSetup setup{};
-    setup.processMode = kRealtime;
-    setup.symbolicSampleSize = kSample32;
-    setup.maxSamplesPerBlock = blockSize;
-    setup.sampleRate = sampleRate;
-
-    auto result = processor_->setupProcessing(setup);
-    if (result == kResultOk)
-    {
-        preparedSampleRate_ = sampleRate;
-        preparedMaxBlockSize_ = blockSize;
-        processingActive_ = true;
-        return true;
-    }
-
-    return false;
-}
-
-void VST3Host::process(float** outputs, int numChannels, int numFrames)
-{
-    if (!processor_ || !processingActive_ || !outputs)
-        return;
-
-    for (int channel = 0; channel < numChannels; ++channel)
-    {
-        if (outputs[channel])
-            std::fill(outputs[channel], outputs[channel] + numFrames, 0.0f);
-    }
-
-    AudioBusBuffers outputBus{};
-    outputBus.numChannels = numChannels;
-    outputBus.channelBuffers32 = outputs;
-
-    ProcessData data{};
-    data.processMode = kRealtime;
-    data.symbolicSampleSize = kSample32;
-    data.numSamples = numFrames;
-    data.numOutputs = 1;
-    data.outputs = &outputBus;
-
-    processor_->process(data);
-}
-
-void VST3Host::unload()
-{
-    #ifdef _WIN32
-    destroyPluginUI();
-    #endif
-
-    view_ = nullptr;
-
-    controller_ = nullptr;
-    processor_ = nullptr;
-    component_ = nullptr;
-    module_ = nullptr;
-
-    preparedSampleRate_ = 0.0;
-    preparedMaxBlockSize_ = 0;
-    processingActive_ = false;
-}
-
-bool VST3Host::isPluginLoaded() const
-{
-    return component_ != nullptr;
-}
-
-void VST3Host::openEditor(void* hwnd)
-{
-    showPluginUI(hwnd);
-}
-
-void VST3Host::showPluginUI(void* parentHWND)
-{
-#ifndef _WIN32
-    (void)parentHWND;
-    std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
-    return;
-#else
-    if (!component_ || !controller_)
-    {
-        std::cerr << "[KJ] Cannot show GUI before plugin is fully loaded.\n";
-        return;
-    }
-
-    HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
-    if (!createContainerWindow(parentWindow))
-    {
-        std::cerr << "[KJ] Failed to create container window for plug-in GUI.\n";
-        return;
-    }
-
-    if (!view_ && controller_)
-    {
-        auto view = controller_->createView("editor");
-        if (view)
-        {
-            view_ = view;
-        }
-        else
-        {
-            std::cerr << "[KJ] Plugin has no editor view. Using fallback controls.\n";
-        }
-    }
-
-    if (view_)
-    {
-        ensurePluginViewHost();
-
-        if (!plugFrame_)
-            plugFrame_ = new PlugFrame(*this);
-
-        if (!frameAttached_)
-        {
-            plugFrame_->addRef();
-            if (view_->setFrame(plugFrame_) != kResultOk)
-            {
-                std::cerr << "[KJ] Failed to set VST3 plug frame. Falling back to generic controls.\n";
-                plugFrame_->release();
-                plugFrame_ = nullptr;
-                frameAttached_ = false;
-                view_ = nullptr;
-            }
-            else
-            {
-                frameAttached_ = true;
-            }
-        }
-
-        if (view_ && frameAttached_ && !viewAttached_ && pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
-        {
-            if (view_->attached(pluginViewWindow_, Steinberg::kPlatformTypeHWND) != kResultOk)
-            {
-                std::cerr << "[KJ] Failed to attach VST3 editor view. Falling back to generic controls.\n";
-                view_->setFrame(nullptr);
-                frameAttached_ = false;
-                if (plugFrame_)
-                {
-                    plugFrame_->release();
-                    plugFrame_ = nullptr;
-                }
-                view_ = nullptr;
-            }
-            else
-            {
-                viewAttached_ = true;
-                ViewRect rect {};
-                if (view_->getSize(&rect) != kResultTrue)
-                {
-                    rect.left = 0;
-                    rect.top = 0;
-                    rect.right = 400;
-                    rect.bottom = 300;
-                }
-                applyViewRect(rect);
-                view_->onSize(&rect);
-            }
-        }
-    }
-
-    refreshFallbackParameters();
-    showFallbackControls(fallbackVisible_);
-
-    if (containerWindow_ && ::IsWindow(containerWindow_))
-    {
-        ::ShowWindow(containerWindow_, SW_SHOWNORMAL);
-        ::SetWindowPos(containerWindow_, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-        ::UpdateWindow(containerWindow_);
-        ::SetForegroundWindow(containerWindow_);
-    }
-    std::cout << "[KJ] Plugin GUI displayed.\n";
-#endif
-}
-
-#ifdef _WIN32
 void VST3Host::destroyPluginUI()
 {
     resetFallbackEditState();
@@ -1332,6 +1545,7 @@ void VST3Host::destroyPluginUI()
 
     fallbackVisible_ = false;
 }
-#endif
+
+#endif // _WIN32
 
 } // namespace kj
