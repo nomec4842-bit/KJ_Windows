@@ -351,6 +351,27 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     if (!childWindow_ || !::IsWindow(childWindow_))
     {
+        if (frameAttached_ || viewAttached_ || plugFrame_)
+        {
+            if (view_ && frameAttached_)
+            {
+                view_->setFrame(nullptr);
+                frameAttached_ = false;
+            }
+
+            if (plugFrame_)
+            {
+                plugFrame_->release();
+                plugFrame_ = nullptr;
+            }
+
+            if (view_ && viewAttached_)
+            {
+                view_->removed();
+                viewAttached_ = false;
+            }
+        }
+
         childWindow_ = ::CreateWindowExW(kPluginChildWindowExStyle, kPluginChildWindowClassName, L"",
                                          kPluginChildWindowStyle, initialRect.left, initialRect.top,
                                          std::max<int>(initialRect.getWidth(), 1), std::max<int>(initialRect.getHeight(), 1),
