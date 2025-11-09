@@ -67,6 +67,8 @@ std::string trackTypeToString(TrackType type)
         return "Synth";
     case TrackType::Sample:
         return "Sample";
+    case TrackType::MidiOut:
+        return "MIDI Out";
     case TrackType::VST:
         return "VST";
     }
@@ -102,6 +104,8 @@ TrackType trackTypeFromString(const std::string& value)
         return TrackType::Sample;
     if (value == "VST")
         return TrackType::VST;
+    if (value == "MIDI Out" || value == "MidiOut" || value == "MIDI")
+        return TrackType::MidiOut;
     return TrackType::Synth;
 }
 
@@ -652,6 +656,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float synthRelease = trackGetSynthRelease(track.id);
         float sampleAttack = trackGetSampleAttack(track.id);
         float sampleRelease = trackGetSampleRelease(track.id);
+        int midiChannel = trackGetMidiChannel(track.id);
         bool hasSample = trackGetSampleBuffer(track.id) != nullptr;
         int stepCount = trackGetStepCount(track.id);
 
@@ -685,6 +690,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"synthRelease\": " << formatFloat(synthRelease) << ",\n";
         stream << "      \"sampleAttack\": " << formatFloat(sampleAttack) << ",\n";
         stream << "      \"sampleRelease\": " << formatFloat(sampleRelease) << ",\n";
+        stream << "      \"midiChannel\": " << midiChannel << ",\n";
         stream << "      \"hasSample\": " << (hasSample ? "true" : "false") << ",\n";
         stream << "      \"stepCount\": " << stepCount << ",\n";
         stream << "      \"steps\": [\n";
@@ -858,6 +864,7 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetCompressorRelease(trackId,
                                    jsonToFloat(findMember(trackObject, "compressorRelease"),
                                                trackGetCompressorRelease(trackId)));
+        trackSetMidiChannel(trackId, jsonToInt(findMember(trackObject, "midiChannel"), trackGetMidiChannel(trackId)));
 
         int stepCount = jsonToInt(findMember(trackObject, "stepCount"), trackGetStepCount(trackId));
         trackSetStepCount(trackId, stepCount);

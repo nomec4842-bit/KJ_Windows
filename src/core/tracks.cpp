@@ -79,6 +79,9 @@ constexpr float kDefaultSampleRelease = 0.3f;
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
 constexpr int kDefaultMidiNote = 69; // A4
+constexpr int kMinMidiChannel = 1;
+constexpr int kMaxMidiChannel = 16;
+constexpr int kDefaultMidiChannel = 1;
 
 int clampMidiNote(int note)
 {
@@ -127,6 +130,7 @@ struct TrackData
         track.synthRelease = kDefaultSynthRelease;
         track.sampleAttack = kDefaultSampleAttack;
         track.sampleRelease = kDefaultSampleRelease;
+        track.midiChannel = kDefaultMidiChannel;
         vstHost.reset();
         track.vstHost = vstHost;
 
@@ -198,6 +202,7 @@ struct TrackData
     std::shared_ptr<const SampleBuffer> sampleBuffer;
     std::shared_ptr<kj::VST3Host> vstHost;
     std::mutex noteMutex;
+    std::atomic<int> midiChannel{kDefaultMidiChannel};
 };
 
 std::vector<std::shared_ptr<TrackData>> gTracks;
@@ -241,6 +246,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.synthRelease = kDefaultSynthRelease;
     baseTrack.sampleAttack = kDefaultSampleAttack;
     baseTrack.sampleRelease = kDefaultSampleRelease;
+    baseTrack.midiChannel = kDefaultMidiChannel;
     baseTrack.vstHost.reset();
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
@@ -328,6 +334,7 @@ std::vector<Track> getTracks()
         info.synthRelease = track->synthRelease.load(std::memory_order_relaxed);
         info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
         info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
+        info.midiChannel = track->midiChannel.load(std::memory_order_relaxed);
         info.vstHost = track->vstHost;
         result.push_back(std::move(info));
     }
@@ -1463,6 +1470,29 @@ void trackSetSampleRelease(int trackId, float value)
 
     float clamped = std::clamp(value, kMinSampleEnvelopeTime, kMaxSampleEnvelopeTime);
     track->sampleRelease.store(clamped, std::memory_order_relaxed);
+}
+
+int trackGetMidiChannel(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultMidiChannel;
+
+    int channel = track->midiChannel.load(std::memory_order_relaxed);
+    if (channel < kMinMidiChannel || channel > kMaxMidiChannel)
+        channel = kDefaultMidiChannel;
+    return channel;
+}
+
+void trackSetMidiChannel(int trackId, int channel)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    int clamped = std::clamp(channel, kMinMidiChannel, kMaxMidiChannel);
+    track->midiChannel.store(clamped, std::memory_order_relaxed);
+    track->track.midiChannel = clamped;
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)
