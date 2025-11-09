@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <codecvt>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -57,6 +58,38 @@ std::string escapeJsonString(const std::string& value)
         }
     }
     return escaped;
+}
+
+std::wstring utf8ToWide(const std::string& value)
+{
+    if (value.empty())
+        return {};
+
+    try
+    {
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+        return converter.from_bytes(value);
+    }
+    catch (...)
+    {
+        return std::wstring(value.begin(), value.end());
+    }
+}
+
+std::string wideToUtf8(const std::wstring& value)
+{
+    if (value.empty())
+        return {};
+
+    try
+    {
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+        return converter.to_bytes(value);
+    }
+    catch (...)
+    {
+        return std::string(value.begin(), value.end());
+    }
 }
 
 std::string trackTypeToString(TrackType type)
@@ -657,6 +690,9 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float sampleAttack = trackGetSampleAttack(track.id);
         float sampleRelease = trackGetSampleRelease(track.id);
         int midiChannel = trackGetMidiChannel(track.id);
+        int midiPort = trackGetMidiPort(track.id);
+        std::wstring midiPortName = trackGetMidiPortName(track.id);
+        std::string midiPortNameUtf8 = wideToUtf8(midiPortName);
         bool hasSample = trackGetSampleBuffer(track.id) != nullptr;
         int stepCount = trackGetStepCount(track.id);
 
@@ -691,6 +727,8 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"sampleAttack\": " << formatFloat(sampleAttack) << ",\n";
         stream << "      \"sampleRelease\": " << formatFloat(sampleRelease) << ",\n";
         stream << "      \"midiChannel\": " << midiChannel << ",\n";
+        stream << "      \"midiPort\": " << midiPort << ",\n";
+        stream << "      \"midiPortName\": \"" << escapeJsonString(midiPortNameUtf8) << "\",\n";
         stream << "      \"hasSample\": " << (hasSample ? "true" : "false") << ",\n";
         stream << "      \"stepCount\": " << stepCount << ",\n";
         stream << "      \"steps\": [\n";
@@ -865,6 +903,9 @@ bool loadProjectFromFile(const std::filesystem::path& path)
                                    jsonToFloat(findMember(trackObject, "compressorRelease"),
                                                trackGetCompressorRelease(trackId)));
         trackSetMidiChannel(trackId, jsonToInt(findMember(trackObject, "midiChannel"), trackGetMidiChannel(trackId)));
+        int midiPort = jsonToInt(findMember(trackObject, "midiPort"), trackGetMidiPort(trackId));
+        std::wstring midiPortName = utf8ToWide(jsonToString(findMember(trackObject, "midiPortName")));
+        trackSetMidiPort(trackId, midiPort, midiPortName);
 
         int stepCount = jsonToInt(findMember(trackObject, "stepCount"), trackGetStepCount(trackId));
         trackSetStepCount(trackId, stepCount);

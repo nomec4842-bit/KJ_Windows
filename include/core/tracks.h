@@ -65,6 +65,8 @@ struct Track
     float sampleAttack = 0.005f;
     float sampleRelease = 0.3f;
     int midiChannel = 1;
+    int midiPort = -1;
+    std::wstring midiPortName;
     std::shared_ptr<kj::VST3Host> vstHost;
 };
 
@@ -188,6 +190,10 @@ void trackSetSampleRelease(int trackId, float value);
 
 int trackGetMidiChannel(int trackId);
 void trackSetMidiChannel(int trackId, int channel);
+
+int trackGetMidiPort(int trackId);
+std::wstring trackGetMidiPortName(int trackId);
+void trackSetMidiPort(int trackId, int portId, const std::wstring& portName);
 
 bool trackGetStepState(int trackId, int stepIndex);
 void trackSetStepState(int trackId, int stepIndex, bool enabled);

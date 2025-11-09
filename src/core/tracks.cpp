@@ -82,6 +82,7 @@ constexpr int kDefaultMidiNote = 69; // A4
 constexpr int kMinMidiChannel = 1;
 constexpr int kMaxMidiChannel = 16;
 constexpr int kDefaultMidiChannel = 1;
+constexpr int kDefaultMidiPort = -1;
 
 int clampMidiNote(int note)
 {
@@ -131,6 +132,8 @@ struct TrackData
         track.sampleAttack = kDefaultSampleAttack;
         track.sampleRelease = kDefaultSampleRelease;
         track.midiChannel = kDefaultMidiChannel;
+        track.midiPort = kDefaultMidiPort;
+        track.midiPortName.clear();
         vstHost.reset();
         track.vstHost = vstHost;
 
@@ -203,6 +206,9 @@ struct TrackData
     std::shared_ptr<kj::VST3Host> vstHost;
     std::mutex noteMutex;
     std::atomic<int> midiChannel{kDefaultMidiChannel};
+    std::atomic<int> midiPort{kDefaultMidiPort};
+    std::wstring midiPortName;
+    std::mutex midiPortMutex;
 };
 
 std::vector<std::shared_ptr<TrackData>> gTracks;
@@ -247,6 +253,8 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.sampleAttack = kDefaultSampleAttack;
     baseTrack.sampleRelease = kDefaultSampleRelease;
     baseTrack.midiChannel = kDefaultMidiChannel;
+    baseTrack.midiPort = kDefaultMidiPort;
+    baseTrack.midiPortName.clear();
     baseTrack.vstHost.reset();
     return std::make_shared<TrackData>(std::move(baseTrack));
 }
@@ -291,6 +299,11 @@ Track addTrack(const std::string& name)
     result.type = trackData->type.load(std::memory_order_relaxed);
     result.synthWaveType = trackData->waveType.load(std::memory_order_relaxed);
     result.vstHost = trackData->vstHost;
+    result.midiPort = trackData->midiPort.load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(trackData->midiPortMutex);
+        result.midiPortName = trackData->midiPortName;
+    }
     return result;
 }
 
@@ -335,6 +348,11 @@ std::vector<Track> getTracks()
         info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
         info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
         info.midiChannel = track->midiChannel.load(std::memory_order_relaxed);
+        info.midiPort = track->midiPort.load(std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(track->midiPortMutex);
+            info.midiPortName = track->midiPortName;
+        }
         info.vstHost = track->vstHost;
         result.push_back(std::move(info));
     }
@@ -1493,6 +1511,44 @@ void trackSetMidiChannel(int trackId, int channel)
     int clamped = std::clamp(channel, kMinMidiChannel, kMaxMidiChannel);
     track->midiChannel.store(clamped, std::memory_order_relaxed);
     track->track.midiChannel = clamped;
+}
+
+int trackGetMidiPort(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultMidiPort;
+
+    return track->midiPort.load(std::memory_order_relaxed);
+}
+
+std::wstring trackGetMidiPortName(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return {};
+
+    std::lock_guard<std::mutex> lock(track->midiPortMutex);
+    return track->midiPortName;
+}
+
+void trackSetMidiPort(int trackId, int portId, const std::wstring& portName)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    int sanitized = portId;
+    if (sanitized < kDefaultMidiPort)
+        sanitized = kDefaultMidiPort;
+
+    track->midiPort.store(sanitized, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(track->midiPortMutex);
+        track->midiPortName = portName;
+    }
+    track->track.midiPort = sanitized;
+    track->track.midiPortName = portName;
 }
 
 std::shared_ptr<const SampleBuffer> trackGetSampleBuffer(int trackId)
