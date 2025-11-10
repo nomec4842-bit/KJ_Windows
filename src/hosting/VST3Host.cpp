@@ -259,34 +259,37 @@ public:
         return newCount;
     }
 
-    tresult PLUGIN_API beginEdit(ParamID) override
+    tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID paramId) override
     {
+        (void)paramId;
         return kResultOk;
     }
 
-    tresult PLUGIN_API performEdit(ParamID paramId, ParamValue value) override
+    tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value) override
     {
         host_.onControllerParameterChanged(paramId, value);
         return kResultOk;
     }
 
-    tresult PLUGIN_API endEdit(ParamID) override
+    tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID paramId) override
     {
+        (void)paramId;
         return kResultOk;
     }
 
-    tresult PLUGIN_API restartComponent(int32 flags) override
+    tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override
     {
         host_.onRestartComponent(flags);
         return kResultOk;
     }
 
-    tresult PLUGIN_API setDirty(TBool) override
+    tresult PLUGIN_API setDirty(Steinberg::TBool state) override
     {
+        (void)state;
         return kResultOk;
     }
 
-    tresult PLUGIN_API requestOpenEditor(FIDString name) override
+    tresult PLUGIN_API requestOpenEditor(Steinberg::FIDString name) override
     {
         host_.onComponentRequestOpenEditor(name);
         return kResultOk;
@@ -422,7 +425,7 @@ bool VST3Host::load(const std::string& pluginPath)
     if (controller_)
     {
         componentHandler_ = new ComponentHandler(*this);
-        controller_->setComponentHandler(componentHandler_);
+        controller_->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler_));
         inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
     }
     else
