@@ -1765,9 +1765,9 @@ void VST3Host::syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Stein
     ::PostMessageW(fallbackWindow_, kFallbackRefreshMessage, 0, 0);
 }
 
-int16 VST3Host::queryKeyModifiers() const
+Steinberg::int16 VST3Host::queryKeyModifiers() const
 {
-    int16 modifiers = 0;
+    Steinberg::int16 modifiers = 0;
     if ((::GetKeyState(VK_SHIFT) & 0x8000) != 0)
         modifiers |= Steinberg::Vst::kShiftKey;
     if ((::GetKeyState(VK_CONTROL) & 0x8000) != 0)
@@ -1779,7 +1779,7 @@ int16 VST3Host::queryKeyModifiers() const
     return modifiers;
 }
 
-char16 VST3Host::translateVirtualKey(WPARAM wParam, LPARAM lParam) const
+Steinberg::char16 VST3Host::translateVirtualKey(WPARAM wParam, LPARAM lParam) const
 {
     wchar_t buffer[4] = {};
     BYTE keyboardState[256];
@@ -1790,7 +1790,7 @@ char16 VST3Host::translateVirtualKey(WPARAM wParam, LPARAM lParam) const
     UINT scanCode = static_cast<UINT>((lParam >> 16) & 0xFF);
     int length = ::ToUnicode(virtualKey, scanCode, keyboardState, buffer, 4, 0);
     if (length > 0)
-        return static_cast<char16>(buffer[0]);
+        return static_cast<Steinberg::char16>(buffer[0]);
     return 0;
 }
 
@@ -1799,9 +1799,9 @@ bool VST3Host::handleKeyDown(WPARAM wParam, LPARAM lParam)
     if (!view_ || !viewAttached_)
         return false;
 
-    char16 character = translateVirtualKey(wParam, lParam);
-    int16 keyCode = static_cast<int16>(wParam);
-    int16 modifiers = queryKeyModifiers();
+    Steinberg::char16 character = translateVirtualKey(wParam, lParam);
+    Steinberg::int16 keyCode = static_cast<Steinberg::int16>(wParam);
+    Steinberg::int16 modifiers = queryKeyModifiers();
     return view_->onKeyDown(character, keyCode, modifiers) == kResultTrue;
 }
 
@@ -1810,9 +1810,9 @@ bool VST3Host::handleKeyUp(WPARAM wParam, LPARAM lParam)
     if (!view_ || !viewAttached_)
         return false;
 
-    char16 character = translateVirtualKey(wParam, lParam);
-    int16 keyCode = static_cast<int16>(wParam);
-    int16 modifiers = queryKeyModifiers();
+    Steinberg::char16 character = translateVirtualKey(wParam, lParam);
+    Steinberg::int16 keyCode = static_cast<Steinberg::int16>(wParam);
+    Steinberg::int16 modifiers = queryKeyModifiers();
     return view_->onKeyUp(character, keyCode, modifiers) == kResultTrue;
 }
 
