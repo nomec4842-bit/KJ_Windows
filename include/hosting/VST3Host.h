@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cstdint>
 
 #include "pluginterfaces/base/fplatform.h"
 #include "pluginterfaces/base/funknown.h"
@@ -98,8 +99,8 @@ private:
     void clearCurrentViewRect();
     bool handleKeyDown(WPARAM wParam, LPARAM lParam);
     bool handleKeyUp(WPARAM wParam, LPARAM lParam);
-    Steinberg::char16 translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
-    Steinberg::int16 queryKeyModifiers() const;
+    char16_t translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
+    int16_t queryKeyModifiers() const;
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
