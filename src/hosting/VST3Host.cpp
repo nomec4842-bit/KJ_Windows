@@ -1766,17 +1766,36 @@ void VST3Host::syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Stein
     ::PostMessageW(fallbackWindow_, kFallbackRefreshMessage, 0, 0);
 }
 
+namespace
+{
+
+constexpr int16_t kShiftKeyModifier = static_cast<int16_t>(1 << 0);
+constexpr int16_t kAlternateKeyModifier = static_cast<int16_t>(1 << 1);
+constexpr int16_t kCommandKeyModifier = static_cast<int16_t>(1 << 2);
+constexpr int16_t kControlKeyModifier = static_cast<int16_t>(1 << 3);
+
+static_assert(kShiftKeyModifier == static_cast<int16_t>(Steinberg::kShiftKey),
+              "Unexpected Steinberg::KeyModifier::kShiftKey value");
+static_assert(kAlternateKeyModifier == static_cast<int16_t>(Steinberg::kAlternateKey),
+              "Unexpected Steinberg::KeyModifier::kAlternateKey value");
+static_assert(kCommandKeyModifier == static_cast<int16_t>(Steinberg::kCommandKey),
+              "Unexpected Steinberg::KeyModifier::kCommandKey value");
+static_assert(kControlKeyModifier == static_cast<int16_t>(Steinberg::kControlKey),
+              "Unexpected Steinberg::KeyModifier::kControlKey value");
+
+} // namespace
+
 int16_t VST3Host::queryKeyModifiers() const
 {
     int16_t modifiers = 0;
     if ((::GetKeyState(VK_SHIFT) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::kShiftKey);
+        modifiers |= kShiftKeyModifier;
     if ((::GetKeyState(VK_CONTROL) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::kCommandKey);
+        modifiers |= kCommandKeyModifier;
     if ((::GetKeyState(VK_MENU) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::kAlternateKey);
+        modifiers |= kAlternateKeyModifier;
     if ((::GetKeyState(VK_LWIN) & 0x8000) != 0 || (::GetKeyState(VK_RWIN) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::kControlKey);
+        modifiers |= kControlKeyModifier;
     return modifiers;
 }
 
