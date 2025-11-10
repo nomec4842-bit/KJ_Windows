@@ -943,9 +943,13 @@ void VST3Host::ensurePluginViewHost()
     if (!pluginViewWindow_)
     {
         HINSTANCE instance = ::GetModuleHandleW(nullptr);
-        pluginViewWindow_ = ::CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                                             0, 0, 0, 0, contentWindow_, nullptr, instance, nullptr);
+        pluginViewWindow_ =
+            ::CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                              0, 0, 0, 0, contentWindow_, nullptr, instance, nullptr);
     }
+
+    if (pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+        ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
 }
 
 bool VST3Host::applyViewRect(const Steinberg::ViewRect& rect)
