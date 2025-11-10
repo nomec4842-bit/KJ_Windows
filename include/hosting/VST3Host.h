@@ -9,8 +9,10 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "pluginterfaces/base/fplatform.h"
@@ -37,6 +39,7 @@ public:
 
     bool load(const std::string& path);
     void showPluginUI(void* parentWindowHandle);
+    bool ShowPluginEditor();
     void unload();
 
     bool prepare(double sampleRate, int maxBlockSize);
@@ -64,6 +67,7 @@ private:
     class ComponentHandler;
 
 #ifdef _WIN32
+    void ClosePluginEditor();
     void destroyPluginUI();
     bool ensureWindowClasses();
     bool ensureCommonControls();
@@ -91,6 +95,7 @@ private:
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 
     void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
@@ -131,6 +136,12 @@ private:
     int fallbackSelectedIndex_ = -1;
     bool fallbackEditing_ = false;
     Steinberg::Vst::ParamID fallbackEditingParamId_ = 0;
+    std::atomic<bool> standaloneEditorThreadRunning_ {false};
+    std::atomic<bool> standaloneEditorThreadShouldExit_ {false};
+    std::thread standaloneEditorThread_;
+    Steinberg::IPtr<Steinberg::IPlugView> standaloneEditorView_;
+    HWND standaloneEditorWindow_ = nullptr;
+    mutable std::mutex standaloneEditorMutex_;
 #endif
 
     double preparedSampleRate_ = 0.0;
