@@ -28,7 +28,7 @@ using namespace kj;
 #include "pluginterfaces/base/ipersistent.h"
 #include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/gui/iplugview.h"
-#include "pluginterfaces/gui/keycodes.h"
+#include "pluginterfaces/base/keycodes.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/vstcomponent.h"
 
