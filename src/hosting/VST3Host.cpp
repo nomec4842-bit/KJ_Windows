@@ -27,6 +27,7 @@ using namespace kj;
 #include "pluginterfaces/base/ipersistent.h"
 #include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/keycodes.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/vst/vstcomponent.h"
 
@@ -54,6 +55,7 @@ constexpr wchar_t kContainerWindowClassName[] = L"KJ_VST3_CONTAINER";
 constexpr wchar_t kHeaderWindowClassName[] = L"KJ_VST3_HEADER";
 constexpr wchar_t kFallbackWindowClassName[] = L"KJ_VST3_FALLBACK";
 constexpr wchar_t kStandaloneEditorWindowClassName[] = L"KJ_VST3_STANDALONE_EDITOR";
+constexpr wchar_t kPluginViewWindowClassName[] = L"KJ_VST3_PLUGIN_VIEW_HOST";
 constexpr int kHeaderHeight = 56;
 constexpr UINT_PTR kHeaderFallbackButtonId = 1001;
 constexpr UINT_PTR kHeaderCloseButtonId = 1002;
@@ -153,6 +155,30 @@ class VST3Host::PlugFrame : public Steinberg::IPlugFrame
 public:
     explicit PlugFrame(VST3Host& host) : host_(host) {}
 
+    void setHostWindow(HWND window)
+    {
+        hostWindow_ = window;
+    }
+
+    void setActiveView(Steinberg::IPlugView* view)
+    {
+        activeView_ = view;
+        if (!view)
+            clearCachedRect();
+    }
+
+    void setCachedRect(const Steinberg::ViewRect& rect)
+    {
+        cachedRect_ = rect;
+        hasCachedRect_ = true;
+    }
+
+    void clearCachedRect()
+    {
+        cachedRect_ = {};
+        hasCachedRect_ = false;
+    }
+
     tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
     {
         if (!obj)
@@ -188,26 +214,26 @@ public:
         if (!newSize)
             return kInvalidArgument;
 
-        if (!host_.applyViewRect(*newSize))
-            return kResultFalse;
+        // Cache the desired rectangle so that subsequent host-driven resizes know the most recent size.
+        const Steinberg::ViewRect requestedRect = *newSize;
+        Steinberg::IPlugView* targetView = view ? view : activeView_;
 
-        Steinberg::IPlugView* targetView = view ? view : host_.view_.get();
-        if (targetView)
+        bool sizeChanged = !hasCachedRect_ || cachedRect_.left != requestedRect.left ||
+                           cachedRect_.top != requestedRect.top || cachedRect_.right != requestedRect.right ||
+                           cachedRect_.bottom != requestedRect.bottom;
+        if (!sizeChanged)
+            return kResultOk;
+
+        bool resized = host_.resizePluginViewWindow(hostWindow_, requestedRect, true);
+        if (resized && targetView)
         {
-            Steinberg::ViewRect currentSize;
-            bool sizeChanged = true;
-            if (targetView->getSize(&currentSize) == kResultTrue)
-            {
-                sizeChanged = currentSize.left != newSize->left || currentSize.top != newSize->top ||
-                              currentSize.right != newSize->right || currentSize.bottom != newSize->bottom;
-            }
-
-            if (sizeChanged)
-            {
-                Steinberg::ViewRect newRect = *newSize;
-                targetView->onSize(&newRect);
-            }
+            // Notify the plug-in that the platform window now matches the requested size.
+            Steinberg::ViewRect notifyRect = requestedRect;
+            targetView->onSize(&notifyRect);
         }
+
+        cachedRect_ = requestedRect;
+        hasCachedRect_ = true;
 
         return kResultOk;
     }
@@ -215,6 +241,10 @@ public:
 private:
     std::atomic<uint32> refCount_ {1};
     VST3Host& host_;
+    HWND hostWindow_ = nullptr;
+    Steinberg::IPlugView* activeView_ = nullptr;
+    Steinberg::ViewRect cachedRect_ {};
+    bool hasCachedRect_ = false;
 };
 #endif
 
@@ -945,77 +975,24 @@ void VST3Host::showPluginUI(void* parentHWND)
     {
         ensurePluginViewHost();
 
-        if (!plugFrame_)
-            plugFrame_ = new PlugFrame(*this);
-
-        if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
+        if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_) || !AttachView(view_, pluginViewWindow_))
         {
-            // If we failed to allocate a container window we must fall back to the generic controls.
-            std::cerr << "[KJ] Failed to create host window for VST3 editor. Showing fallback controls.\n";
+            std::cerr << "[KJ] Failed to embed VST3 editor view. Showing fallback controls.\n";
+            if (view_)
+            {
+                view_->setFrame(nullptr);
+                frameAttached_ = false;
+            }
+            if (plugFrame_)
+            {
+                plugFrame_->setActiveView(nullptr);
+                plugFrame_->setHostWindow(nullptr);
+                plugFrame_->release();
+                plugFrame_ = nullptr;
+            }
             view_ = nullptr;
-            frameAttached_ = false;
             viewAttached_ = false;
-        }
-        else
-        {
-            // Query the plug-in for its preferred editor dimensions and size our host window accordingly.
-            Steinberg::ViewRect targetRect {};
-            if (view_->getSize(&targetRect) != kResultTrue)
-            {
-                targetRect.left = 0;
-                targetRect.top = 0;
-                targetRect.right = 400;
-                targetRect.bottom = 300;
-            }
-
-            applyViewRect(targetRect);
-
-            if (!frameAttached_)
-            {
-                // Attach our IPlugFrame implementation before handing over the native window handle.
-                plugFrame_->addRef();
-                if (view_->setFrame(plugFrame_) != kResultOk)
-                {
-                    std::cerr << "[KJ] Failed to set VST3 plug frame. Falling back to generic controls.\n";
-                    plugFrame_->release();
-                    plugFrame_ = nullptr;
-                    frameAttached_ = false;
-                    view_ = nullptr;
-                }
-                else
-                {
-                    frameAttached_ = true;
-                }
-            }
-
-            if (view_ && frameAttached_ && !viewAttached_ && pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
-            {
-                void* nativeHandle = reinterpret_cast<void*>(pluginViewWindow_);
-                if (view_->attached(nativeHandle, Steinberg::kPlatformTypeHWND) != kResultOk)
-                {
-                    std::cerr << "[KJ] Failed to attach VST3 editor view. Falling back to generic controls.\n";
-                    view_->setFrame(nullptr);
-                    frameAttached_ = false;
-                    if (plugFrame_)
-                    {
-                        plugFrame_->release();
-                        plugFrame_ = nullptr;
-                    }
-                    view_ = nullptr;
-                }
-                else
-                {
-                    viewAttached_ = true;
-                    // Notify the plug-in that the window is visible and provide the final size.
-                    view_->onSize(&targetRect);
-
-                    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
-                    {
-                        float scale = GetContentScaleForWindow(pluginViewWindow_);
-                        scaleSupport->setContentScaleFactor(scale);
-                    }
-                }
-            }
+            clearCurrentViewRect();
         }
     }
 
@@ -1099,6 +1076,15 @@ bool VST3Host::ensureWindowClasses()
     fallbackClass.hIcon = nullptr;
     fallbackClass.hIconSm = nullptr;
     if (!::RegisterClassExW(&fallbackClass))
+        return false;
+
+    WNDCLASSEXW viewHostClass = containerClass;
+    viewHostClass.lpfnWndProc = &VST3Host::PluginViewHostWndProc;
+    viewHostClass.hbrBackground = nullptr;
+    viewHostClass.lpszClassName = kPluginViewWindowClassName;
+    viewHostClass.hIcon = nullptr;
+    viewHostClass.hIconSm = nullptr;
+    if (!::RegisterClassExW(&viewHostClass))
         return false;
 
     windowClassesRegistered_ = true;
@@ -1210,6 +1196,7 @@ void VST3Host::onContainerResized(int width, int height)
         resizeRect.right = width;
         resizeRect.bottom = contentHeight;
         view_->onSize(&resizeRect);
+        storeCurrentViewRect(resizeRect);
     }
 }
 
@@ -1228,6 +1215,11 @@ void VST3Host::onContainerDestroyed()
     fallbackListView_ = nullptr;
     fallbackSlider_ = nullptr;
     fallbackValueStatic_ = nullptr;
+
+    if (plugFrame_)
+        plugFrame_->setHostWindow(nullptr);
+
+    clearCurrentViewRect();
 
     if (headerFontsCreated_)
     {
@@ -1250,38 +1242,162 @@ void VST3Host::ensurePluginViewHost()
     if (!contentWindow_ || !::IsWindow(contentWindow_))
         return;
 
-    if (!pluginViewWindow_)
+    // Lazily create a dedicated child HWND that will host the plug-in's native view.
+    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
     {
         HINSTANCE instance = ::GetModuleHandleW(nullptr);
         pluginViewWindow_ =
-            ::CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                              0, 0, 0, 0, contentWindow_, nullptr, instance, nullptr);
+            ::CreateWindowExW(WS_EX_NOPARENTNOTIFY, kPluginViewWindowClassName, L"",
+                              WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE,
+                              0, 0, 0, 0, contentWindow_, nullptr, instance, this);
     }
 
     if (pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+    {
         ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
+        if (plugFrame_)
+            plugFrame_->setHostWindow(pluginViewWindow_);
+    }
 }
 
 bool VST3Host::applyViewRect(const Steinberg::ViewRect& rect)
 {
-    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
+    return resizePluginViewWindow(pluginViewWindow_, rect, true);
+}
+
+bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
+{
+    if (!view || !parentWindow || !::IsWindow(parentWindow))
         return false;
 
+    // Ensure the plug-in understands how to embed itself into a native HWND container.
+    if (view->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+        return false;
+
+    if (!plugFrame_)
+        plugFrame_ = new PlugFrame(*this);
+
+    plugFrame_->setHostWindow(parentWindow);
+    plugFrame_->setActiveView(view);
+
+    // Request the plug-in's preferred rectangle prior to attachment so that we can size our host window.
+    Steinberg::ViewRect targetRect {};
+    if (view->getSize(&targetRect) != kResultTrue)
+    {
+        targetRect.left = 0;
+        targetRect.top = 0;
+        targetRect.right = 800;
+        targetRect.bottom = 600;
+    }
+
+    if (viewAttached_ && frameAttached_)
+    {
+        // If the view is already attached simply refresh the window bounds and notify the plug-in.
+        resizePluginViewWindow(parentWindow, targetRect, true);
+        if (plugFrame_)
+            plugFrame_->setCachedRect(targetRect);
+
+        Steinberg::ViewRect notifyRect = targetRect;
+        view->onSize(&notifyRect);
+        ::ShowWindow(parentWindow, SW_SHOWNORMAL);
+        ::UpdateWindow(parentWindow);
+        ::SetFocus(parentWindow);
+        return true;
+    }
+
+    if (!frameAttached_)
+    {
+        // Provide the plug-in with our IPlugFrame implementation so it can send resize requests back.
+        plugFrame_->addRef();
+        if (view->setFrame(plugFrame_) != kResultOk)
+        {
+            plugFrame_->release();
+            plugFrame_ = nullptr;
+            return false;
+        }
+        frameAttached_ = true;
+    }
+    else
+    {
+        view->setFrame(plugFrame_);
+    }
+
+    // Hand the native HWND to the plug-in so it can create its controls as children of our window.
+    if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
+    {
+        view->setFrame(nullptr);
+        frameAttached_ = false;
+        if (plugFrame_)
+        {
+            plugFrame_->setActiveView(nullptr);
+            plugFrame_->setHostWindow(nullptr);
+            plugFrame_->release();
+            plugFrame_ = nullptr;
+        }
+        return false;
+    }
+
+    viewAttached_ = true;
+
+    // Align the host child window to the plug-in's requested size and notify the editor about it.
+    resizePluginViewWindow(parentWindow, targetRect, true);
+    if (plugFrame_)
+        plugFrame_->setCachedRect(targetRect);
+
+    Steinberg::ViewRect notifyRect = targetRect;
+    view->onSize(&notifyRect);
+
+    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view))
+    {
+        float scale = GetContentScaleForWindow(parentWindow);
+        scaleSupport->setContentScaleFactor(scale);
+    }
+
+    ::ShowWindow(parentWindow, SW_SHOWNORMAL);
+    ::UpdateWindow(parentWindow);
+    ::SetFocus(parentWindow);
+
+    return true;
+}
+
+bool VST3Host::resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect, bool adjustContainer)
+{
     const int width = std::max<int>(1, rect.getWidth());
     const int height = std::max<int>(1, rect.getHeight());
 
-    BOOL moved = ::MoveWindow(pluginViewWindow_, 0, 0, width, height, TRUE);
-    if (!moved)
+    bool moved = false;
+    if (window && ::IsWindow(window))
     {
-        moved = ::SetWindowPos(pluginViewWindow_, nullptr, 0, 0, width, height,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
+        // The plug-in lives in a child HWND so we honour resize requests with the standard Win32 APIs.
+        moved = ::MoveWindow(window, 0, 0, width, height, TRUE) != FALSE;
+        if (!moved)
+        {
+            moved = ::SetWindowPos(window, nullptr, 0, 0, width, height,
+                                   SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+        }
     }
 
-    if (!moved)
-        return false;
+    if (moved && adjustContainer)
+        updateWindowSizeForContent(width, height);
 
-    updateWindowSizeForContent(width, height);
-    return true;
+    storeCurrentViewRect(rect);
+    return moved;
+}
+
+void VST3Host::storeCurrentViewRect(const Steinberg::ViewRect& rect)
+{
+    currentViewRect_ = rect;
+    hasCurrentViewRect_ = true;
+    if (plugFrame_)
+        plugFrame_->setCachedRect(rect);
+}
+
+void VST3Host::clearCurrentViewRect()
+{
+    currentViewRect_ = {};
+    hasCurrentViewRect_ = false;
+    if (plugFrame_)
+        plugFrame_->clearCachedRect();
 }
 
 void VST3Host::updateWindowSizeForContent(int contentWidth, int contentHeight)
@@ -1649,6 +1765,57 @@ void VST3Host::syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Stein
     ::PostMessageW(fallbackWindow_, kFallbackRefreshMessage, 0, 0);
 }
 
+int16 VST3Host::queryKeyModifiers() const
+{
+    int16 modifiers = 0;
+    if ((::GetKeyState(VK_SHIFT) & 0x8000) != 0)
+        modifiers |= Steinberg::Vst::kShiftKey;
+    if ((::GetKeyState(VK_CONTROL) & 0x8000) != 0)
+        modifiers |= Steinberg::Vst::kControlKey;
+    if ((::GetKeyState(VK_MENU) & 0x8000) != 0)
+        modifiers |= Steinberg::Vst::kAltKey;
+    if ((::GetKeyState(VK_LWIN) & 0x8000) != 0 || (::GetKeyState(VK_RWIN) & 0x8000) != 0)
+        modifiers |= Steinberg::Vst::kWinKey;
+    return modifiers;
+}
+
+char16 VST3Host::translateVirtualKey(WPARAM wParam, LPARAM lParam) const
+{
+    wchar_t buffer[4] = {};
+    BYTE keyboardState[256];
+    if (!::GetKeyboardState(keyboardState))
+        return 0;
+
+    UINT virtualKey = static_cast<UINT>(wParam);
+    UINT scanCode = static_cast<UINT>((lParam >> 16) & 0xFF);
+    int length = ::ToUnicode(virtualKey, scanCode, keyboardState, buffer, 4, 0);
+    if (length > 0)
+        return static_cast<char16>(buffer[0]);
+    return 0;
+}
+
+bool VST3Host::handleKeyDown(WPARAM wParam, LPARAM lParam)
+{
+    if (!view_ || !viewAttached_)
+        return false;
+
+    char16 character = translateVirtualKey(wParam, lParam);
+    int16 keyCode = static_cast<int16>(wParam);
+    int16 modifiers = queryKeyModifiers();
+    return view_->onKeyDown(character, keyCode, modifiers) == kResultTrue;
+}
+
+bool VST3Host::handleKeyUp(WPARAM wParam, LPARAM lParam)
+{
+    if (!view_ || !viewAttached_)
+        return false;
+
+    char16 character = translateVirtualKey(wParam, lParam);
+    int16 keyCode = static_cast<int16>(wParam);
+    int16 modifiers = queryKeyModifiers();
+    return view_->onKeyUp(character, keyCode, modifiers) == kResultTrue;
+}
+
 LRESULT CALLBACK VST3Host::ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_NCCREATE)
@@ -1681,6 +1848,60 @@ LRESULT CALLBACK VST3Host::ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, 
         if (host)
             host->onContainerDestroyed();
         return 0;
+    default:
+        break;
+    }
+
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NCCREATE)
+    {
+        auto* create = reinterpret_cast<LPCREATESTRUCTW>(lParam);
+        if (create && create->lpCreateParams)
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+
+    auto* host = reinterpret_cast<VST3Host*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    // Forward the relevant input and focus messages to the plug-in view so it can react to user gestures.
+    switch (msg)
+    {
+    case WM_MOUSEWHEEL:
+        if (host && host->view_ && host->viewAttached_)
+        {
+            float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / static_cast<float>(WHEEL_DELTA);
+            host->view_->onWheel(delta);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+        ::SetFocus(hwnd);
+        break;
+    case WM_SETFOCUS:
+        if (host && host->view_ && host->viewAttached_)
+            host->view_->onFocus(Steinberg::kTrue);
+        return 0;
+    case WM_KILLFOCUS:
+        if (host && host->view_ && host->viewAttached_)
+            host->view_->onFocus(Steinberg::kFalse);
+        return 0;
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        if (host && host->handleKeyDown(wParam, lParam))
+            return 0;
+        break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        if (host && host->handleKeyUp(wParam, lParam))
+            return 0;
+        break;
+    case WM_ERASEBKGND:
+        return 1;
     default:
         break;
     }
@@ -1969,21 +2190,30 @@ void VST3Host::destroyPluginUI()
 
     if (view_ && viewAttached_)
     {
+        // Notify the plug-in that its view is about to disappear from our parent window.
         view_->removed();
         viewAttached_ = false;
     }
 
     if (view_ && frameAttached_)
     {
+        // Break the connection between the plug-in view and our IPlugFrame implementation.
         view_->setFrame(nullptr);
         frameAttached_ = false;
     }
 
     if (plugFrame_)
     {
+        // Release the cached child window handle and cached size information before destroying the HWND.
+        plugFrame_->setActiveView(nullptr);
+        plugFrame_->setHostWindow(nullptr);
+        plugFrame_->clearCachedRect();
         plugFrame_->release();
         plugFrame_ = nullptr;
     }
+
+    // Reset the cached rectangle so that future editor openings start from the plug-in defaults.
+    clearCurrentViewRect();
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
     {
