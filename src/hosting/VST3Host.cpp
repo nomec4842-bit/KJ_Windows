@@ -1770,13 +1770,13 @@ int16_t VST3Host::queryKeyModifiers() const
 {
     int16_t modifiers = 0;
     if ((::GetKeyState(VK_SHIFT) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::Vst::kShiftKey);
+        modifiers |= static_cast<int16_t>(Steinberg::kShiftKey);
     if ((::GetKeyState(VK_CONTROL) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::Vst::kControlKey);
+        modifiers |= static_cast<int16_t>(Steinberg::kCommandKey);
     if ((::GetKeyState(VK_MENU) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::Vst::kAltKey);
+        modifiers |= static_cast<int16_t>(Steinberg::kAlternateKey);
     if ((::GetKeyState(VK_LWIN) & 0x8000) != 0 || (::GetKeyState(VK_RWIN) & 0x8000) != 0)
-        modifiers |= static_cast<int16_t>(Steinberg::Vst::kWinKey);
+        modifiers |= static_cast<int16_t>(Steinberg::kControlKey);
     return modifiers;
 }
 
@@ -1885,11 +1885,11 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
         break;
     case WM_SETFOCUS:
         if (host && host->view_ && host->viewAttached_)
-            host->view_->onFocus(Steinberg::kTrue);
+            host->view_->onFocus(static_cast<Steinberg::TBool>(true));
         return 0;
     case WM_KILLFOCUS:
         if (host && host->view_ && host->viewAttached_)
-            host->view_->onFocus(Steinberg::kFalse);
+            host->view_->onFocus(static_cast<Steinberg::TBool>(false));
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
