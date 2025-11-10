@@ -98,8 +98,8 @@ private:
     void clearCurrentViewRect();
     bool handleKeyDown(WPARAM wParam, LPARAM lParam);
     bool handleKeyUp(WPARAM wParam, LPARAM lParam);
-    char16 translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
-    int16 queryKeyModifiers() const;
+    Steinberg::char16 translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
+    Steinberg::int16 queryKeyModifiers() const;
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
