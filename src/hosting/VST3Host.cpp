@@ -15,11 +15,14 @@ using namespace kj;
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
+#include <chrono>
 
 #include "pluginterfaces/base/ipersistent.h"
 #include "pluginterfaces/base/ustring.h"
@@ -50,6 +53,7 @@ namespace {
 constexpr wchar_t kContainerWindowClassName[] = L"KJ_VST3_CONTAINER";
 constexpr wchar_t kHeaderWindowClassName[] = L"KJ_VST3_HEADER";
 constexpr wchar_t kFallbackWindowClassName[] = L"KJ_VST3_FALLBACK";
+constexpr wchar_t kStandaloneEditorWindowClassName[] = L"KJ_VST3_STANDALONE_EDITOR";
 constexpr int kHeaderHeight = 56;
 constexpr UINT_PTR kHeaderFallbackButtonId = 1001;
 constexpr UINT_PTR kHeaderCloseButtonId = 1002;
@@ -681,6 +685,224 @@ bool VST3Host::isPluginLoaded() const
     return component_ != nullptr;
 }
 
+bool VST3Host::ShowPluginEditor()
+{
+#ifdef _WIN32
+    if (!controller_)
+    {
+        std::cerr << "[KJ] Cannot open plug-in editor without a valid controller.\n";
+        return false;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(standaloneEditorMutex_);
+        if (standaloneEditorThreadRunning_.load())
+        {
+            HWND existing = standaloneEditorWindow_;
+            if (existing && ::IsWindow(existing))
+            {
+                ::ShowWindow(existing, SW_SHOWNORMAL);
+                ::UpdateWindow(existing);
+            }
+            return true;
+        }
+
+        std::thread staleThread;
+        if (standaloneEditorThread_.joinable())
+            staleThread = std::move(standaloneEditorThread_);
+
+        lock.unlock();
+        if (staleThread.joinable())
+            staleThread.join();
+        lock.lock();
+
+        if (standaloneEditorThreadRunning_.load())
+        {
+            HWND existing = standaloneEditorWindow_;
+            if (existing && ::IsWindow(existing))
+            {
+                ::ShowWindow(existing, SW_SHOWNORMAL);
+                ::UpdateWindow(existing);
+            }
+            return true;
+        }
+
+        std::promise<bool> startPromise;
+        auto startFuture = startPromise.get_future();
+        Steinberg::IPtr<Steinberg::Vst::IEditController> controllerCopy = controller_;
+        std::wstring windowTitle = pluginNameW_.empty() ? std::wstring(L"VST3 Plug-in") : pluginNameW_;
+
+        standaloneEditorThreadShouldExit_.store(false);
+        standaloneEditorThreadRunning_.store(true);
+
+        standaloneEditorThread_ = std::thread([this, promise = std::move(startPromise), controllerCopy, windowTitle]() mutable {
+            Steinberg::IPtr<Steinberg::IPlugView> localView;
+            HWND hwnd = nullptr;
+            bool attached = false;
+            bool promiseSatisfied = false;
+
+            auto cleanup = [this, &localView, &hwnd, &attached]() {
+                if (attached && localView)
+                    localView->removed();
+
+                if (hwnd && ::IsWindow(hwnd))
+                    ::DestroyWindow(hwnd);
+
+                {
+                    std::lock_guard<std::mutex> guard(standaloneEditorMutex_);
+                    standaloneEditorWindow_ = nullptr;
+                    standaloneEditorView_ = nullptr;
+                }
+
+                standaloneEditorThreadRunning_.store(false);
+                standaloneEditorThreadShouldExit_.store(false);
+            };
+
+            auto fail = [&](const char* message) {
+                if (message)
+                    std::cerr << message << std::endl;
+                if (!promiseSatisfied)
+                {
+                    promise.set_value(false);
+                    promiseSatisfied = true;
+                }
+                cleanup();
+            };
+
+            try
+            {
+                if (!controllerCopy)
+                {
+                    fail("[KJ] Plug-in controller is unavailable; cannot create editor view.");
+                    return;
+                }
+
+                localView = controllerCopy->createView(Steinberg::Vst::ViewType::kEditor);
+                if (!localView)
+                {
+                    fail("[KJ] Plug-in did not provide an editor view.");
+                    return;
+                }
+
+                if (localView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+                {
+                    fail("[KJ] Plug-in editor does not support HWND platform windows.");
+                    return;
+                }
+
+                Steinberg::ViewRect rect {};
+                if (localView->getSize(&rect) != kResultTrue)
+                {
+                    rect.left = 0;
+                    rect.top = 0;
+                    rect.right = 640;
+                    rect.bottom = 480;
+                }
+
+                const int width = std::max<int>(1, rect.getWidth());
+                const int height = std::max<int>(1, rect.getHeight());
+
+                static std::once_flag classFlag;
+                static ATOM editorClassAtom = 0;
+                std::call_once(classFlag, []() {
+                    WNDCLASSEXW wc {};
+                    wc.cbSize = sizeof(WNDCLASSEXW);
+                    wc.style = CS_HREDRAW | CS_VREDRAW;
+                    wc.lpfnWndProc = &VST3Host::StandaloneEditorWndProc;
+                    wc.cbClsExtra = 0;
+                    wc.cbWndExtra = 0;
+                    wc.hInstance = ::GetModuleHandleW(nullptr);
+                    wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+                    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                    wc.lpszClassName = kStandaloneEditorWindowClassName;
+                    editorClassAtom = ::RegisterClassExW(&wc);
+                });
+
+                if (!editorClassAtom)
+                {
+                    fail("[KJ] Failed to register stand-alone editor window class.");
+                    return;
+                }
+
+                HINSTANCE instance = ::GetModuleHandleW(nullptr);
+                hwnd = ::CreateWindowExW(0, kStandaloneEditorWindowClassName, windowTitle.c_str(),
+                                         WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+                                         width, height, nullptr, nullptr, instance, this);
+                if (!hwnd)
+                {
+                    fail("[KJ] Failed to create stand-alone editor window.");
+                    return;
+                }
+
+                ::ShowWindow(hwnd, SW_SHOWNORMAL);
+                ::UpdateWindow(hwnd);
+
+                if (localView->attached(reinterpret_cast<void*>(hwnd), Steinberg::kPlatformTypeHWND) != kResultOk)
+                {
+                    fail("[KJ] Failed to attach plug-in editor view to HWND.");
+                    return;
+                }
+
+                attached = true;
+                localView->onSize(&rect);
+
+                {
+                    std::lock_guard<std::mutex> guard(standaloneEditorMutex_);
+                    standaloneEditorWindow_ = hwnd;
+                    standaloneEditorView_ = localView;
+                }
+
+                if (!promiseSatisfied)
+                {
+                    promise.set_value(true);
+                    promiseSatisfied = true;
+                }
+
+                MSG msg {};
+                while (!standaloneEditorThreadShouldExit_.load())
+                {
+                    while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+                    {
+                        if (msg.message == WM_QUIT)
+                        {
+                            standaloneEditorThreadShouldExit_.store(true);
+                            break;
+                        }
+
+                        ::TranslateMessage(&msg);
+                        ::DispatchMessageW(&msg);
+                    }
+
+                    if (!::IsWindow(hwnd))
+                        break;
+
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+
+                cleanup();
+            }
+            catch (...)
+            {
+                fail("[KJ] Unexpected exception while creating the plug-in editor view.");
+            }
+        });
+
+        lock.unlock();
+
+        bool started = startFuture.get();
+        if (!started)
+        {
+            ClosePluginEditor();
+            return false;
+        }
+        return true;
+    }
+#else
+    std::cerr << "[KJ] Native plug-in editor is only supported on Windows.\\n";
+    return false;
+#endif
+}
+
 void VST3Host::openEditor(void* hwnd)
 {
     showPluginUI(hwnd);
@@ -816,6 +1038,27 @@ void VST3Host::showPluginUI(void* parentHWND)
 }
 
 #ifdef _WIN32
+
+void VST3Host::ClosePluginEditor()
+{
+    std::thread threadToJoin;
+    {
+        std::unique_lock<std::mutex> lock(standaloneEditorMutex_);
+        HWND window = standaloneEditorWindow_;
+        if (standaloneEditorThreadRunning_.load())
+        {
+            standaloneEditorThreadShouldExit_.store(true);
+            if (window && ::IsWindow(window))
+                ::PostMessageW(window, WM_CLOSE, 0, 0);
+        }
+
+        if (standaloneEditorThread_.joinable())
+            threadToJoin = std::move(standaloneEditorThread_);
+    }
+
+    if (threadToJoin.joinable())
+        threadToJoin.join();
+}
 
 bool VST3Host::ensureWindowClasses()
 {
@@ -1690,8 +1933,38 @@ LRESULT CALLBACK VST3Host::FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+LRESULT CALLBACK VST3Host::StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NCCREATE)
+    {
+        auto* create = reinterpret_cast<LPCREATESTRUCTW>(lParam);
+        if (create && create->lpCreateParams)
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+
+    auto* host = reinterpret_cast<VST3Host*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg)
+    {
+    case WM_CLOSE:
+        ::DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (host)
+            host->standaloneEditorThreadShouldExit_.store(true);
+        return 0;
+
+    default:
+        break;
+    }
+
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 void VST3Host::destroyPluginUI()
 {
+    ClosePluginEditor();
     resetFallbackEditState();
 
     if (view_ && viewAttached_)
