@@ -77,6 +77,7 @@ private:
     void onContainerResized(int width, int height);
     void onContainerDestroyed();
     void ensurePluginViewHost();
+    bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
     bool applyViewRect(const Steinberg::ViewRect& rect);
     void updateWindowSizeForContent(int contentWidth, int contentHeight);
     void updateHeaderTexts();
@@ -92,9 +93,17 @@ private:
     std::wstring getFallbackDisplayString(const FallbackParameter& param) const;
     std::wstring getParameterName(const FallbackParameter& param) const;
     void syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
+    bool resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect, bool adjustContainer);
+    void storeCurrentViewRect(const Steinberg::ViewRect& rect);
+    void clearCurrentViewRect();
+    bool handleKeyDown(WPARAM wParam, LPARAM lParam);
+    bool handleKeyUp(WPARAM wParam, LPARAM lParam);
+    char16 translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
+    int16 queryKeyModifiers() const;
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 
@@ -160,6 +169,8 @@ private:
     std::wstring pluginVendorW_;
     std::vector<FallbackParameter> fallbackParameters_;
     HWND lastParentWindow_ = nullptr;
+    Steinberg::ViewRect currentViewRect_ {};
+    bool hasCurrentViewRect_ = false;
 #endif
 };
 
