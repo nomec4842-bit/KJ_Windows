@@ -97,6 +97,7 @@ private:
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
+    bool ensureViewForRequestedType();
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -141,6 +142,7 @@ private:
     mutable std::mutex parameterMutex_;
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
+    std::string currentViewType_;
 
 #ifdef _WIN32
     std::wstring pluginNameW_;

@@ -421,12 +421,17 @@ bool VST3Host::load(const std::string& pluginPath)
     processor_ = processor;
     controller_ = controller;
     view_ = nullptr;
+    currentViewType_.clear();
 
     if (controller_)
     {
         componentHandler_ = new ComponentHandler(*this);
         controller_->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler_));
         inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
+
+        // Request the plug-in's editor view immediately so we know if a native GUI is available.
+        if (!ensureViewForRequestedType())
+            std::cerr << "[KJ] Plug-in does not provide a usable editor view; fallback UI will be used." << std::endl;
     }
     else
     {
@@ -528,6 +533,51 @@ void VST3Host::onComponentRequestOpenEditor(const char* viewType)
 #endif
 }
 
+bool VST3Host::ensureViewForRequestedType()
+{
+    if (!controller_)
+        return false;
+
+    // Ask the controller for its native editor view using the requested type (defaulting to kEditor).
+    const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
+                                                           : requestedViewType_.c_str();
+    const char* fallbackType = Steinberg::Vst::ViewType::kEditor;
+    const char* usedType = preferredType;
+
+    if (view_ && !currentViewType_.empty() && currentViewType_ == usedType)
+        return true;
+
+    if (view_ && viewAttached_)
+        return true;
+
+    view_ = nullptr;
+    currentViewType_.clear();
+
+    Steinberg::IPtr<Steinberg::IPlugView> newView = controller_->createView(preferredType);
+    if (!newView && std::strcmp(preferredType, fallbackType) != 0)
+    {
+        // Fall back to the standard editor type if the plug-in rejected the requested view.
+        newView = controller_->createView(fallbackType);
+        usedType = fallbackType;
+    }
+
+    if (!newView)
+        return false;
+
+#ifdef _WIN32
+    if (newView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+    {
+        // Without HWND support we cannot host the native UI inside our Windows container.
+        std::cerr << "[KJ] Plug-in editor does not support HWND platform windows." << std::endl;
+        return false;
+    }
+#endif
+
+    view_ = newView;
+    currentViewType_ = usedType;
+    return true;
+}
+
 void VST3Host::process(float** outputs, int numChannels, int numSamples)
 {
     if (!processor_ || !processingActive_ || !outputs)
@@ -592,6 +642,7 @@ void VST3Host::unload()
         controller_->setComponentHandler(nullptr);
 
     view_ = nullptr;
+    currentViewType_.clear();
 
     if (controller_)
         controller_->terminate();
@@ -663,22 +714,9 @@ void VST3Host::showPluginUI(void* parentHWND)
         return;
     }
 
-    if (!view_ && controller_)
+    if (!ensureViewForRequestedType())
     {
-        const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
-                                                               : requestedViewType_.c_str();
-        auto view = controller_->createView(preferredType);
-        if (!view && std::strcmp(preferredType, Steinberg::Vst::ViewType::kEditor) != 0)
-            view = controller_->createView(Steinberg::Vst::ViewType::kEditor);
-
-        if (view)
-        {
-            view_ = view;
-        }
-        else
-        {
-            std::cerr << "[KJ] Plugin has no editor view. Using fallback controls.\n";
-        }
+        std::cerr << "[KJ] Plug-in has no usable editor view. Showing fallback controls.\n";
     }
 
     if (view_)
@@ -688,55 +726,72 @@ void VST3Host::showPluginUI(void* parentHWND)
         if (!plugFrame_)
             plugFrame_ = new PlugFrame(*this);
 
-        if (!frameAttached_)
+        if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
         {
-            plugFrame_->addRef();
-            if (view_->setFrame(plugFrame_) != kResultOk)
-            {
-                std::cerr << "[KJ] Failed to set VST3 plug frame. Falling back to generic controls.\n";
-                plugFrame_->release();
-                plugFrame_ = nullptr;
-                frameAttached_ = false;
-                view_ = nullptr;
-            }
-            else
-            {
-                frameAttached_ = true;
-            }
+            // If we failed to allocate a container window we must fall back to the generic controls.
+            std::cerr << "[KJ] Failed to create host window for VST3 editor. Showing fallback controls.\n";
+            view_ = nullptr;
+            frameAttached_ = false;
+            viewAttached_ = false;
         }
-
-        if (view_ && frameAttached_ && !viewAttached_ && pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+        else
         {
-            if (view_->attached(pluginViewWindow_, Steinberg::kPlatformTypeHWND) != kResultOk)
+            // Query the plug-in for its preferred editor dimensions and size our host window accordingly.
+            Steinberg::ViewRect targetRect {};
+            if (view_->getSize(&targetRect) != kResultTrue)
             {
-                std::cerr << "[KJ] Failed to attach VST3 editor view. Falling back to generic controls.\n";
-                view_->setFrame(nullptr);
-                frameAttached_ = false;
-                if (plugFrame_)
+                targetRect.left = 0;
+                targetRect.top = 0;
+                targetRect.right = 400;
+                targetRect.bottom = 300;
+            }
+
+            applyViewRect(targetRect);
+
+            if (!frameAttached_)
+            {
+                // Attach our IPlugFrame implementation before handing over the native window handle.
+                plugFrame_->addRef();
+                if (view_->setFrame(plugFrame_) != kResultOk)
                 {
+                    std::cerr << "[KJ] Failed to set VST3 plug frame. Falling back to generic controls.\n";
                     plugFrame_->release();
                     plugFrame_ = nullptr;
+                    frameAttached_ = false;
+                    view_ = nullptr;
                 }
-                view_ = nullptr;
+                else
+                {
+                    frameAttached_ = true;
+                }
             }
-            else
-            {
-                viewAttached_ = true;
-                ViewRect rect {};
-                if (view_->getSize(&rect) != kResultTrue)
-                {
-                    rect.left = 0;
-                    rect.top = 0;
-                    rect.right = 400;
-                    rect.bottom = 300;
-                }
-                applyViewRect(rect);
-                view_->onSize(&rect);
 
-                if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+            if (view_ && frameAttached_ && !viewAttached_ && pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+            {
+                void* nativeHandle = reinterpret_cast<void*>(pluginViewWindow_);
+                if (view_->attached(nativeHandle, Steinberg::kPlatformTypeHWND) != kResultOk)
                 {
-                    float scale = GetContentScaleForWindow(pluginViewWindow_);
-                    scaleSupport->setContentScaleFactor(scale);
+                    std::cerr << "[KJ] Failed to attach VST3 editor view. Falling back to generic controls.\n";
+                    view_->setFrame(nullptr);
+                    frameAttached_ = false;
+                    if (plugFrame_)
+                    {
+                        plugFrame_->release();
+                        plugFrame_ = nullptr;
+                    }
+                    view_ = nullptr;
+                }
+                else
+                {
+                    viewAttached_ = true;
+                    // Notify the plug-in that the window is visible and provide the final size.
+                    view_->onSize(&targetRect);
+
+                    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+                    {
+                        float scale = GetContentScaleForWindow(pluginViewWindow_);
+                        scaleSupport->setContentScaleFactor(scale);
+                    }
                 }
             }
         }
@@ -744,6 +799,7 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     refreshFallbackParameters();
     showFallbackControls(fallbackVisible_);
+    updateHeaderTexts();
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
     {
@@ -901,6 +957,17 @@ void VST3Host::onContainerResized(int width, int height)
 
     if (fallbackWindow_ && ::IsWindow(fallbackWindow_))
         ::MoveWindow(fallbackWindow_, 0, 0, width, contentHeight, TRUE);
+
+    if (view_ && viewAttached_)
+    {
+        // Inform the plug-in about the new drawable region whenever our host window resizes.
+        Steinberg::ViewRect resizeRect {};
+        resizeRect.left = 0;
+        resizeRect.top = 0;
+        resizeRect.right = width;
+        resizeRect.bottom = contentHeight;
+        view_->onSize(&resizeRect);
+    }
 }
 
 void VST3Host::onContainerDestroyed()
@@ -1627,6 +1694,12 @@ void VST3Host::destroyPluginUI()
 {
     resetFallbackEditState();
 
+    if (view_ && viewAttached_)
+    {
+        view_->removed();
+        viewAttached_ = false;
+    }
+
     if (view_ && frameAttached_)
     {
         view_->setFrame(nullptr);
@@ -1637,12 +1710,6 @@ void VST3Host::destroyPluginUI()
     {
         plugFrame_->release();
         plugFrame_ = nullptr;
-    }
-
-    if (view_ && viewAttached_)
-    {
-        view_->removed();
-        viewAttached_ = false;
     }
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
