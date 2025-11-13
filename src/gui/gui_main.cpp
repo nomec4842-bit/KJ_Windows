@@ -1980,31 +1980,42 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
                     const auto& notes = columnNotes[column];
                     bool active = std::find(notes.begin(), notes.end(), midiNote) != notes.end();
-                    if (active)
-                    {
-                        int endColumn = column + 1;
-                        while (endColumn < kSequencerStepsPerPage)
-                        {
-                            int nextStep = startStep + endColumn;
-                            if (nextStep >= totalSteps)
-                                break;
-
-                            const auto& nextNotes = columnNotes[endColumn];
-                            if (std::find(nextNotes.begin(), nextNotes.end(), midiNote) == nextNotes.end())
-                                break;
-                            ++endColumn;
-                        }
-
-                        RECT cellRect {layout.columnX[column], layout.rowY[row], layout.columnX[endColumn], layout.rowY[row + 1]};
-                        HBRUSH noteBrush = CreateSolidBrush(kPianoRollActiveNote);
-                        FillRect(hdc, &cellRect, noteBrush);
-                        DeleteObject(noteBrush);
-                        column = endColumn;
-                    }
-                    else
+                    if (!active)
                     {
                         ++column;
+                        continue;
                     }
+
+                    int rangeStart = stepIndex;
+                    while (rangeStart > 0 && stepContainsMidiNote(trackId, rangeStart - 1, midiNote))
+                        --rangeStart;
+
+                    int drawStartStep = std::max(rangeStart, startStep);
+                    if (stepIndex != drawStartStep)
+                    {
+                        ++column;
+                        continue;
+                    }
+
+                    int rangeEnd = stepIndex;
+                    while (rangeEnd + 1 < totalSteps && stepContainsMidiNote(trackId, rangeEnd + 1, midiNote))
+                        ++rangeEnd;
+
+                    int drawEndStep = std::min(rangeEnd, endStep - 1);
+                    int drawStartColumn = std::max(0, drawStartStep - startStep);
+                    int drawEndColumn = std::min(kSequencerStepsPerPage, drawEndStep - startStep + 1);
+                    if (drawEndColumn <= drawStartColumn)
+                    {
+                        ++column;
+                        continue;
+                    }
+
+                    RECT cellRect {layout.columnX[drawStartColumn], layout.rowY[row],
+                                   layout.columnX[drawEndColumn], layout.rowY[row + 1]};
+                    HBRUSH noteBrush = CreateSolidBrush(kPianoRollActiveNote);
+                    FillRect(hdc, &cellRect, noteBrush);
+                    DeleteObject(noteBrush);
+                    column = drawEndColumn;
                 }
             }
         }
