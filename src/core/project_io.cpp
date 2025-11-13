@@ -740,9 +740,12 @@ bool saveProjectToFile(const std::filesystem::path& path)
             float velocity = trackGetStepVelocity(track.id, stepIndex);
             std::vector<float> noteVelocities;
             noteVelocities.reserve(notes.size());
+            std::vector<bool> noteSustain;
+            noteSustain.reserve(notes.size());
             for (int note : notes)
             {
                 noteVelocities.push_back(trackGetStepNoteVelocity(track.id, stepIndex, note));
+                noteSustain.push_back(trackGetStepNoteSustain(track.id, stepIndex, note));
             }
             float stepPan = trackGetStepPan(track.id, stepIndex);
             float pitchOffset = trackGetStepPitchOffset(track.id, stepIndex);
@@ -768,6 +771,16 @@ bool saveProjectToFile(const std::filesystem::path& path)
                     stream << ", ";
                 }
                 stream << formatFloat(noteVelocities[noteIndex]);
+            }
+            stream << "],\n";
+            stream << "          \"noteSustain\": [";
+            for (size_t sustainIndex = 0; sustainIndex < noteSustain.size(); ++sustainIndex)
+            {
+                if (sustainIndex > 0)
+                {
+                    stream << ", ";
+                }
+                stream << (noteSustain[sustainIndex] ? "true" : "false");
             }
             stream << "],\n";
             stream << "          \"velocity\": " << formatFloat(velocity) << ",\n";
@@ -987,6 +1000,18 @@ bool loadProjectFromFile(const std::filesystem::path& path)
                         float velocityValue = jsonToFloat(&velocities[noteIndex],
                                                           trackGetStepNoteVelocity(trackId, stepIndex, notes[noteIndex]));
                         trackSetStepNoteVelocity(trackId, stepIndex, notes[noteIndex], velocityValue);
+                    }
+                }
+                const JsonValue* sustainArray = findMember(stepObject, "noteSustain");
+                if (sustainArray && sustainArray->isArray())
+                {
+                    const auto& sustainValues = sustainArray->asArray();
+                    size_t count = std::min(notes.size(), sustainValues.size());
+                    for (size_t noteIndex = 0; noteIndex < count; ++noteIndex)
+                    {
+                        bool sustainValue = jsonToBool(&sustainValues[noteIndex],
+                                                       trackGetStepNoteSustain(trackId, stepIndex, notes[noteIndex]));
+                        trackSetStepNoteSustain(trackId, stepIndex, notes[noteIndex], sustainValue);
                     }
                 }
                 trackSetStepPan(trackId, stepIndex,

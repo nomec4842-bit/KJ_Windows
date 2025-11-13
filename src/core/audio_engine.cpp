@@ -1399,18 +1399,19 @@ void audioLoop() {
                     double rightValue = 0.0;
 
                     auto getNotesForStep = [](int trackId, int stepIndex) {
-                        std::vector<StepNoteInfo> notes = trackGetStepNoteInfo(trackId, stepIndex);
-                        if (notes.empty()) {
-                            int fallback = trackGetStepNote(trackId, stepIndex);
-                            if (fallback >= 0) {
-                                StepNoteInfo info{};
-                                info.midiNote = fallback;
-                                info.velocity = trackGetStepNoteVelocity(trackId, stepIndex, fallback);
-                                notes.push_back(info);
-                            }
+                    std::vector<StepNoteInfo> notes = trackGetStepNoteInfo(trackId, stepIndex);
+                    if (notes.empty()) {
+                        int fallback = trackGetStepNote(trackId, stepIndex);
+                        if (fallback >= 0) {
+                            StepNoteInfo info{};
+                            info.midiNote = fallback;
+                            info.velocity = trackGetStepNoteVelocity(trackId, stepIndex, fallback);
+                            info.sustain = trackGetStepNoteSustain(trackId, stepIndex, fallback);
+                            notes.push_back(info);
                         }
-                        return notes;
-                    };
+                    }
+                    return notes;
+                };
 
                     if (stepAdvanced) {
                         for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
@@ -1480,14 +1481,29 @@ void audioLoop() {
 
                         bool gate = false;
                         bool triggered = false;
-                        std::vector<StepNoteInfo> triggeredNotes;
+                        std::vector<StepNoteInfo> stepNotes;
+                        std::vector<StepNoteInfo> noteOnNotes;
+                        std::vector<int> notesPresent;
                         if (trackStepCount > 0 && stepIndex < trackStepCount) {
                             if (getTrackStepState(trackInfo.id, stepIndex)) {
                                 gate = true;
                                 if (stepAdvanced) {
                                     if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut) {
-                                        triggeredNotes = getNotesForStep(trackInfo.id, stepIndex);
-                                        triggered = !triggeredNotes.empty();
+                                        stepNotes = getNotesForStep(trackInfo.id, stepIndex);
+                                        for (const auto& noteInfo : stepNotes) {
+                                            int clampedNote = std::clamp(noteInfo.midiNote, 0, 127);
+                                            double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                         static_cast<double>(kTrackStepVelocityMin),
+                                                                         static_cast<double>(kTrackStepVelocityMax));
+                                            bool includeInPresent = noteInfo.sustain || velocity > 0.0;
+                                            if (includeInPresent)
+                                                notesPresent.push_back(clampedNote);
+                                            if (!noteInfo.sustain && velocity > 0.0)
+                                                noteOnNotes.push_back(noteInfo);
+                                        }
+                                        std::sort(notesPresent.begin(), notesPresent.end());
+                                        notesPresent.erase(std::unique(notesPresent.begin(), notesPresent.end()), notesPresent.end());
+                                        triggered = !noteOnNotes.empty();
                                     } else {
                                         triggered = true;
                                     }
@@ -1624,31 +1640,8 @@ void audioLoop() {
                             if (!gate) {
                                 state.sampleEnvelopeStage = EnvelopeStage::Idle;
                                 sendMidiNotesOffForState(state, state.midiPort, state.midiChannel);
-                            } else if (triggered) {
-                                struct MidiNoteEvent {
-                                    int note = 0;
-                                    int velocity = 0;
-                                };
-
-                                std::vector<MidiNoteEvent> noteEvents;
-                                noteEvents.reserve(triggeredNotes.size());
-                                for (const auto& noteInfo : triggeredNotes) {
-                                    MidiNoteEvent event;
-                                    event.note = std::clamp(noteInfo.midiNote, 0, 127);
-                                    double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
-                                                                  static_cast<double>(kTrackStepVelocityMin),
-                                                                  static_cast<double>(kTrackStepVelocityMax));
-                                    event.velocity = static_cast<int>(std::lround(velocity * 127.0));
-                                    event.velocity = std::clamp(event.velocity, 0, 127);
-                                    noteEvents.push_back(event);
-                                }
-
-                                std::vector<int> notesThisStep;
-                                notesThisStep.reserve(noteEvents.size());
-                                for (const auto& event : noteEvents) {
-                                    if (event.velocity > 0)
-                                        notesThisStep.push_back(event.note);
-                                }
+                            } else if (stepAdvanced) {
+                                std::vector<int> notesThisStep = notesPresent;
                                 std::sort(notesThisStep.begin(), notesThisStep.end());
                                 notesThisStep.erase(std::unique(notesThisStep.begin(), notesThisStep.end()), notesThisStep.end());
 
@@ -1658,22 +1651,30 @@ void audioLoop() {
                                     }
                                 }
 
-                                for (int note : notesThisStep) {
-                                    auto wasActive = std::find(state.activeMidiNotes.begin(), state.activeMidiNotes.end(), note) !=
-                                                     state.activeMidiNotes.end();
+                                for (const auto& noteInfo : noteOnNotes) {
+                                    int note = std::clamp(noteInfo.midiNote, 0, 127);
+                                    auto wasActive = std::find(state.activeMidiNotes.begin(), state.activeMidiNotes.end(), note)
+                                                         != state.activeMidiNotes.end();
                                     if (wasActive) {
                                         midiOutputSendNoteOff(state.midiPort, state.midiChannel, note, 0);
                                     }
                                 }
 
-                                for (const auto& event : noteEvents) {
-                                    if (event.velocity <= 0)
+                                for (const auto& noteInfo : noteOnNotes) {
+                                    double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                  static_cast<double>(kTrackStepVelocityMin),
+                                                                  static_cast<double>(kTrackStepVelocityMax));
+                                    int eventVelocity = static_cast<int>(std::lround(velocity * 127.0));
+                                    eventVelocity = std::clamp(eventVelocity, 0, 127);
+                                    if (eventVelocity <= 0)
                                         continue;
-                                    midiOutputSendNoteOn(state.midiPort, state.midiChannel, event.note, event.velocity);
+                                    int note = std::clamp(noteInfo.midiNote, 0, 127);
+                                    midiOutputSendNoteOn(state.midiPort, state.midiChannel, note, eventVelocity);
                                 }
 
-                                state.activeMidiNotes = notesThisStep;
+                                state.activeMidiNotes = std::move(notesThisStep);
                             }
+
                         } else {
                             if (!gate) {
                                 for (auto& voice : state.voices) {
@@ -1684,44 +1685,45 @@ void audioLoop() {
                                 }
                             }
 
-                            if (triggered) {
-                                std::vector<TrackPlaybackState::SynthVoice> previousVoices = state.voices;
+                            if (gate && stepAdvanced) {
                                 std::vector<TrackPlaybackState::SynthVoice> updatedVoices;
-                                updatedVoices.reserve(triggeredNotes.size() + previousVoices.size());
-
+                                updatedVoices.reserve(stepNotes.size() + state.voices.size());
                                 bool createdNewVoice = false;
-                                for (const auto& noteInfo : triggeredNotes) {
-                                    int note = noteInfo.midiNote;
+
+                                auto findExistingVoice = [&state](int note) {
+                                    return std::find_if(state.voices.begin(), state.voices.end(),
+                                        [note](const TrackPlaybackState::SynthVoice& voice) {
+                                            return voice.midiNote == note;
+                                        });
+                                };
+
+                                for (const auto& noteInfo : stepNotes) {
+                                    int note = std::clamp(noteInfo.midiNote, 0, 127);
                                     double noteVelocity = std::clamp(static_cast<double>(noteInfo.velocity),
                                                                      static_cast<double>(kTrackStepVelocityMin),
                                                                      static_cast<double>(kTrackStepVelocityMax));
 
-                                    auto existingIt = std::find_if(previousVoices.begin(), previousVoices.end(),
-                                        [note](const TrackPlaybackState::SynthVoice& voice) {
-                                            return voice.midiNote == note;
-                                        });
-
-                                    if (existingIt != previousVoices.end()) {
-                                        if (existingIt->envelopeStage != EnvelopeStage::Idle &&
-                                            existingIt->envelopeStage != EnvelopeStage::Release) {
-                                            existingIt->envelopeStage = EnvelopeStage::Release;
-                                        }
-                                    }
-
-                                    TrackPlaybackState::SynthVoice voice{};
+                                    auto existingIt = findExistingVoice(note);
+                                    bool restartVoice = !noteInfo.sustain || existingIt == state.voices.end();
+                                    TrackPlaybackState::SynthVoice voice = (existingIt != state.voices.end())
+                                        ? *existingIt
+                                        : TrackPlaybackState::SynthVoice{};
                                     voice.midiNote = note;
                                     voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset + state.stepPitchOffset);
-                                    voice.phase = 0.0;
-                                    voice.lastOutput = 0.0;
-                                    voice.velocity = noteVelocity;
-                                    voice.envelope = 0.0;
-                                    voice.envelopeStage = EnvelopeStage::Attack;
+                                    if (restartVoice) {
+                                        voice.phase = 0.0;
+                                        voice.lastOutput = 0.0;
+                                        voice.velocity = noteVelocity;
+                                        voice.envelope = 0.0;
+                                        voice.envelopeStage = EnvelopeStage::Attack;
+                                        createdNewVoice = true;
+                                    }
                                     updatedVoices.push_back(voice);
-                                    createdNewVoice = true;
                                 }
 
-                                for (size_t i = 0; i < previousVoices.size(); ++i) {
-                                    auto& voice = previousVoices[i];
+                                for (auto& voice : state.voices) {
+                                    if (std::binary_search(notesPresent.begin(), notesPresent.end(), voice.midiNote))
+                                        continue;
                                     if (voice.envelopeStage != EnvelopeStage::Idle &&
                                         voice.envelopeStage != EnvelopeStage::Release) {
                                         voice.envelopeStage = EnvelopeStage::Release;
