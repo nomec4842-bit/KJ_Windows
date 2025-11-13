@@ -328,12 +328,12 @@ constexpr COLORREF kPianoRollMenuTabActive = RGB(65, 90, 130);
 constexpr COLORREF kPianoRollMenuTabInactive = RGB(45, 45, 45);
 constexpr int kPianoRollNoteResizeHandlePixels = 6;
 
-constexpr int kPianoRollMenuTabCount = 3;
+constexpr int kPianoRollMenuTabCount = 2;
 constexpr int kPianoRollCollapseBarHeight = 28;
 constexpr int kPianoRollCollapseButtonSize = 20;
 constexpr int kPianoRollCollapseButtonPadding = 8;
 const std::array<const wchar_t*, kPianoRollMenuTabCount> kPianoRollMenuTabLabels = {
-    L"Velocity", L"Pitch", L"Effect"
+    L"Velocity", L"Effect"
 };
 
 constexpr wchar_t kEffectsWindowClassName[] = L"KJEffectsWindow";
@@ -884,20 +884,6 @@ void pianoRollApplyMenuParameter(int parameterIndex,
             targetIndex = static_cast<int>(notes.size()) - 1;
         int targetMidiNote = notes[static_cast<size_t>(targetIndex)];
         trackSetStepNoteVelocity(trackId, stepIndex, targetMidiNote, normalized);
-        break;
-    }
-    case 1:
-    {
-        LONG clampedY = std::clamp(pointerY, static_cast<int>(innerTop), static_cast<int>(innerBottom));
-        int height = static_cast<int>(innerBottom - innerTop);
-        float normalized = (height > 0)
-                               ? 1.0f - static_cast<float>(clampedY - innerTop) / static_cast<float>(height)
-                               : 0.5f;
-        double maxAbs = std::max(std::abs(static_cast<double>(kTrackStepPitchMin)),
-                                 std::abs(static_cast<double>(kTrackStepPitchMax)));
-        double pitch = (normalized - 0.5) * 2.0 * maxAbs;
-        pitch = std::clamp(pitch, static_cast<double>(kTrackStepPitchMin), static_cast<double>(kTrackStepPitchMax));
-        trackSetStepPitchOffset(trackId, stepIndex, static_cast<float>(pitch));
         break;
     }
     default:
@@ -1577,7 +1563,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
 
-        if (!layout.menuCollapsed && gPianoRollSelectedMenuTab < 2)
+        if (!layout.menuCollapsed && gPianoRollSelectedMenuTab == 0)
         {
             RECT laneRect = computePianoRollMenuLaneRect(layout);
             if (laneRect.right > laneRect.left && laneRect.bottom > laneRect.top && x >= laneRect.left && x < laneRect.right &&
@@ -1595,8 +1581,7 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         int stepIndex = currentStepPage * kSequencerStepsPerPage + column;
                         if (stepIndex >= 0 && stepIndex < totalSteps)
                         {
-                            bool allowParameterDrag = (gPianoRollSelectedMenuTab != 0) ||
-                                                       stepHasDisplayableNote(trackId, stepIndex);
+                            bool allowParameterDrag = stepHasDisplayableNote(trackId, stepIndex);
                             if (!allowParameterDrag)
                                 return 0;
 
@@ -2259,9 +2244,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     description = L"Shape the intensity of each note. Drag a step to set its velocity envelope.";
                     break;
                 case 1:
-                    description = L"Fine-tune note pitch in semitones or cents for expressive runs.";
-                    break;
-                case 2:
                 default:
                     description = L"Route per-note modulation and effects such as filters or delays.";
                     break;
@@ -2289,17 +2271,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
                 SelectObject(hdc, oldLanePen);
                 DeleteObject(lanePen);
-
-                if (gPianoRollSelectedMenuTab == 1)
-                {
-                    HPEN centerPen = CreatePen(PS_SOLID, 1, RGB(75, 75, 75));
-                    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, centerPen));
-                    LONG midY = (laneRect.top + laneRect.bottom) / 2;
-                    MoveToEx(hdc, laneRect.left, midY, nullptr);
-                    LineTo(hdc, laneRect.right, midY);
-                    SelectObject(hdc, oldPen);
-                    DeleteObject(centerPen);
-                }
 
                 HBRUSH barBrush = CreateSolidBrush(kPianoRollActiveNote);
                 HBRUSH disabledBrush = CreateSolidBrush(RGB(30, 30, 30));
@@ -2417,34 +2388,6 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                             }
 
                             currentLeft = nextLeft;
-                        }
-                        break;
-                    }
-                    case 1:
-                    {
-                        float pitch = trackGetStepPitchOffset(trackId, stepIndex);
-                        double maxAbs = std::max(std::abs(static_cast<double>(kTrackStepPitchMin)),
-                                                 std::abs(static_cast<double>(kTrackStepPitchMax)));
-                        double normalized = maxAbs > 0.0 ? static_cast<double>(pitch) / maxAbs : 0.0;
-                        normalized = std::clamp(normalized, -1.0, 1.0);
-                        LONG centerY = (innerTop + innerBottom) / 2;
-                        if (normalized >= 0.0)
-                        {
-                            LONG barTop = centerY - static_cast<LONG>(std::round(normalized * (innerBottom - innerTop) * 0.5));
-                            if (barTop < innerTop)
-                                barTop = innerTop;
-                            RECT barRect {innerLeft, barTop, innerRight, centerY};
-                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
-                                FillRect(hdc, &barRect, barBrush);
-                        }
-                        else
-                        {
-                            LONG barBottom = centerY + static_cast<LONG>(std::round(-normalized * (innerBottom - innerTop) * 0.5));
-                            if (barBottom > innerBottom)
-                                barBottom = innerBottom;
-                            RECT barRect {innerLeft, centerY, innerRight, barBottom};
-                            if (barRect.bottom > barRect.top && barRect.right > barRect.left)
-                                FillRect(hdc, &barRect, barBrush);
                         }
                         break;
                     }
