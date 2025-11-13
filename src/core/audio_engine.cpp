@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cmath>
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -428,8 +429,6 @@ double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack,
 
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
-    double envelope = 0.0;
-    EnvelopeStage synthEnvelopeStage = EnvelopeStage::Idle;
     int currentMidiNote = 69;
     double currentFrequency = midiNoteToFrequency(69);
     int currentStep = 0;
@@ -501,6 +500,8 @@ struct TrackPlaybackState {
         double phase = 0.0;
         double lastOutput = 0.0;
         double velocity = 1.0;
+        double envelope = 0.0;
+        EnvelopeStage envelopeStage = EnvelopeStage::Idle;
     };
     std::vector<SynthVoice> voices;
     int midiChannel = 0;
@@ -530,8 +531,6 @@ void resetSamplePlaybackState(TrackPlaybackState& state)
 
 void resetSynthPlaybackState(TrackPlaybackState& state)
 {
-    state.envelope = 0.0;
-    state.synthEnvelopeStage = EnvelopeStage::Idle;
     state.pitchEnvelope = 0.0;
     state.voices.clear();
 }
@@ -1216,7 +1215,6 @@ void audioLoop() {
 
                     resetSamplePlaybackState(state);
                     resetSynthPlaybackState(state);
-                    state.envelope = 0.0;
                     state.pitchEnvelope = 0.0;
                     state.currentMidiNote = 69;
                     state.currentFrequency = midiNoteToFrequency(69);
@@ -1331,10 +1329,10 @@ void audioLoop() {
                     stepSampleCounter = 0.0;
                     for (auto& entry : playbackStates) {
                         auto& state = entry.second;
-                        state.envelope *= 0.92;
-                        if (state.envelope < 0.0001)
-                            state.envelope = 0.0;
-                        state.synthEnvelopeStage = EnvelopeStage::Idle;
+                        for (auto& voice : state.voices) {
+                            voice.envelope = 0.0;
+                            voice.envelopeStage = EnvelopeStage::Idle;
+                        }
                         resetSamplePlaybackState(state);
                         state.voices.clear();
                         state.pitchEnvelope = 0.0;
@@ -1379,7 +1377,6 @@ void audioLoop() {
                                     state.resetFadeSamples = 0;
                                     state.resetFadeStep = 0.0;
                                     state.resetReason = reason;
-                                    state.envelope = 0.0;
                                     resetSamplePlaybackState(state);
                                     resetSynthPlaybackState(state);
                                     state.currentStep = 0;
@@ -1625,7 +1622,6 @@ void audioLoop() {
                             state.voices.clear();
 
                             if (!gate) {
-                                state.synthEnvelopeStage = EnvelopeStage::Idle;
                                 state.sampleEnvelopeStage = EnvelopeStage::Idle;
                                 sendMidiNotesOffForState(state, state.midiPort, state.midiChannel);
                             } else if (triggered) {
@@ -1697,9 +1693,13 @@ void audioLoop() {
                                 state.activeMidiNotes = notesThisStep;
                             }
                         } else {
-                            if (!gate && state.synthEnvelopeStage != EnvelopeStage::Idle &&
-                                state.synthEnvelopeStage != EnvelopeStage::Release) {
-                                state.synthEnvelopeStage = EnvelopeStage::Release;
+                            if (!gate) {
+                                for (auto& voice : state.voices) {
+                                    if (voice.envelopeStage != EnvelopeStage::Idle &&
+                                        voice.envelopeStage != EnvelopeStage::Release) {
+                                        voice.envelopeStage = EnvelopeStage::Release;
+                                    }
+                                }
                             }
 
                             if (triggered) {
@@ -1723,8 +1723,10 @@ void audioLoop() {
                                     }
                                 }
 
+                                std::vector<TrackPlaybackState::SynthVoice> previousVoices = state.voices;
+                                std::vector<bool> reused(previousVoices.size(), false);
                                 std::vector<TrackPlaybackState::SynthVoice> updatedVoices;
-                                updatedVoices.reserve(triggeredNotes.size());
+                                updatedVoices.reserve(triggeredNotes.size() + previousVoices.size());
 
                                 bool createdNewVoice = false;
                                 for (const auto& noteInfo : triggeredNotes) {
@@ -1733,15 +1735,17 @@ void audioLoop() {
                                                                      static_cast<double>(kTrackStepVelocityMin),
                                                                      static_cast<double>(kTrackStepVelocityMax));
 
-                                    auto existingIt = std::find_if(state.voices.begin(), state.voices.end(),
+                                    auto existingIt = std::find_if(previousVoices.begin(), previousVoices.end(),
                                         [note](const TrackPlaybackState::SynthVoice& voice) {
                                             return voice.midiNote == note;
                                         });
 
                                     bool isSustained = std::find(sustainedNotes.begin(), sustainedNotes.end(), note) != sustainedNotes.end();
-                                    if (existingIt != state.voices.end() && isSustained) {
+                                    if (existingIt != previousVoices.end() && isSustained) {
                                         TrackPlaybackState::SynthVoice voice = *existingIt;
                                         voice.velocity = noteVelocity;
+                                        size_t index = static_cast<size_t>(std::distance(previousVoices.begin(), existingIt));
+                                        reused[index] = true;
                                         updatedVoices.push_back(voice);
                                     } else {
                                         TrackPlaybackState::SynthVoice voice{};
@@ -1750,9 +1754,22 @@ void audioLoop() {
                                         voice.phase = 0.0;
                                         voice.lastOutput = 0.0;
                                         voice.velocity = noteVelocity;
+                                        voice.envelope = 0.0;
+                                        voice.envelopeStage = EnvelopeStage::Attack;
                                         updatedVoices.push_back(voice);
                                         createdNewVoice = true;
                                     }
+                                }
+
+                                for (size_t i = 0; i < previousVoices.size(); ++i) {
+                                    if (reused[i])
+                                        continue;
+                                    auto& voice = previousVoices[i];
+                                    if (voice.envelopeStage != EnvelopeStage::Idle &&
+                                        voice.envelopeStage != EnvelopeStage::Release) {
+                                        voice.envelopeStage = EnvelopeStage::Release;
+                                    }
+                                    updatedVoices.push_back(voice);
                                 }
 
                                 state.voices = std::move(updatedVoices);
@@ -1765,11 +1782,8 @@ void audioLoop() {
                                     state.currentFrequency = midiNoteToFrequency(69);
                                 }
 
-                                if (createdNewVoice || state.synthEnvelopeStage == EnvelopeStage::Idle) {
-                                    state.synthEnvelopeStage = EnvelopeStage::Attack;
-                                }
-
-                                state.pitchEnvelope = 1.0;
+                                if (createdNewVoice)
+                                    state.pitchEnvelope = 1.0;
                             }
 
                             double sampleValue = 0.0;
@@ -1815,7 +1829,12 @@ void audioLoop() {
                                     double velocityGain = std::clamp(voice.velocity,
                                                                     static_cast<double>(kTrackStepVelocityMin),
                                                                     static_cast<double>(kTrackStepVelocityMax));
-                                    sampleValue += waveform * velocityGain;
+                                    double envelopeGain = advanceEnvelope(voice.envelopeStage, voice.envelope,
+                                                                          state.synthAttack, state.synthDecay,
+                                                                          state.synthSustain, state.synthRelease,
+                                                                          sampleRate);
+                                    voice.envelope = envelopeGain;
+                                    sampleValue += waveform * velocityGain * envelopeGain;
                                     totalVelocity += velocityGain;
                                     double increment = twoPi * frequency / sampleRate;
                                     voice.phase += increment;
@@ -1835,14 +1854,16 @@ void audioLoop() {
                                         state.pitchEnvelope = 0.0;
                                 }
                             }
-                            state.envelope = advanceEnvelope(state.synthEnvelopeStage, state.envelope,
-                                                             state.synthAttack, state.synthDecay, state.synthSustain,
-                                                             state.synthRelease, sampleRate);
-                            sampleValue *= state.envelope;
-                            if (state.synthEnvelopeStage == EnvelopeStage::Idle || state.envelope <= 0.0001) {
-                                state.voices.clear();
-                                if (!gate)
-                                    state.envelope = 0.0;
+                            state.voices.erase(std::remove_if(state.voices.begin(), state.voices.end(),
+                                [](const TrackPlaybackState::SynthVoice& voice) {
+                                    return voice.envelopeStage == EnvelopeStage::Idle && voice.envelope <= 0.0;
+                                }), state.voices.end());
+                            if (state.voices.empty()) {
+                                state.currentMidiNote = 69;
+                                state.currentFrequency = midiNoteToFrequency(69);
+                            } else {
+                                state.currentMidiNote = state.voices.front().midiNote;
+                                state.currentFrequency = state.voices.front().frequency;
                             }
                             trackLeft = sampleValue;
                             trackRight = sampleValue;
@@ -1870,7 +1891,6 @@ void audioLoop() {
                             if (fadeComplete) {
                                 trackLeft = 0.0;
                                 trackRight = 0.0;
-                                state.envelope = 0.0;
                                 resetSamplePlaybackState(state);
                                 resetSynthPlaybackState(state);
                                 state.currentStep = 0;
