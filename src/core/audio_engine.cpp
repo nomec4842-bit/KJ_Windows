@@ -1458,6 +1458,12 @@ void audioLoop() {
 
                         int stepIndex = state.currentStep;
 
+                        double previousStepVelocity = state.stepVelocity;
+                        double previousStepPan = state.stepPan;
+                        double previousStepPitchOffset = state.stepPitchOffset;
+                        int previousParameterStep = state.lastParameterStep;
+                        bool parameterStepUpdated = false;
+
                         int parameterStep = (trackStepCount > 0 && stepIndex < trackStepCount) ? stepIndex : -1;
                         if (parameterStep >= 0) {
                             if (state.lastParameterStep != parameterStep) {
@@ -1471,6 +1477,7 @@ void audioLoop() {
                                                                    static_cast<double>(kTrackStepPitchMin),
                                                                    static_cast<double>(kTrackStepPitchMax));
                                 state.lastParameterStep = parameterStep;
+                                parameterStepUpdated = true;
                             }
                         } else {
                             state.stepVelocity = 1.0;
@@ -1509,6 +1516,20 @@ void audioLoop() {
                                     }
                                 }
                             }
+                        }
+
+                        bool stepHasNoteOnEvents = false;
+                        if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut) {
+                            stepHasNoteOnEvents = !noteOnNotes.empty();
+                        } else {
+                            stepHasNoteOnEvents = triggered;
+                        }
+
+                        if (parameterStepUpdated && !stepHasNoteOnEvents) {
+                            state.stepVelocity = previousStepVelocity;
+                            state.stepPan = previousStepPan;
+                            state.stepPitchOffset = previousStepPitchOffset;
+                            state.lastParameterStep = previousParameterStep;
                         }
 
                         if (trackInfo.id == activeTrackId && trackStepCount > 0) {
