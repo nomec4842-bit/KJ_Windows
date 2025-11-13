@@ -148,6 +148,7 @@ struct TrackData
                 StepNoteEntry entry{};
                 entry.midiNote = kDefaultMidiNote;
                 entry.velocity = kTrackStepVelocityMax;
+                entry.sustain = false;
                 stepNotes[i].push_back(entry);
             }
             stepVelocity[i].store(kTrackStepVelocityMax, std::memory_order_relaxed);
@@ -195,6 +196,7 @@ struct TrackData
     {
         int midiNote = kDefaultMidiNote;
         float velocity = kTrackStepVelocityMax;
+        bool sustain = false;
     };
     std::array<std::vector<StepNoteEntry>, kMaxSequencerSteps> stepNotes{};
     std::array<std::atomic<float>, kMaxSequencerSteps> stepVelocity{};
@@ -424,6 +426,7 @@ void trackSetStepState(int trackId, int stepIndex, bool enabled)
             TrackData::StepNoteEntry entry{};
             entry.midiNote = clampMidiNote(note);
             entry.velocity = track->stepVelocity[stepIndex].load(std::memory_order_relaxed);
+            entry.sustain = false;
             notes.push_back(entry);
         }
     }
@@ -495,6 +498,7 @@ void trackSetStepNote(int trackId, int stepIndex, int midiNote)
         TrackData::StepNoteEntry entry{};
         entry.midiNote = clamped;
         entry.velocity = track->stepVelocity[stepIndex].load(std::memory_order_relaxed);
+        entry.sustain = false;
         notes.push_back(entry);
     }
     track->steps[stepIndex].store(true, std::memory_order_relaxed);
@@ -564,6 +568,7 @@ void trackToggleStepNote(int trackId, int stepIndex, int midiNote)
             TrackData::StepNoteEntry entry{};
             entry.midiNote = clamped;
             entry.velocity = track->stepVelocity[stepIndex].load(std::memory_order_relaxed);
+            entry.sustain = false;
             notes.push_back(entry);
             std::sort(notes.begin(), notes.end(), [](const TrackData::StepNoteEntry& a, const TrackData::StepNoteEntry& b) {
                 return a.midiNote < b.midiNote;
@@ -666,18 +671,72 @@ std::vector<StepNoteInfo> trackGetStepNoteInfo(int trackId, int stepIndex)
         StepNoteInfo info{};
         info.midiNote = clampMidiNote(entry.midiNote);
         info.velocity = std::clamp(entry.velocity, kTrackStepVelocityMin, kTrackStepVelocityMax);
+        info.sustain = entry.sustain;
         if (info.midiNote >= kMinMidiNote && info.midiNote <= kMaxMidiNote)
         {
             result.push_back(info);
         }
     }
     std::sort(result.begin(), result.end(), [](const StepNoteInfo& a, const StepNoteInfo& b) {
-        return a.midiNote < b.midiNote;
+        if (a.midiNote != b.midiNote)
+            return a.midiNote < b.midiNote;
+        if (a.sustain != b.sustain)
+            return a.sustain < b.sustain;
+        return a.velocity < b.velocity;
     });
     result.erase(std::unique(result.begin(), result.end(), [](const StepNoteInfo& a, const StepNoteInfo& b) {
         return a.midiNote == b.midiNote;
     }), result.end());
     return result;
+}
+
+bool trackGetStepNoteSustain(int trackId, int stepIndex, int midiNote)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return false;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return false;
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return false;
+
+    int clampedNote = clampMidiNote(midiNote);
+    std::lock_guard<std::mutex> lock(track->noteMutex);
+    const auto& notes = track->stepNotes[stepIndex];
+    auto it = std::find_if(notes.begin(), notes.end(), [clampedNote](const TrackData::StepNoteEntry& entry) {
+        return entry.midiNote == clampedNote;
+    });
+    if (it != notes.end())
+        return it->sustain;
+    return false;
+}
+
+void trackSetStepNoteSustain(int trackId, int stepIndex, int midiNote, bool sustain)
+{
+    if (stepIndex < 0 || stepIndex >= kMaxSequencerSteps)
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    int stepCount = track->stepCount.load(std::memory_order_relaxed);
+    if (stepIndex >= stepCount)
+        return;
+
+    int clampedNote = clampMidiNote(midiNote);
+    std::lock_guard<std::mutex> lock(track->noteMutex);
+    auto& notes = track->stepNotes[stepIndex];
+    auto it = std::find_if(notes.begin(), notes.end(), [clampedNote](const TrackData::StepNoteEntry& entry) {
+        return entry.midiNote == clampedNote;
+    });
+    if (it != notes.end())
+    {
+        it->sustain = sustain;
+    }
 }
 
 void trackSetStepNoteVelocity(int trackId, int stepIndex, int midiNote, float value)

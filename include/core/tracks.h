@@ -81,6 +81,7 @@ struct StepNoteInfo
 {
     int midiNote = 0;
     float velocity = kTrackStepVelocityMax;
+    bool sustain = false;
 };
 
 void initTracks();
@@ -205,6 +206,9 @@ int trackGetStepNote(int trackId, int stepIndex);
 void trackSetStepNote(int trackId, int stepIndex, int midiNote);
 std::vector<int> trackGetStepNotes(int trackId, int stepIndex);
 void trackToggleStepNote(int trackId, int stepIndex, int midiNote);
+
+bool trackGetStepNoteSustain(int trackId, int stepIndex, int midiNote);
+void trackSetStepNoteSustain(int trackId, int stepIndex, int midiNote, bool sustain);
 
 float trackGetStepVelocity(int trackId, int stepIndex);
 void trackSetStepVelocity(int trackId, int stepIndex, float value);

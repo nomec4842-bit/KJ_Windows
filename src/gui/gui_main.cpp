@@ -609,12 +609,18 @@ PianoRollNoteRange pianoRollComputeNoteRange(int trackId, int stepIndex, int mid
         return range;
 
     int rangeStart = stepIndex;
-    while (rangeStart > 0 && stepContainsMidiNote(trackId, rangeStart - 1, midiNote))
+    while (rangeStart > 0 && stepContainsMidiNote(trackId, rangeStart - 1, midiNote) &&
+           trackGetStepNoteSustain(trackId, rangeStart, midiNote))
+    {
         --rangeStart;
+    }
 
     int rangeEnd = stepIndex;
-    while (rangeEnd + 1 < totalSteps && stepContainsMidiNote(trackId, rangeEnd + 1, midiNote))
+    while (rangeEnd + 1 < totalSteps && stepContainsMidiNote(trackId, rangeEnd + 1, midiNote) &&
+           trackGetStepNoteSustain(trackId, rangeEnd + 1, midiNote))
+    {
         ++rangeEnd;
+    }
 
     range.start = rangeStart;
     range.end = rangeEnd;
@@ -677,6 +683,15 @@ void pianoRollApplyDragRange(int newEndStep)
         }
     }
 
+    if (!newRange.empty())
+    {
+        trackSetStepNoteSustain(trackId, newRange.front(), gPianoRollDrag.midiNote, false);
+        for (size_t index = 1; index < newRange.size(); ++index)
+        {
+            trackSetStepNoteSustain(trackId, newRange[index], gPianoRollDrag.midiNote, true);
+        }
+    }
+
     gPianoRollDrag.appliedSteps = std::move(newRange);
     gPianoRollDrag.currentEndStep = newEndStep;
 
@@ -705,34 +720,14 @@ void pianoRollDeleteNoteRange(int trackId, int stepIndex, int midiNote)
     if (totalSteps <= 0)
         return;
 
-    std::vector<int> steps;
-    for (int step = stepIndex; step >= 0; --step)
-    {
-        if (stepContainsMidiNote(trackId, step, midiNote))
-        {
-            steps.push_back(step);
-        }
-        else
-        {
-            break;
-        }
-    }
+    if (!stepContainsMidiNote(trackId, stepIndex, midiNote))
+        return;
 
-    std::reverse(steps.begin(), steps.end());
+    PianoRollNoteRange range = pianoRollComputeNoteRange(trackId, stepIndex, midiNote, totalSteps);
+    if (range.start < 0 || range.end < range.start)
+        return;
 
-    for (int step = stepIndex + 1; step < totalSteps; ++step)
-    {
-        if (stepContainsMidiNote(trackId, step, midiNote))
-        {
-            steps.push_back(step);
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    for (int step : steps)
+    for (int step = range.start; step <= range.end; ++step)
     {
         if (stepContainsMidiNote(trackId, step, midiNote))
         {
@@ -2134,22 +2129,21 @@ LRESULT CALLBACK PianoRollWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         continue;
                     }
 
-                    int rangeStart = stepIndex;
-                    while (rangeStart > 0 && stepContainsMidiNote(trackId, rangeStart - 1, midiNote))
-                        --rangeStart;
+                    PianoRollNoteRange range = pianoRollComputeNoteRange(trackId, stepIndex, midiNote, totalSteps);
+                    if (range.start < 0 || range.end < range.start)
+                    {
+                        ++column;
+                        continue;
+                    }
 
-                    int drawStartStep = std::max(rangeStart, startStep);
+                    int drawStartStep = std::max(range.start, startStep);
                     if (stepIndex != drawStartStep)
                     {
                         ++column;
                         continue;
                     }
 
-                    int rangeEnd = stepIndex;
-                    while (rangeEnd + 1 < totalSteps && stepContainsMidiNote(trackId, rangeEnd + 1, midiNote))
-                        ++rangeEnd;
-
-                    int drawEndStep = std::min(rangeEnd, endStep - 1);
+                    int drawEndStep = std::min(range.end, endStep - 1);
                     int drawStartColumn = std::max(0, drawStartStep - startStep);
                     int drawEndColumn = std::min(kSequencerStepsPerPage, drawEndStep - startStep + 1);
                     if (drawEndColumn <= drawStartColumn)
