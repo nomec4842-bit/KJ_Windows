@@ -1726,8 +1726,14 @@ void audioLoop() {
                                 }
 
                                 for (auto& voice : state.voices) {
-                                    if (std::binary_search(notesPresent.begin(), notesPresent.end(), voice.midiNote))
+                                    bool noteStillPresent = std::binary_search(notesPresent.begin(), notesPresent.end(),
+                                                                               voice.midiNote);
+                                    if (noteStillPresent) {
+                                        if (voice.envelopeStage == EnvelopeStage::Release) {
+                                            updatedVoices.push_back(voice);
+                                        }
                                         continue;
+                                    }
                                     if (voice.envelopeStage != EnvelopeStage::Idle &&
                                         voice.envelopeStage != EnvelopeStage::Release) {
                                         voice.envelopeStage = EnvelopeStage::Release;
