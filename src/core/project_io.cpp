@@ -687,6 +687,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float synthDecay = trackGetSynthDecay(track.id);
         float synthSustain = trackGetSynthSustain(track.id);
         float synthRelease = trackGetSynthRelease(track.id);
+        bool synthPhaseSync = trackGetSynthPhaseSync(track.id);
         float sampleAttack = trackGetSampleAttack(track.id);
         float sampleRelease = trackGetSampleRelease(track.id);
         int midiChannel = trackGetMidiChannel(track.id);
@@ -724,6 +725,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"synthDecay\": " << formatFloat(synthDecay) << ",\n";
         stream << "      \"synthSustain\": " << formatFloat(synthSustain) << ",\n";
         stream << "      \"synthRelease\": " << formatFloat(synthRelease) << ",\n";
+        stream << "      \"phaseSync\": " << (synthPhaseSync ? "true" : "false") << ",\n";
         stream << "      \"sampleAttack\": " << formatFloat(sampleAttack) << ",\n";
         stream << "      \"sampleRelease\": " << formatFloat(sampleRelease) << ",\n";
         stream << "      \"midiChannel\": " << midiChannel << ",\n";
@@ -894,6 +896,7 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetSynthDecay(trackId, jsonToFloat(findMember(trackObject, "synthDecay"), trackGetSynthDecay(trackId)));
         trackSetSynthSustain(trackId, jsonToFloat(findMember(trackObject, "synthSustain"), trackGetSynthSustain(trackId)));
         trackSetSynthRelease(trackId, jsonToFloat(findMember(trackObject, "synthRelease"), trackGetSynthRelease(trackId)));
+        trackSetSynthPhaseSync(trackId, jsonToBool(findMember(trackObject, "phaseSync"), trackGetSynthPhaseSync(trackId)));
         trackSetSampleAttack(trackId, jsonToFloat(findMember(trackObject, "sampleAttack"), trackGetSampleAttack(trackId)));
         trackSetSampleRelease(trackId, jsonToFloat(findMember(trackObject, "sampleRelease"), trackGetSampleRelease(trackId)));
         trackSetDelayEnabled(trackId, jsonToBool(findMember(trackObject, "delayEnabled"), trackGetDelayEnabled(trackId)));

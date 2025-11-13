@@ -129,6 +129,7 @@ struct TrackData
         track.synthDecay = kDefaultSynthDecay;
         track.synthSustain = kDefaultSynthSustain;
         track.synthRelease = kDefaultSynthRelease;
+        track.synthPhaseSync = false;
         track.sampleAttack = kDefaultSampleAttack;
         track.sampleRelease = kDefaultSampleRelease;
         track.midiChannel = kDefaultMidiChannel;
@@ -188,6 +189,7 @@ struct TrackData
     std::atomic<float> synthDecay{kDefaultSynthDecay};
     std::atomic<float> synthSustain{kDefaultSynthSustain};
     std::atomic<float> synthRelease{kDefaultSynthRelease};
+    std::atomic<bool> synthPhaseSync{false};
     std::atomic<float> sampleAttack{kDefaultSampleAttack};
     std::atomic<float> sampleRelease{kDefaultSampleRelease};
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
@@ -347,6 +349,7 @@ std::vector<Track> getTracks()
         info.synthDecay = track->synthDecay.load(std::memory_order_relaxed);
         info.synthSustain = track->synthSustain.load(std::memory_order_relaxed);
         info.synthRelease = track->synthRelease.load(std::memory_order_relaxed);
+        info.synthPhaseSync = track->synthPhaseSync.load(std::memory_order_relaxed);
         info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
         info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
         info.midiChannel = track->midiChannel.load(std::memory_order_relaxed);
@@ -1507,6 +1510,25 @@ void trackSetSynthRelease(int trackId, float value)
 
     float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
     track->synthRelease.store(clamped, std::memory_order_relaxed);
+}
+
+bool trackGetSynthPhaseSync(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return false;
+
+    return track->synthPhaseSync.load(std::memory_order_relaxed);
+}
+
+void trackSetSynthPhaseSync(int trackId, bool enabled)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->synthPhaseSync.store(enabled, std::memory_order_relaxed);
+    track->track.synthPhaseSync = enabled;
 }
 
 float trackGetSampleAttack(int trackId)
