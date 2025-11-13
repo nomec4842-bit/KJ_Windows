@@ -1529,7 +1529,11 @@ void audioLoop() {
                                         state.samplePlaying = true;
                                         state.samplePosition = 0.0;
                                         state.sampleEnvelopeStage = EnvelopeStage::Attack;
+                                        state.sampleEnvelope = 0.0;
+                                        state.sampleEnvelopeSmoothed = 0.0;
                                         state.sampleTailActive = false;
+                                        state.sampleLastLeft = 0.0;
+                                        state.sampleLastRight = 0.0;
                                     } else {
                                         state.samplePlaying = false;
                                         state.sampleEnvelopeStage = EnvelopeStage::Idle;
