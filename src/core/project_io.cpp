@@ -680,6 +680,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         float compressorAttack = trackGetCompressorAttack(track.id);
         float compressorRelease = trackGetCompressorRelease(track.id);
         float formant = trackGetSynthFormant(track.id);
+        float resonance = trackGetSynthResonance(track.id);
         float feedback = trackGetSynthFeedback(track.id);
         float pitch = trackGetSynthPitch(track.id);
         float pitchRange = trackGetSynthPitchRange(track.id);
@@ -718,6 +719,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"compressorAttack\": " << formatFloat(compressorAttack) << ",\n";
         stream << "      \"compressorRelease\": " << formatFloat(compressorRelease) << ",\n";
         stream << "      \"formant\": " << formatFloat(formant) << ",\n";
+        stream << "      \"resonance\": " << formatFloat(resonance) << ",\n";
         stream << "      \"feedback\": " << formatFloat(feedback) << ",\n";
         stream << "      \"pitch\": " << formatFloat(pitch) << ",\n";
         stream << "      \"pitchRange\": " << formatFloat(pitchRange) << ",\n";
@@ -889,6 +891,8 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetEqHighGain(trackId, jsonToFloat(findMember(trackObject, "eqHigh"), trackGetEqHighGain(trackId)));
         trackSetEqEnabled(trackId, jsonToBool(findMember(trackObject, "eqEnabled"), trackGetEqEnabled(trackId)));
         trackSetSynthFormant(trackId, jsonToFloat(findMember(trackObject, "formant"), trackGetSynthFormant(trackId)));
+        trackSetSynthResonance(trackId,
+                               jsonToFloat(findMember(trackObject, "resonance"), trackGetSynthResonance(trackId)));
         trackSetSynthFeedback(trackId, jsonToFloat(findMember(trackObject, "feedback"), trackGetSynthFeedback(trackId)));
         trackSetSynthPitch(trackId, jsonToFloat(findMember(trackObject, "pitch"), trackGetSynthPitch(trackId)));
         trackSetSynthPitchRange(trackId, jsonToFloat(findMember(trackObject, "pitchRange"), trackGetSynthPitchRange(trackId)));

@@ -55,6 +55,9 @@ constexpr int kDefaultSidechainSourceTrack = -1;
 constexpr float kMinFormant = 0.0f;
 constexpr float kMaxFormant = 1.0f;
 constexpr float kDefaultFormant = 0.5f;
+constexpr float kMinResonance = 0.0f;
+constexpr float kMaxResonance = 1.0f;
+constexpr float kDefaultResonance = 0.2f;
 constexpr float kMinFeedback = 0.0f;
 constexpr float kMaxFeedback = 1.0f;
 constexpr float kDefaultFeedback = 0.0f;
@@ -122,6 +125,7 @@ struct TrackData
         track.sidechainAttack = kDefaultSidechainAttack;
         track.sidechainRelease = kDefaultSidechainRelease;
         track.formant = kDefaultFormant;
+        track.resonance = kDefaultResonance;
         track.feedback = kDefaultFeedback;
         track.pitch = kDefaultPitch;
         track.pitchRange = kDefaultPitchRange;
@@ -182,6 +186,7 @@ struct TrackData
     std::atomic<float> sidechainAttack{kDefaultSidechainAttack};
     std::atomic<float> sidechainRelease{kDefaultSidechainRelease};
     std::atomic<float> formant{kDefaultFormant};
+    std::atomic<float> resonance{kDefaultResonance};
     std::atomic<float> feedback{kDefaultFeedback};
     std::atomic<float> pitch{kDefaultPitch};
     std::atomic<float> pitchRange{kDefaultPitchRange};
@@ -247,6 +252,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     baseTrack.sidechainAttack = kDefaultSidechainAttack;
     baseTrack.sidechainRelease = kDefaultSidechainRelease;
     baseTrack.formant = kDefaultFormant;
+    baseTrack.resonance = kDefaultResonance;
     baseTrack.feedback = kDefaultFeedback;
     baseTrack.pitch = kDefaultPitch;
     baseTrack.pitchRange = kDefaultPitchRange;
@@ -342,6 +348,7 @@ std::vector<Track> getTracks()
         info.sidechainAttack = track->sidechainAttack.load(std::memory_order_relaxed);
         info.sidechainRelease = track->sidechainRelease.load(std::memory_order_relaxed);
         info.formant = track->formant.load(std::memory_order_relaxed);
+        info.resonance = track->resonance.load(std::memory_order_relaxed);
         info.feedback = track->feedback.load(std::memory_order_relaxed);
         info.pitch = track->pitch.load(std::memory_order_relaxed);
         info.pitchRange = track->pitchRange.load(std::memory_order_relaxed);
@@ -1366,6 +1373,26 @@ void trackSetSynthFormant(int trackId, float value)
 
     float clamped = std::clamp(value, kMinFormant, kMaxFormant);
     track->formant.store(clamped, std::memory_order_relaxed);
+}
+
+float trackGetSynthResonance(int trackId)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultResonance;
+
+    float value = track->resonance.load(std::memory_order_relaxed);
+    return std::clamp(value, kMinResonance, kMaxResonance);
+}
+
+void trackSetSynthResonance(int trackId, float value)
+{
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, kMinResonance, kMaxResonance);
+    track->resonance.store(clamped, std::memory_order_relaxed);
 }
 
 float trackGetSynthFeedback(int trackId)
