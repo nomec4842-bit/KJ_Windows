@@ -62,6 +62,7 @@ struct Track
     float synthDecay = 0.2f;
     float synthSustain = 0.8f;
     float synthRelease = 0.3f;
+    bool synthPhaseSync = false;
     float sampleAttack = 0.005f;
     float sampleRelease = 0.3f;
     int midiChannel = 1;
@@ -182,6 +183,9 @@ void trackSetSynthSustain(int trackId, float value);
 
 float trackGetSynthRelease(int trackId);
 void trackSetSynthRelease(int trackId, float value);
+
+bool trackGetSynthPhaseSync(int trackId);
+void trackSetSynthPhaseSync(int trackId, bool enabled);
 
 float trackGetSampleAttack(int trackId);
 void trackSetSampleAttack(int trackId, float value);

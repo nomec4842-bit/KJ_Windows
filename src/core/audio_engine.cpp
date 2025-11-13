@@ -174,6 +174,8 @@ constexpr double kMidPeakFrequency = 1000.0;
 constexpr double kHighShelfFrequency = 5000.0;
 constexpr double kMidPeakQ = 1.0;
 constexpr double kSampleEnvelopeSmoothingSeconds = 0.003;
+constexpr double kSynthEnvelopeSmoothingSeconds = 0.002;
+constexpr double kSynthGainSmoothingSeconds = 0.002;
 constexpr double kDelayTimeMinMs = DelayEffect::kMinDelayTimeMs;
 constexpr double kDelayTimeMaxMs = DelayEffect::kMaxDelayTimeMs;
 constexpr double kDelayFeedbackMin = DelayEffect::kMinFeedback;
@@ -464,6 +466,8 @@ struct TrackPlaybackState {
     double synthDecay = 0.2;
     double synthSustain = 0.8;
     double synthRelease = 0.3;
+    bool synthPhaseSync = false;
+    double synthGainSmoothed = 1.0;
     double sampleEnvelope = 0.0;
     double sampleEnvelopeSmoothed = 0.0;
     EnvelopeStage sampleEnvelopeStage = EnvelopeStage::Idle;
@@ -500,6 +504,7 @@ struct TrackPlaybackState {
         double phase = 0.0;
         double lastOutput = 0.0;
         double velocity = 1.0;
+        double velocitySmoothed = 1.0;
         double envelope = 0.0;
         EnvelopeStage envelopeStage = EnvelopeStage::Idle;
     };
@@ -533,6 +538,7 @@ void resetSynthPlaybackState(TrackPlaybackState& state)
 {
     state.pitchEnvelope = 0.0;
     state.voices.clear();
+    state.synthGainSmoothed = 1.0;
 }
 
 void ensureDelayEffect(TrackPlaybackState& state, double sampleRate)
@@ -572,6 +578,10 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newSynthDecay = std::clamp(static_cast<double>(track.synthDecay), 0.0, 4.0);
     double newSynthSustain = std::clamp(static_cast<double>(track.synthSustain), 0.0, 1.0);
     double newSynthRelease = std::clamp(static_cast<double>(track.synthRelease), 0.0, 4.0);
+    bool newSynthPhaseSync = track.synthPhaseSync;
+    double safeSynthAttack = std::max(newSynthAttack, kSynthEnvelopeSmoothingSeconds);
+    double safeSynthDecay = std::max(newSynthDecay, kSynthEnvelopeSmoothingSeconds);
+    double safeSynthRelease = std::max(newSynthRelease, kSynthEnvelopeSmoothingSeconds);
     double newSampleAttack = std::clamp(static_cast<double>(track.sampleAttack), 0.0, 4.0);
     double newSampleRelease = std::clamp(static_cast<double>(track.sampleRelease), 0.0, 4.0);
     double newDelayTime = std::clamp(static_cast<double>(track.delayTimeMs), kDelayTimeMinMs, kDelayTimeMaxMs);
@@ -604,10 +614,10 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     bool highChanged = sampleRateChanged || std::abs(state.highGain - newHigh) > 1e-6;
     bool formantChanged = sampleRateChanged || std::abs(state.formantNormalized - newFormant) > 1e-6;
     bool pitchRangeChanged = sampleRateChanged || std::abs(state.pitchRangeSemitones - newPitchRange) > 1e-6;
-    bool synthEnvelopeChanged = std::abs(state.synthAttack - newSynthAttack) > 1e-6 ||
-                                std::abs(state.synthDecay - newSynthDecay) > 1e-6 ||
+    bool synthEnvelopeChanged = std::abs(state.synthAttack - safeSynthAttack) > 1e-6 ||
+                                std::abs(state.synthDecay - safeSynthDecay) > 1e-6 ||
                                 std::abs(state.synthSustain - newSynthSustain) > 1e-6 ||
-                                std::abs(state.synthRelease - newSynthRelease) > 1e-6;
+                                std::abs(state.synthRelease - safeSynthRelease) > 1e-6;
     bool sampleEnvelopeChanged = std::abs(state.sampleAttack - newSampleAttack) > 1e-6 ||
                                  std::abs(state.sampleRelease - newSampleRelease) > 1e-6;
     bool delayTimeChanged = std::abs(state.delayTimeMs - newDelayTime) > 1e-6;
@@ -677,11 +687,12 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     }
     if (synthEnvelopeChanged)
     {
-        state.synthAttack = newSynthAttack;
-        state.synthDecay = newSynthDecay;
+        state.synthAttack = safeSynthAttack;
+        state.synthDecay = safeSynthDecay;
         state.synthSustain = newSynthSustain;
-        state.synthRelease = newSynthRelease;
+        state.synthRelease = safeSynthRelease;
     }
+    state.synthPhaseSync = newSynthPhaseSync;
     if (sampleEnvelopeChanged)
     {
         state.sampleAttack = std::max(newSampleAttack, kSampleEnvelopeSmoothingSeconds);
@@ -1729,20 +1740,31 @@ void audioLoop() {
                                                                      static_cast<double>(kTrackStepVelocityMax));
 
                                     auto existingIt = findExistingVoice(note);
-                                    bool restartVoice = !noteInfo.sustain || existingIt == state.voices.end();
-                                    TrackPlaybackState::SynthVoice voice = (existingIt != state.voices.end())
+                                    bool hasExistingVoice = existingIt != state.voices.end();
+                                    bool restartVoice = !noteInfo.sustain || !hasExistingVoice;
+                                    TrackPlaybackState::SynthVoice voice = hasExistingVoice
                                         ? *existingIt
                                         : TrackPlaybackState::SynthVoice{};
                                     voice.midiNote = note;
                                     voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset + state.stepPitchOffset);
-                                    if (restartVoice) {
-                                        voice.phase = 0.0;
-                                        voice.lastOutput = 0.0;
-                                        voice.velocity = noteVelocity;
+
+                                    if (!hasExistingVoice) {
+                                        voice.velocitySmoothed = noteVelocity;
                                         voice.envelope = 0.0;
+                                        voice.lastOutput = 0.0;
+                                    }
+
+                                    voice.velocity = noteVelocity;
+
+                                    if (restartVoice) {
                                         voice.envelopeStage = EnvelopeStage::Attack;
+                                        if (state.synthPhaseSync) {
+                                            voice.phase = 0.0;
+                                            voice.lastOutput = 0.0;
+                                        }
                                         createdNewVoice = true;
                                     }
+
                                     updatedVoices.push_back(voice);
                                 }
 
@@ -1783,6 +1805,12 @@ void audioLoop() {
                                 double feedbackMix = std::clamp(state.feedbackAmount, 0.0, 0.99);
                                 SynthWaveType waveType = trackInfo.synthWaveType;
                                 double totalVelocity = 0.0;
+                                double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+                                double velocityMaxDelta = (kSynthEnvelopeSmoothingSeconds > 0.0)
+                                    ? (1.0 / (kSynthEnvelopeSmoothingSeconds * sr))
+                                    : 1.0;
+                                if (!std::isfinite(velocityMaxDelta) || velocityMaxDelta <= 0.0)
+                                    velocityMaxDelta = 1.0;
                                 for (auto& voice : state.voices) {
                                     double noteWithPitch = static_cast<double>(voice.midiNote) + pitchOffset;
                                     double frequency = midiNoteToFrequency(noteWithPitch);
@@ -1816,9 +1844,21 @@ void audioLoop() {
                                     }
                                     waveform = std::clamp(waveform, -1.0, 1.0);
                                     voice.lastOutput = waveform;
-                                    double velocityGain = std::clamp(voice.velocity,
-                                                                    static_cast<double>(kTrackStepVelocityMin),
-                                                                    static_cast<double>(kTrackStepVelocityMax));
+                                    double velocityTarget = std::clamp(voice.velocity,
+                                                                      static_cast<double>(kTrackStepVelocityMin),
+                                                                      static_cast<double>(kTrackStepVelocityMax));
+                                    double velocityDelta = velocityTarget - voice.velocitySmoothed;
+                                    if (velocityDelta > velocityMaxDelta)
+                                        velocityDelta = velocityMaxDelta;
+                                    else if (velocityDelta < -velocityMaxDelta)
+                                        velocityDelta = -velocityMaxDelta;
+                                    voice.velocitySmoothed += velocityDelta;
+                                    if (!std::isfinite(voice.velocitySmoothed))
+                                        voice.velocitySmoothed = velocityTarget;
+                                    voice.velocitySmoothed = std::clamp(voice.velocitySmoothed,
+                                                                       static_cast<double>(kTrackStepVelocityMin),
+                                                                       static_cast<double>(kTrackStepVelocityMax));
+                                    double velocityGain = voice.velocitySmoothed;
                                     double envelopeGain = advanceEnvelope(voice.envelopeStage, voice.envelope,
                                                                           state.synthAttack, state.synthDecay,
                                                                           state.synthSustain, state.synthRelease,
@@ -1833,16 +1873,31 @@ void audioLoop() {
                                         voice.phase = std::fmod(voice.phase, twoPi);
                                     }
                                 }
-                                if (totalVelocity > 0.0)
-                                {
-                                    sampleValue /= totalVelocity;
-                                }
+                                double gainTarget = (totalVelocity > 0.0) ? (1.0 / totalVelocity) : 1.0;
+                                double gainMaxDelta = (kSynthGainSmoothingSeconds > 0.0)
+                                    ? (1.0 / (kSynthGainSmoothingSeconds * sr))
+                                    : 1.0;
+                                if (!std::isfinite(gainMaxDelta) || gainMaxDelta <= 0.0)
+                                    gainMaxDelta = 1.0;
+                                double gainDelta = gainTarget - state.synthGainSmoothed;
+                                if (gainDelta > gainMaxDelta)
+                                    gainDelta = gainMaxDelta;
+                                else if (gainDelta < -gainMaxDelta)
+                                    gainDelta = -gainMaxDelta;
+                                state.synthGainSmoothed += gainDelta;
+                                if (!std::isfinite(state.synthGainSmoothed))
+                                    state.synthGainSmoothed = gainTarget;
+                                if (state.synthGainSmoothed < 0.0)
+                                    state.synthGainSmoothed = 0.0;
+                                sampleValue *= state.synthGainSmoothed;
                                 if (state.pitchEnvelope > 0.0)
                                 {
                                     state.pitchEnvelope = std::max(0.0, state.pitchEnvelope - state.pitchEnvelopeStep);
                                     if (state.pitchEnvelope < 1e-6)
                                         state.pitchEnvelope = 0.0;
                                 }
+                            } else {
+                                state.synthGainSmoothed = 1.0;
                             }
                             state.voices.erase(std::remove_if(state.voices.begin(), state.voices.end(),
                                 [](const TrackPlaybackState::SynthVoice& voice) {
