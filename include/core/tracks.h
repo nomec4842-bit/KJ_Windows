@@ -55,6 +55,7 @@ struct Track
     float sidechainAttack = 0.01f;
     float sidechainRelease = 0.3f;
     float formant = 0.5f;
+    float resonance = 0.2f;
     float feedback = 0.0f;
     float pitch = 0.0f;
     float pitchRange = 12.0f;
@@ -162,6 +163,9 @@ void trackSetSidechainRelease(int trackId, float value);
 
 float trackGetSynthFormant(int trackId);
 void trackSetSynthFormant(int trackId, float value);
+
+float trackGetSynthResonance(int trackId);
+void trackSetSynthResonance(int trackId, float value);
 
 float trackGetSynthFeedback(int trackId);
 void trackSetSynthFeedback(int trackId, float value);

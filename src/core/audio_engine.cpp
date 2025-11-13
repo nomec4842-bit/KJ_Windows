@@ -294,22 +294,44 @@ double midiNoteToFrequency(double midiNote)
     return 440.0 * std::pow(2.0, (clamped - 69.0) / 12.0);
 }
 
-double computeFormantAlpha(double sampleRate, double normalizedFormant)
+double computeFormantFrequency(double sampleRate, double normalizedFormant)
 {
     double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     double safeNorm = std::clamp(normalizedFormant, 0.0, 1.0);
     constexpr double kMinFormantFreq = 200.0;
     constexpr double kMaxFormantFreq = 8000.0;
     double maxAllowed = std::max(kMinFormantFreq, std::min(sr * 0.45, kMaxFormantFreq));
-    double targetFreq = kMinFormantFreq * std::pow(maxAllowed / kMinFormantFreq, safeNorm);
-    double rc = 1.0 / (2.0 * kPi * targetFreq);
-    double dt = 1.0 / sr;
-    double alpha = dt / (rc + dt);
-    if (alpha < 0.0)
-        alpha = 0.0;
-    if (alpha > 1.0)
-        alpha = 1.0;
-    return alpha;
+    return kMinFormantFreq * std::pow(maxAllowed / kMinFormantFreq, safeNorm);
+}
+
+double computeFormantResonanceQ(double normalizedResonance)
+{
+    double safeNorm = std::clamp(normalizedResonance, 0.0, 1.0);
+    constexpr double kMinQ = 0.5;
+    constexpr double kMaxQ = 12.0;
+    return kMinQ + safeNorm * (kMaxQ - kMinQ);
+}
+
+void configureFormantFilter(BiquadFilter& filter,
+                            double sampleRate,
+                            double normalizedFormant,
+                            double normalizedResonance)
+{
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double frequency = computeFormantFrequency(sr, normalizedFormant);
+    double w0 = 2.0 * kPi * clampFrequency(sr, frequency) / sr;
+    double cosw0 = std::cos(w0);
+    double sinw0 = std::sin(w0);
+    double q = computeFormantResonanceQ(normalizedResonance);
+    double alpha = sinw0 / (2.0 * std::max(q, 1e-3));
+
+    double b0 = (1.0 - cosw0) * 0.5;
+    double b1 = 1.0 - cosw0;
+    double b2 = (1.0 - cosw0) * 0.5;
+    double a0 = 1.0 + alpha;
+    double a1 = -2.0 * cosw0;
+    double a2 = 1.0 - alpha;
+    setBiquadCoefficients(filter, b0, b1, b2, a0, a1, a2);
 }
 
 double computePitchEnvelopeStep(double sampleRate, double rangeSemitones)
@@ -447,10 +469,9 @@ struct TrackPlaybackState {
     double lastSampleRate = 0.0;
     double feedbackAmount = 0.0;
     double formantNormalized = 0.5;
-    double formantAlpha = 1.0;
+    double formantResonance = 0.2;
     double formantBlend = 1.0;
-    double formantStateL = 0.0;
-    double formantStateR = 0.0;
+    BiquadFilter formantFilter;
     double pitchBaseOffset = 0.0;
     double pitchRangeSemitones = 0.0;
     double pitchEnvelope = 0.0;
@@ -539,6 +560,7 @@ void resetSynthPlaybackState(TrackPlaybackState& state)
     state.pitchEnvelope = 0.0;
     state.voices.clear();
     state.synthGainSmoothed = 1.0;
+    resetFilterState(state.formantFilter);
 }
 
 void ensureDelayEffect(TrackPlaybackState& state, double sampleRate)
@@ -571,6 +593,7 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     double newMid = static_cast<double>(track.midGainDb);
     double newHigh = static_cast<double>(track.highGainDb);
     double newFormant = std::clamp(static_cast<double>(track.formant), 0.0, 1.0);
+    double newResonance = std::clamp(static_cast<double>(track.resonance), 0.0, 1.0);
     double newFeedback = std::clamp(static_cast<double>(track.feedback), 0.0, 1.0);
     double newPitch = static_cast<double>(track.pitch);
     double newPitchRange = std::max(0.0, static_cast<double>(track.pitchRange) - 1.0);
@@ -613,6 +636,7 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     bool midChanged = sampleRateChanged || std::abs(state.midGain - newMid) > 1e-6;
     bool highChanged = sampleRateChanged || std::abs(state.highGain - newHigh) > 1e-6;
     bool formantChanged = sampleRateChanged || std::abs(state.formantNormalized - newFormant) > 1e-6;
+    bool resonanceChanged = sampleRateChanged || std::abs(state.formantResonance - newResonance) > 1e-6;
     bool pitchRangeChanged = sampleRateChanged || std::abs(state.pitchRangeSemitones - newPitchRange) > 1e-6;
     bool synthEnvelopeChanged = std::abs(state.synthAttack - safeSynthAttack) > 1e-6 ||
                                 std::abs(state.synthDecay - safeSynthDecay) > 1e-6 ||
@@ -644,13 +668,16 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
         configureHighShelf(state.highShelf, sr, kHighShelfFrequency, newHigh);
         state.highGain = newHigh;
     }
-    if (formantChanged)
+    if (formantChanged || resonanceChanged)
     {
         state.formantNormalized = newFormant;
-        state.formantAlpha = computeFormantAlpha(sr, newFormant);
+        state.formantResonance = newResonance;
         state.formantBlend = newFormant;
-        state.formantStateL = 0.0;
-        state.formantStateR = 0.0;
+    }
+    if (sampleRateChanged || formantChanged || resonanceChanged)
+    {
+        configureFormantFilter(state.formantFilter, sr, state.formantNormalized, state.formantResonance);
+        resetFilterState(state.formantFilter);
     }
     if (pitchRangeChanged)
     {
@@ -681,10 +708,6 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     state.feedbackAmount = newFeedback;
     state.pitchBaseOffset = newPitch;
     state.lastSampleRate = sr;
-    if (!sampleRateChanged && !formantChanged)
-    {
-        state.formantAlpha = computeFormantAlpha(sr, state.formantNormalized);
-    }
     if (synthEnvelopeChanged)
     {
         state.synthAttack = safeSynthAttack;
@@ -1913,13 +1936,12 @@ void audioLoop() {
                             trackLeft = sampleValue;
                             trackRight = sampleValue;
 
-                            if (state.formantBlend < 1.0 || state.formantAlpha < 1.0) {
-                                double filteredLeft = state.formantStateL + state.formantAlpha * (trackLeft - state.formantStateL);
-                                double filteredRight = state.formantStateR + state.formantAlpha * (trackRight - state.formantStateR);
-                                trackLeft = filteredLeft * (1.0 - state.formantBlend) + trackLeft * state.formantBlend;
-                                trackRight = filteredRight * (1.0 - state.formantBlend) + trackRight * state.formantBlend;
-                                state.formantStateL = filteredLeft;
-                                state.formantStateR = filteredRight;
+                            double blend = std::clamp(state.formantBlend, 0.0, 1.0);
+                            if (blend < 1.0 || state.formantResonance > 0.0) {
+                                double filteredLeft = processBiquadSample(state.formantFilter, trackLeft, false);
+                                double filteredRight = processBiquadSample(state.formantFilter, trackRight, true);
+                                trackLeft = filteredLeft * (1.0 - blend) + trackLeft * blend;
+                                trackRight = filteredRight * (1.0 - blend) + trackRight * blend;
                             }
                         }
 
