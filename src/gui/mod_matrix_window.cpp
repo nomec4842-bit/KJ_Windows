@@ -168,6 +168,28 @@ void syncAssignmentFromTrack(ModMatrixAssignment& assignment)
     assignment.normalizedAmount = 0.0f;
 }
 
+void addAssignment(ModMatrixWindowState* state)
+{
+    ModMatrixAssignment assignment = modMatrixCreateAssignment();
+    assignment.sourceIndex = 0;
+    assignment.parameterIndex = 0;
+    assignment.trackId = getActiveSequencerTrackId();
+    if (assignment.trackId <= 0)
+    {
+        auto tracks = getTracks();
+        if (!tracks.empty())
+            assignment.trackId = tracks.front().id;
+    }
+
+    if (assignment.trackId > 0)
+        syncAssignmentFromTrack(assignment);
+
+    modMatrixUpdateAssignment(assignment);
+
+    if (state)
+        state->selectedAssignmentId = assignment.id;
+}
+
 void populateSourceCombo(HWND combo)
 {
     if (!combo)
@@ -544,28 +566,6 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
 ModMatrixWindowState* getWindowState(HWND hwnd)
 {
     return reinterpret_cast<ModMatrixWindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-}
-
-void addAssignment(ModMatrixWindowState* state)
-{
-    ModMatrixAssignment assignment = modMatrixCreateAssignment();
-    assignment.sourceIndex = 0;
-    assignment.parameterIndex = 0;
-    assignment.trackId = getActiveSequencerTrackId();
-    if (assignment.trackId <= 0)
-    {
-        auto tracks = getTracks();
-        if (!tracks.empty())
-            assignment.trackId = tracks.front().id;
-    }
-
-    if (assignment.trackId > 0)
-        syncAssignmentFromTrack(assignment);
-
-    modMatrixUpdateAssignment(assignment);
-
-    if (state)
-        state->selectedAssignmentId = assignment.id;
 }
 
 void removeAssignment(ModMatrixWindowState* state, int assignmentId)
