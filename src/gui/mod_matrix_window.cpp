@@ -122,7 +122,7 @@ struct ModMatrixWindowState
     int selectedAssignmentId = 0;
 };
 
-INITCOMMONCONTROLSEX gModMatrixInitControls = {sizeof(INITCOMMONCONTROLSEX), ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES};
+INITCOMMONCONTROLSEX gModMatrixInitControls = {};
 
 float clampNormalized(float value)
 {
@@ -533,6 +533,9 @@ void ensureModMatrixWindowClass()
 {
     if (gModMatrixWindowClassRegistered)
         return;
+
+    gModMatrixInitControls.dwSize = sizeof(gModMatrixInitControls);
+    gModMatrixInitControls.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
 
     InitCommonControlsEx(&gModMatrixInitControls);
 
