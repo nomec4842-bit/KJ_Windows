@@ -844,11 +844,11 @@ void ensureModMatrixWindowClass()
 
             int controlWidth = std::max(0, width - padding * 2);
             if (state->sourceCombo)
-                MoveWindow(state->sourceCombo, padding, formY, controlWidth, comboHeight, TRUE);
+                MoveWindow(state->sourceCombo, padding, formY, controlWidth, kComboDropdownHeight, TRUE);
             formY += comboHeight + buttonSpacing;
 
             if (state->parameterCombo)
-                MoveWindow(state->parameterCombo, padding, formY, controlWidth, comboHeight, TRUE);
+                MoveWindow(state->parameterCombo, padding, formY, controlWidth, kComboDropdownHeight, TRUE);
             formY += comboHeight + buttonSpacing;
 
             if (state->amountLabel)
