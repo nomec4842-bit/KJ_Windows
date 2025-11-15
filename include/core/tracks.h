@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -26,6 +27,21 @@ enum class SynthWaveType
     Square,
     Saw,
     Triangle,
+};
+
+enum class LfoShape
+{
+    Sine,
+    Triangle,
+    Saw,
+    Square,
+};
+
+struct LfoSettings
+{
+    float rateHz = 1.0f;
+    LfoShape shape = LfoShape::Sine;
+    float deform = 0.0f;
 };
 
 struct Track
@@ -66,6 +82,7 @@ struct Track
     bool synthPhaseSync = false;
     float sampleAttack = 0.005f;
     float sampleRelease = 0.3f;
+    std::array<LfoSettings, 3> lfoSettings{};
     int midiChannel = 1;
     int midiPort = -1;
     std::wstring midiPortName;
@@ -190,6 +207,15 @@ void trackSetSynthRelease(int trackId, float value);
 
 bool trackGetSynthPhaseSync(int trackId);
 void trackSetSynthPhaseSync(int trackId, bool enabled);
+
+float trackGetLfoRate(int trackId, int index);
+void trackSetLfoRate(int trackId, int index, float value);
+LfoShape trackGetLfoShape(int trackId, int index);
+void trackSetLfoShape(int trackId, int index, LfoShape shape);
+float trackGetLfoDeform(int trackId, int index);
+void trackSetLfoDeform(int trackId, int index, float value);
+const char* lfoShapeToString(LfoShape shape);
+LfoShape lfoShapeFromString(const std::string& text);
 
 float trackGetSampleAttack(int trackId);
 void trackSetSampleAttack(int trackId, float value);

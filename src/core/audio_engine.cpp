@@ -882,9 +882,47 @@ std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState
     auto& modulation = state.modulation;
     double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     double twoPi = 2.0 * kPi;
-    for (size_t i = 0; i < kDefaultLfoFrequencies.size(); ++i)
+    auto evaluateLfoValue = [twoPi](double phase, LfoShape shape, double deform) {
+        double wrappedPhase = std::fmod(phase, twoPi);
+        if (wrappedPhase < 0.0)
+            wrappedPhase += twoPi;
+        double t = wrappedPhase / twoPi; // 0..1
+        double base = 0.0;
+        switch (shape)
+        {
+        case LfoShape::Triangle:
+            base = 2.0 * std::abs(2.0 * t - 1.0) - 1.0;
+            break;
+        case LfoShape::Saw:
+            base = 2.0 * t - 1.0;
+            break;
+        case LfoShape::Square:
+        {
+            double duty = 0.5 + (std::clamp(deform, 0.0, 1.0) - 0.5) * 0.8;
+            base = (t < duty) ? 1.0 : -1.0;
+            break;
+        }
+        case LfoShape::Sine:
+        default:
+            base = std::sin(wrappedPhase);
+            break;
+        }
+
+        double deformAmount = std::clamp(deform, 0.0, 1.0);
+        double drive = 1.0 + deformAmount * 4.0;
+        double shaped = std::tanh(base * drive);
+        if (!std::isfinite(shaped))
+            shaped = 0.0;
+        return std::clamp(shaped, -1.0, 1.0);
+    };
+
+    for (size_t i = 0; i < modulation.lfoPhase.size(); ++i)
     {
-        double increment = twoPi * kDefaultLfoFrequencies[i] / sr;
+        double rate = static_cast<double>(trackGetLfoRate(track.id, static_cast<int>(i)));
+        if (!std::isfinite(rate) || rate <= 0.0)
+            rate = kDefaultLfoFrequencies[i];
+
+        double increment = twoPi * rate / sr;
         double phase = modulation.lfoPhase[i] + increment;
         if (!std::isfinite(phase))
             phase = 0.0;
@@ -892,7 +930,10 @@ std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState
         if (phase < 0.0)
             phase += twoPi;
         modulation.lfoPhase[i] = phase;
-        modulation.lfoValue[i] = std::sin(phase);
+
+        LfoShape shape = trackGetLfoShape(track.id, static_cast<int>(i));
+        double deform = static_cast<double>(trackGetLfoDeform(track.id, static_cast<int>(i)));
+        modulation.lfoValue[i] = evaluateLfoValue(phase, shape, deform);
     }
 
     double envelope = 0.0;
