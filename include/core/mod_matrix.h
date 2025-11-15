@@ -19,3 +19,6 @@ bool modMatrixRemoveAssignment(int assignmentId);
 std::optional<ModMatrixAssignment> modMatrixGetAssignment(int assignmentId);
 void modMatrixSetAssignments(const std::vector<ModMatrixAssignment>& assignments);
 void modMatrixClearAssignments();
+void modMatrixApplyAssignment(const ModMatrixAssignment& assignment);
+void modMatrixApplyAssignmentsForTrack(int trackId);
+void modMatrixApplyAllAssignments();
