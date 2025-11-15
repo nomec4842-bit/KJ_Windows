@@ -86,7 +86,7 @@ constexpr std::array<const wchar_t*, 6> kModSources = {
     L"Macro 2"
 };
 
-constexpr std::array<ModParameterInfo, 13> kModParameters = {
+constexpr std::array<ModParameterInfo, 14> kModParameters = {
     ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f},
     ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f},
     ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f},
