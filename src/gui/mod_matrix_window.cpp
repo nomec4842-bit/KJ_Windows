@@ -79,6 +79,7 @@ constexpr uint32_t trackTypeToMask(TrackType type)
 constexpr uint32_t kTrackTypeMaskAll = trackTypeToMask(TrackType::Synth) | trackTypeToMask(TrackType::Sample) |
                                         trackTypeToMask(TrackType::MidiOut) | trackTypeToMask(TrackType::VST);
 constexpr uint32_t kTrackTypeMaskSynth = trackTypeToMask(TrackType::Synth);
+constexpr uint32_t kTrackTypeMaskSample = trackTypeToMask(TrackType::Sample);
 
 constexpr std::array<const wchar_t*, 6> kModSources = {
     L"LFO 1",
@@ -89,21 +90,45 @@ constexpr std::array<const wchar_t*, 6> kModSources = {
     L"Macro 2"
 };
 
-constexpr std::array<ModParameterInfo, 14> kModParameters = {
-    ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f, kTrackTypeMaskAll},
-    ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f, kTrackTypeMaskAll},
-    ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f, kTrackTypeMaskSynth},
-    ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f, kTrackTypeMaskAll},
-    ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f, kTrackTypeMaskAll},
-    ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f, kTrackTypeMaskAll},
+struct ModParameterEntry
+{
+    ModMatrixParameter id;
+    ModParameterInfo info;
+};
+
+constexpr std::array<ModParameterEntry, 16> kModParameters = {
+    ModParameterEntry{ModMatrixParameter::Volume,
+                      ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f, kTrackTypeMaskAll}},
+    ModParameterEntry{ModMatrixParameter::Pan,
+                      ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f, kTrackTypeMaskAll}},
+    ModParameterEntry{ModMatrixParameter::SynthPitch,
+                      ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthFormant,
+                      ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthResonance,
+                      ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthFeedback,
+                      ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthPitchRange,
+                      ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthAttack,
+                      ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthDecay,
+                      ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthSustain,
+                      ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SynthRelease,
+                      ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f, kTrackTypeMaskSynth}},
+    ModParameterEntry{ModMatrixParameter::SampleAttack,
+                      ModParameterInfo{L"Sample Attack", trackGetSampleAttack, trackSetSampleAttack, 0.0f, 4.0f, kTrackTypeMaskSample}},
+    ModParameterEntry{ModMatrixParameter::SampleRelease,
+                      ModParameterInfo{L"Sample Release", trackGetSampleRelease, trackSetSampleRelease, 0.0f, 4.0f, kTrackTypeMaskSample}},
+    ModParameterEntry{ModMatrixParameter::DelayMix,
+                      ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f, kTrackTypeMaskAll}},
+    ModParameterEntry{ModMatrixParameter::CompressorThreshold,
+                      ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f, kTrackTypeMaskAll}},
+    ModParameterEntry{ModMatrixParameter::CompressorRatio,
+                      ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f, kTrackTypeMaskAll}},
 };
 
 HWND gModMatrixWindow = nullptr;
@@ -168,7 +193,17 @@ const ModParameterInfo* getParameterInfo(int index)
 {
     if (index < 0 || index >= static_cast<int>(kModParameters.size()))
         return nullptr;
-    return &kModParameters[static_cast<size_t>(index)];
+    return &kModParameters[static_cast<size_t>(index)].info;
+}
+
+int getParameterIndex(ModMatrixParameter parameter)
+{
+    for (size_t i = 0; i < kModParameters.size(); ++i)
+    {
+        if (kModParameters[i].id == parameter)
+            return static_cast<int>(i);
+    }
+    return -1;
 }
 
 std::wstring getSourceLabel(int index)
@@ -265,7 +300,8 @@ void populateParameterCombo(HWND combo, std::optional<TrackType> trackType = std
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     for (size_t i = 0; i < kModParameters.size(); ++i)
     {
-        const auto& info = kModParameters[i];
+        const auto& entry = kModParameters[i];
+        const auto& info = entry.info;
         if (trackType)
         {
             uint32_t mask = trackTypeToMask(*trackType);
@@ -1038,12 +1074,11 @@ void closeModMatrixWindow()
     }
 }
 
-void toggleModMatrixWindow(HWND parent)
+void openModMatrixWindow(HWND parent)
 {
     if (gModMatrixWindow && IsWindow(gModMatrixWindow))
     {
-        closeModMatrixWindow();
-        requestMainMenuRefresh();
+        SetForegroundWindow(gModMatrixWindow);
         return;
     }
 
@@ -1084,6 +1119,18 @@ void toggleModMatrixWindow(HWND parent)
     }
 }
 
+void toggleModMatrixWindow(HWND parent)
+{
+    if (gModMatrixWindow && IsWindow(gModMatrixWindow))
+    {
+        closeModMatrixWindow();
+        requestMainMenuRefresh();
+        return;
+    }
+
+    openModMatrixWindow(parent);
+}
+
 void notifyModMatrixWindowTrackListChanged()
 {
     if (gModMatrixWindow && IsWindow(gModMatrixWindow))
@@ -1098,5 +1145,66 @@ void notifyModMatrixWindowValuesChanged(int trackId)
     {
         PostMessageW(gModMatrixWindow, WM_MOD_MATRIX_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
     }
+}
+
+void focusModMatrixTarget(ModMatrixParameter parameter, int trackId)
+{
+    if (trackId <= 0)
+        return;
+
+    if (!gModMatrixWindow || !IsWindow(gModMatrixWindow))
+        return;
+
+    ModMatrixWindowState* state = getWindowState(gModMatrixWindow);
+    if (!state)
+        return;
+
+    int parameterIndex = getParameterIndex(parameter);
+    if (parameterIndex < 0)
+        return;
+
+    auto assignments = modMatrixGetAssignments();
+    auto existing = std::find_if(assignments.begin(), assignments.end(), [&](const ModMatrixAssignment& assignment) {
+        return assignment.trackId == trackId && assignment.parameterIndex == parameterIndex;
+    });
+
+    int assignmentId = 0;
+    if (existing != assignments.end())
+    {
+        assignmentId = existing->id;
+    }
+    else
+    {
+        ModMatrixAssignment assignment = modMatrixCreateAssignment();
+        assignment.sourceIndex = 0;
+        assignment.trackId = trackId;
+        assignment.parameterIndex = parameterIndex;
+        syncAssignmentFromTrack(assignment);
+        modMatrixUpdateAssignment(assignment);
+        assignmentId = assignment.id;
+    }
+
+    state->selectedAssignmentId = assignmentId;
+    repopulateAssignmentList(state);
+    loadAssignmentIntoControls(state, state->selectedAssignmentId);
+
+    if (state->listView)
+    {
+        int itemCount = ListView_GetItemCount(state->listView);
+        for (int row = 0; row < itemCount; ++row)
+        {
+            LVITEMW item{};
+            item.mask = LVIF_PARAM;
+            item.iItem = row;
+            if (ListView_GetItem(state->listView, &item) && static_cast<int>(item.lParam) == assignmentId)
+            {
+                ListView_SetItemState(state->listView, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                ListView_EnsureVisible(state->listView, row, FALSE);
+                break;
+            }
+        }
+    }
+
+    SetForegroundWindow(gModMatrixWindow);
 }
 

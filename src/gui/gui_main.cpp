@@ -308,6 +308,7 @@ PianoRollParamDragState gPianoRollParamDrag;
 
 constexpr UINT kPianoRollContextDeleteNoteId = 5001;
 constexpr UINT kPianoRollContextDeleteRangeId = 5002;
+constexpr UINT kParameterContextSetModTargetId = 5101;
 
 constexpr wchar_t kPianoRollWindowClassName[] = L"KJPianoRollWindow";
 constexpr int kPianoRollWindowWidth = 640;
@@ -6758,6 +6759,143 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     invalidatePianoRollWindow();
                 }
                 return 0;
+            }
+        }
+
+        return 0;
+    }
+    case WM_RBUTTONUP:
+    {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        auto tracks = getTracks();
+        ensureTrackTabState(tracks);
+
+        int activeTrackId = selectedTrackId;
+        if (activeTrackId <= 0 && !tracks.empty())
+        {
+            activeTrackId = tracks.front().id;
+            setActiveSequencerTrackId(activeTrackId);
+        }
+
+        if (activeTrackId <= 0)
+            return 0;
+
+        TrackType trackType = TrackType::Synth;
+        if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
+        {
+            trackType = activeTrack->type;
+        }
+        else
+        {
+            trackType = trackGetType(activeTrackId);
+        }
+
+        bool synthControls = trackType == TrackType::Synth;
+        bool sampleControls = trackType == TrackType::Sample;
+        if (!synthControls && !sampleControls)
+            return 0;
+
+        SliderDragTarget contextTarget = SliderDragTarget::None;
+        if (synthControls)
+        {
+            if (pointInRect(gSynthFormantSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthFormant;
+            else if (pointInRect(gSynthResonanceSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthResonance;
+            else if (pointInRect(gSynthFeedbackSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthFeedback;
+            else if (pointInRect(gSynthPitchSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthPitch;
+            else if (pointInRect(gSynthPitchRangeSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthPitchRange;
+            else if (pointInRect(gSynthAttackSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthAttack;
+            else if (pointInRect(gSynthDecaySliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthDecay;
+            else if (pointInRect(gSynthSustainSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthSustain;
+            else if (pointInRect(gSynthReleaseSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SynthRelease;
+        }
+        else if (sampleControls)
+        {
+            if (pointInRect(gSampleAttackSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SampleAttack;
+            else if (pointInRect(gSampleReleaseSliderControl.control, x, y))
+                contextTarget = SliderDragTarget::SampleRelease;
+        }
+
+        if (contextTarget == SliderDragTarget::None)
+            return 0;
+
+        HMENU menu = CreatePopupMenu();
+        if (!menu)
+            return 0;
+
+        AppendMenuW(menu, MF_STRING, kParameterContextSetModTargetId, L"Set as Mod Target");
+
+        POINT screenPoint{x, y};
+        ClientToScreen(hwnd, &screenPoint);
+        SetForegroundWindow(hwnd);
+        UINT command = TrackPopupMenu(menu,
+                                      TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                      screenPoint.x,
+                                      screenPoint.y,
+                                      0,
+                                      hwnd,
+                                      nullptr);
+        DestroyMenu(menu);
+
+        if (command == kParameterContextSetModTargetId)
+        {
+            ModMatrixParameter parameter = ModMatrixParameter::Volume;
+            bool validParameter = true;
+            switch (contextTarget)
+            {
+            case SliderDragTarget::SynthFormant:
+                parameter = ModMatrixParameter::SynthFormant;
+                break;
+            case SliderDragTarget::SynthResonance:
+                parameter = ModMatrixParameter::SynthResonance;
+                break;
+            case SliderDragTarget::SynthFeedback:
+                parameter = ModMatrixParameter::SynthFeedback;
+                break;
+            case SliderDragTarget::SynthPitch:
+                parameter = ModMatrixParameter::SynthPitch;
+                break;
+            case SliderDragTarget::SynthPitchRange:
+                parameter = ModMatrixParameter::SynthPitchRange;
+                break;
+            case SliderDragTarget::SynthAttack:
+                parameter = ModMatrixParameter::SynthAttack;
+                break;
+            case SliderDragTarget::SynthDecay:
+                parameter = ModMatrixParameter::SynthDecay;
+                break;
+            case SliderDragTarget::SynthSustain:
+                parameter = ModMatrixParameter::SynthSustain;
+                break;
+            case SliderDragTarget::SynthRelease:
+                parameter = ModMatrixParameter::SynthRelease;
+                break;
+            case SliderDragTarget::SampleAttack:
+                parameter = ModMatrixParameter::SampleAttack;
+                break;
+            case SliderDragTarget::SampleRelease:
+                parameter = ModMatrixParameter::SampleRelease;
+                break;
+            default:
+                validParameter = false;
+                break;
+            }
+
+            if (validParameter)
+            {
+                openModMatrixWindow(hwnd);
+                focusModMatrixTarget(parameter, activeTrackId);
             }
         }
 

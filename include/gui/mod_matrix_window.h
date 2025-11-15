@@ -15,8 +15,30 @@
 #include <windows.h>
 #include <commctrl.h>
 
+enum class ModMatrixParameter
+{
+    Volume,
+    Pan,
+    SynthPitch,
+    SynthFormant,
+    SynthResonance,
+    SynthFeedback,
+    SynthPitchRange,
+    SynthAttack,
+    SynthDecay,
+    SynthSustain,
+    SynthRelease,
+    SampleAttack,
+    SampleRelease,
+    DelayMix,
+    CompressorThreshold,
+    CompressorRatio,
+};
+
 void toggleModMatrixWindow(HWND parent);
+void openModMatrixWindow(HWND parent);
 void closeModMatrixWindow();
 bool isModMatrixWindowOpen();
 void notifyModMatrixWindowTrackListChanged();
 void notifyModMatrixWindowValuesChanged(int trackId);
+void focusModMatrixTarget(ModMatrixParameter parameter, int trackId);
