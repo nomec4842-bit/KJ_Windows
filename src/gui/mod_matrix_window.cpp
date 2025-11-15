@@ -147,7 +147,9 @@ std::wstring formatAmountText(const ModMatrixAssignment& assignment)
     float percentage = modMatrixClampNormalized(assignment.normalizedAmount) * 100.0f;
 
     std::wstringstream ss;
-    ss << std::fixed << std::setprecision(2) << value << L" (" << std::setprecision(0) << percentage << L"%)";
+    ss << std::showpos << std::fixed << std::setprecision(2) << value;
+    ss << L" (" << std::setprecision(0) << percentage << L"%)";
+    ss << std::noshowpos;
     return ss.str();
 }
 
@@ -156,12 +158,7 @@ void syncAssignmentFromTrack(ModMatrixAssignment& assignment)
     if (assignment.trackId <= 0 || !trackExists(assignment.trackId))
         return;
 
-    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
-    if (!info || !info->getter)
-        return;
-
-    float current = info->getter(assignment.trackId);
-    assignment.normalizedAmount = modMatrixValueToNormalized(current, *info);
+    assignment.normalizedAmount = 0.0f;
 }
 
 void populateSourceCombo(HWND combo)
@@ -281,7 +278,8 @@ void setSliderFromAssignment(HWND slider, const ModMatrixAssignment& assignment)
     if (!slider)
         return;
 
-    int position = static_cast<int>(std::round(modMatrixClampNormalized(assignment.normalizedAmount) * kSliderResolution));
+    float normalized = (modMatrixClampNormalized(assignment.normalizedAmount) + 1.0f) * 0.5f;
+    int position = static_cast<int>(std::round(normalized * kSliderResolution));
     SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, kSliderResolution));
     SendMessageW(slider, TBM_SETPOS, TRUE, position);
 }
@@ -297,8 +295,10 @@ void updateAmountLabel(HWND label, const ModMatrixAssignment& assignment)
     if (info)
     {
         float value = modMatrixNormalizedToValue(assignment.normalizedAmount, *info);
-        ss << std::fixed << std::setprecision(2) << value;
-        ss << L" (" << std::setprecision(0) << modMatrixClampNormalized(assignment.normalizedAmount) * 100.0f << L"%)";
+        float percent = modMatrixClampNormalized(assignment.normalizedAmount) * 100.0f;
+        ss << std::showpos << std::fixed << std::setprecision(2) << value;
+        ss << L" (" << std::setprecision(0) << percent << L"%)";
+        ss << std::noshowpos;
     }
     else
     {
@@ -872,7 +872,8 @@ void ensureModMatrixWindowClass()
                     return 0;
 
                 int position = static_cast<int>(SendMessageW(state->amountSlider, TBM_GETPOS, 0, 0));
-                assignment->normalizedAmount = modMatrixClampNormalized(static_cast<float>(position) / static_cast<float>(kSliderResolution));
+                float sliderNormalized = static_cast<float>(position) / static_cast<float>(kSliderResolution);
+                assignment->normalizedAmount = modMatrixClampNormalized(sliderNormalized * 2.0f - 1.0f);
                 modMatrixUpdateAssignment(*assignment);
                 modMatrixApplyAssignment(*assignment);
                 updateAmountLabel(state->amountLabel, *assignment);

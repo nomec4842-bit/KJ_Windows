@@ -1,6 +1,7 @@
 #include "core/project_io.h"
 
 #include "core/mod_matrix.h"
+#include "core/mod_matrix_parameters.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
 
@@ -1065,7 +1066,8 @@ bool loadProjectFromFile(const std::filesystem::path& path)
             assignment.sourceIndex = jsonToInt(findMember(entryObject, "source"), 0);
             assignment.trackId = jsonToInt(findMember(entryObject, "trackId"), 0);
             assignment.parameterIndex = jsonToInt(findMember(entryObject, "parameter"), 0);
-            assignment.normalizedAmount = jsonToFloat(findMember(entryObject, "amount"), assignment.normalizedAmount);
+            assignment.normalizedAmount = modMatrixClampNormalized(
+                jsonToFloat(findMember(entryObject, "amount"), assignment.normalizedAmount));
             assignments.push_back(assignment);
         }
         modMatrixSetAssignments(assignments);

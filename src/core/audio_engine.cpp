@@ -40,6 +40,8 @@
 #include "core/effects/delay_effect.h"
 #include "core/effects/sidechain_processor.h"
 #include "core/midi_output.h"
+#include "core/mod_matrix.h"
+#include "core/mod_matrix_parameters.h"
 #include "hosting/VST3Host.h"
 
 std::atomic<bool> isPlaying = false;
@@ -190,6 +192,59 @@ constexpr double kCompressorAttackMin = 0.001;
 constexpr double kCompressorAttackMax = 1.0;
 constexpr double kCompressorReleaseMin = 0.01;
 constexpr double kCompressorReleaseMax = 4.0;
+constexpr size_t kModSourceCount = 6;
+constexpr std::array<double, 3> kDefaultLfoFrequencies = {0.5, 1.0, 2.0};
+
+int cachedModMatrixParameterCount()
+{
+    static int count = modMatrixGetParameterCount();
+    return count;
+}
+
+struct ModMatrixParameterLookup
+{
+    int volume = -1;
+    int pan = -1;
+    int synthPitch = -1;
+    int synthFormant = -1;
+    int synthResonance = -1;
+    int synthFeedback = -1;
+    int synthPitchRange = -1;
+    int synthAttack = -1;
+    int synthDecay = -1;
+    int synthSustain = -1;
+    int synthRelease = -1;
+    int sampleAttack = -1;
+    int sampleRelease = -1;
+    int delayMix = -1;
+    int compressorThreshold = -1;
+    int compressorRatio = -1;
+};
+
+const ModMatrixParameterLookup& getModMatrixParameterLookup()
+{
+    static const ModMatrixParameterLookup lookup = [] {
+        ModMatrixParameterLookup result;
+        result.volume = modMatrixGetParameterIndex(ModMatrixParameter::Volume);
+        result.pan = modMatrixGetParameterIndex(ModMatrixParameter::Pan);
+        result.synthPitch = modMatrixGetParameterIndex(ModMatrixParameter::SynthPitch);
+        result.synthFormant = modMatrixGetParameterIndex(ModMatrixParameter::SynthFormant);
+        result.synthResonance = modMatrixGetParameterIndex(ModMatrixParameter::SynthResonance);
+        result.synthFeedback = modMatrixGetParameterIndex(ModMatrixParameter::SynthFeedback);
+        result.synthPitchRange = modMatrixGetParameterIndex(ModMatrixParameter::SynthPitchRange);
+        result.synthAttack = modMatrixGetParameterIndex(ModMatrixParameter::SynthAttack);
+        result.synthDecay = modMatrixGetParameterIndex(ModMatrixParameter::SynthDecay);
+        result.synthSustain = modMatrixGetParameterIndex(ModMatrixParameter::SynthSustain);
+        result.synthRelease = modMatrixGetParameterIndex(ModMatrixParameter::SynthRelease);
+        result.sampleAttack = modMatrixGetParameterIndex(ModMatrixParameter::SampleAttack);
+        result.sampleRelease = modMatrixGetParameterIndex(ModMatrixParameter::SampleRelease);
+        result.delayMix = modMatrixGetParameterIndex(ModMatrixParameter::DelayMix);
+        result.compressorThreshold = modMatrixGetParameterIndex(ModMatrixParameter::CompressorThreshold);
+        result.compressorRatio = modMatrixGetParameterIndex(ModMatrixParameter::CompressorRatio);
+        return result;
+    }();
+    return lookup;
+}
 
 void resetFilterState(BiquadFilter& filter)
 {
@@ -451,6 +506,17 @@ double advanceEnvelope(EnvelopeStage& stage, double currentValue, double attack,
     return value;
 }
 
+struct TrackModulationState
+{
+    std::array<double, 3> lfoPhase{0.0, 0.0, 0.0};
+    std::array<double, 3> lfoValue{0.0, 0.0, 0.0};
+    double envelopeValue = 0.0;
+    std::array<double, 2> macroValue{0.0, 0.0};
+    double lastAppliedFormant = -1.0;
+    double lastAppliedResonance = -1.0;
+    std::vector<double> parameterAmounts;
+};
+
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     int currentMidiNote = 69;
@@ -533,6 +599,7 @@ struct TrackPlaybackState {
     int midiChannel = 0;
     int midiPort = -1;
     std::vector<int> activeMidiNotes;
+    TrackModulationState modulation;
 };
 
 void releaseDelayEffect(TrackPlaybackState& state)
@@ -553,6 +620,8 @@ void resetSamplePlaybackState(TrackPlaybackState& state)
     state.sampleTailActive = false;
     state.sampleLastLeft = 0.0;
     state.sampleLastRight = 0.0;
+    state.modulation.envelopeValue = 0.0;
+    std::fill(state.modulation.parameterAmounts.begin(), state.modulation.parameterAmounts.end(), 0.0);
 }
 
 void resetSynthPlaybackState(TrackPlaybackState& state)
@@ -561,6 +630,8 @@ void resetSynthPlaybackState(TrackPlaybackState& state)
     state.voices.clear();
     state.synthGainSmoothed = 1.0;
     resetFilterState(state.formantFilter);
+    state.modulation.envelopeValue = 0.0;
+    std::fill(state.modulation.parameterAmounts.begin(), state.modulation.parameterAmounts.end(), 0.0);
 }
 
 void ensureDelayEffect(TrackPlaybackState& state, double sampleRate)
@@ -673,6 +744,8 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
         state.formantNormalized = newFormant;
         state.formantResonance = newResonance;
         state.formantBlend = newFormant;
+        state.modulation.lastAppliedFormant = -1.0;
+        state.modulation.lastAppliedResonance = -1.0;
     }
     if (sampleRateChanged || formantChanged || resonanceChanged)
     {
@@ -800,6 +873,186 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
     state.sidechain.setAmount(newSidechainAmount);
     state.sidechain.setAttack(newSidechainAttack);
     state.sidechain.setRelease(newSidechainRelease);
+}
+
+std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState& state,
+                                                              const Track& track,
+                                                              double sampleRate)
+{
+    auto& modulation = state.modulation;
+    double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    double twoPi = 2.0 * kPi;
+    for (size_t i = 0; i < kDefaultLfoFrequencies.size(); ++i)
+    {
+        double increment = twoPi * kDefaultLfoFrequencies[i] / sr;
+        double phase = modulation.lfoPhase[i] + increment;
+        if (!std::isfinite(phase))
+            phase = 0.0;
+        phase = std::fmod(phase, twoPi);
+        if (phase < 0.0)
+            phase += twoPi;
+        modulation.lfoPhase[i] = phase;
+        modulation.lfoValue[i] = std::sin(phase);
+    }
+
+    double envelope = 0.0;
+    if (track.type == TrackType::Synth && !state.voices.empty())
+    {
+        double sum = 0.0;
+        for (const auto& voice : state.voices)
+            sum += voice.envelope;
+        envelope = sum / static_cast<double>(state.voices.size());
+    }
+    else if (track.type == TrackType::Sample)
+    {
+        envelope = state.sampleEnvelopeSmoothed;
+    }
+
+    if (!std::isfinite(envelope))
+        envelope = 0.0;
+    envelope = std::clamp(envelope, 0.0, 1.0);
+    modulation.envelopeValue = envelope;
+
+    std::array<double, kModSourceCount> sources{};
+    for (size_t i = 0; i < kDefaultLfoFrequencies.size(); ++i)
+        sources[i] = modulation.lfoValue[i];
+    sources[3] = modulation.envelopeValue;
+    sources[4] = modulation.macroValue[0];
+    sources[5] = modulation.macroValue[1];
+    return sources;
+}
+
+void updateTrackModulationState(TrackPlaybackState& state,
+                                const Track& track,
+                                double sampleRate,
+                                const std::vector<ModMatrixAssignment>* assignments)
+{
+    auto& modulation = state.modulation;
+    int parameterCount = cachedModMatrixParameterCount();
+    if (parameterCount < 0)
+        parameterCount = 0;
+
+    if (modulation.parameterAmounts.size() != static_cast<size_t>(parameterCount))
+        modulation.parameterAmounts.assign(static_cast<size_t>(parameterCount), 0.0);
+    else
+        std::fill(modulation.parameterAmounts.begin(), modulation.parameterAmounts.end(), 0.0);
+
+    auto sources = evaluateModulationSources(state, track, sampleRate);
+
+    if (!assignments || assignments->empty())
+        return;
+
+    for (const auto& assignment : *assignments)
+    {
+        if (assignment.parameterIndex < 0 || assignment.parameterIndex >= parameterCount)
+            continue;
+        if (assignment.sourceIndex < 0 || assignment.sourceIndex >= static_cast<int>(kModSourceCount))
+            continue;
+
+        const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
+        if (!info)
+            continue;
+        if (!modMatrixParameterSupportsTrackType(*info, track.type))
+            continue;
+
+        double depth = static_cast<double>(modMatrixClampNormalized(assignment.normalizedAmount));
+        double sourceValue = sources[static_cast<size_t>(assignment.sourceIndex)];
+        if (!std::isfinite(sourceValue))
+            sourceValue = 0.0;
+        modulation.parameterAmounts[assignment.parameterIndex] += depth * sourceValue;
+    }
+
+    for (double& amount : modulation.parameterAmounts)
+    {
+        if (!std::isfinite(amount))
+            amount = 0.0;
+        amount = std::clamp(amount, -1.0, 1.0);
+    }
+}
+
+double applyModulatedParameter(double base, const ModParameterInfo& info, double amount)
+{
+    double clampedAmount = std::clamp(amount, -1.0, 1.0);
+    double range = static_cast<double>(info.maxValue - info.minValue);
+    if (range <= 0.0)
+        return base;
+
+    double result = base + clampedAmount * range;
+    double minValue = static_cast<double>(info.minValue);
+    double maxValue = static_cast<double>(info.maxValue);
+    if (!std::isfinite(result))
+        result = base;
+    return std::clamp(result, minValue, maxValue);
+}
+
+struct TrackModulatedParameters
+{
+    double volume = 0.0;
+    double pan = 0.0;
+    double synthPitch = 0.0;
+    double synthFormant = 0.0;
+    double synthResonance = 0.0;
+    double synthFeedback = 0.0;
+    double synthPitchRange = 0.0;
+    double synthAttack = 0.0;
+    double synthDecay = 0.0;
+    double synthSustain = 0.0;
+    double synthRelease = 0.0;
+    double sampleAttack = 0.0;
+    double sampleRelease = 0.0;
+    double delayMix = 0.0;
+    double compressorThreshold = 0.0;
+    double compressorRatio = 0.0;
+};
+
+TrackModulatedParameters computeTrackModulatedParameters(const TrackPlaybackState& state,
+                                                         const Track& track)
+{
+    const auto& lookup = getModMatrixParameterLookup();
+    TrackModulatedParameters result{};
+
+    auto getAmount = [&](int parameterIndex) {
+        if (parameterIndex < 0)
+            return 0.0;
+        size_t idx = static_cast<size_t>(parameterIndex);
+        if (idx >= state.modulation.parameterAmounts.size())
+            return 0.0;
+        return state.modulation.parameterAmounts[idx];
+    };
+
+    auto apply = [&](double base, int parameterIndex) {
+        if (parameterIndex < 0)
+            return base;
+        const ModParameterInfo* info = modMatrixGetParameterInfo(parameterIndex);
+        if (!info)
+            return base;
+        return applyModulatedParameter(base, *info, getAmount(parameterIndex));
+    };
+
+    result.volume = apply(state.volume, lookup.volume);
+    result.pan = apply(state.pan, lookup.pan);
+    result.synthPitch = apply(state.pitchBaseOffset, lookup.synthPitch);
+    result.synthFormant = apply(state.formantNormalized, lookup.synthFormant);
+    result.synthResonance = apply(state.formantResonance, lookup.synthResonance);
+    result.synthFeedback = apply(state.feedbackAmount, lookup.synthFeedback);
+    double basePitchRange = state.pitchRangeSemitones + 1.0;
+    result.synthPitchRange = apply(basePitchRange, lookup.synthPitchRange);
+    result.synthAttack = apply(state.synthAttack, lookup.synthAttack);
+    result.synthDecay = apply(state.synthDecay, lookup.synthDecay);
+    result.synthSustain = apply(state.synthSustain, lookup.synthSustain);
+    result.synthRelease = apply(state.synthRelease, lookup.synthRelease);
+    result.sampleAttack = apply(state.sampleAttack, lookup.sampleAttack);
+    result.sampleRelease = apply(state.sampleRelease, lookup.sampleRelease);
+    result.delayMix = apply(state.delayMix, lookup.delayMix);
+    result.compressorThreshold = apply(state.compressorThresholdDb, lookup.compressorThreshold);
+    result.compressorRatio = apply(state.compressorRatio, lookup.compressorRatio);
+
+    if (track.type == TrackType::Sample && result.sampleAttack < kSampleEnvelopeSmoothingSeconds)
+        result.sampleAttack = kSampleEnvelopeSmoothingSeconds;
+    if (track.type == TrackType::Sample && result.sampleRelease < kSampleEnvelopeSmoothingSeconds)
+        result.sampleRelease = kSampleEnvelopeSmoothingSeconds;
+
+    return result;
 }
 
 void sendMidiNotesOffForState(TrackPlaybackState& state, int port, int channel)
@@ -1181,6 +1434,15 @@ void audioLoop() {
             if (stepDurationSamples < 1.0) stepDurationSamples = 1.0;
 
             auto trackInfos = getTracks();
+            auto assignments = modMatrixGetAssignments();
+            std::unordered_map<int, std::vector<ModMatrixAssignment>> assignmentsByTrack;
+            assignmentsByTrack.reserve(trackInfos.size());
+            for (const auto& assignment : assignments)
+            {
+                if (assignment.trackId > 0)
+                    assignmentsByTrack[assignment.trackId].push_back(assignment);
+            }
+
             std::vector<int> trackStepCounts;
             trackStepCounts.reserve(trackInfos.size());
 
@@ -1571,6 +1833,14 @@ void audioLoop() {
                             activeTrackHasSteps = true;
                         }
 
+                        const std::vector<ModMatrixAssignment>* trackAssignmentsPtr = nullptr;
+                        auto assignmentsItTrack = assignmentsByTrack.find(trackInfo.id);
+                        if (assignmentsItTrack != assignmentsByTrack.end())
+                            trackAssignmentsPtr = &assignmentsItTrack->second;
+
+                        updateTrackModulationState(state, trackInfo, sampleRate, trackAssignmentsPtr);
+                        TrackModulatedParameters modulatedParams = computeTrackModulatedParameters(state, trackInfo);
+
                         double trackLeft = 0.0;
                         double trackRight = 0.0;
 
@@ -1635,7 +1905,8 @@ void audioLoop() {
                             }
 
                             state.sampleEnvelope = advanceEnvelope(state.sampleEnvelopeStage, state.sampleEnvelope,
-                                                                    state.sampleAttack, 0.0, 1.0, state.sampleRelease,
+                                                                    modulatedParams.sampleAttack, 0.0, 1.0,
+                                                                    modulatedParams.sampleRelease,
                                                                     sampleRate);
 
                             double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
@@ -1769,7 +2040,7 @@ void audioLoop() {
                                         ? *existingIt
                                         : TrackPlaybackState::SynthVoice{};
                                     voice.midiNote = note;
-                                    voice.frequency = midiNoteToFrequency(static_cast<double>(note) + state.pitchBaseOffset + state.stepPitchOffset);
+                                    voice.frequency = midiNoteToFrequency(static_cast<double>(note) + modulatedParams.synthPitch + state.stepPitchOffset);
 
                                     if (!hasExistingVoice) {
                                         voice.velocitySmoothed = noteVelocity;
@@ -1823,9 +2094,10 @@ void audioLoop() {
 
                             double sampleValue = 0.0;
                             if (!state.voices.empty()) {
-                                double pitchOffset = state.pitchBaseOffset + state.stepPitchOffset +
-                                                     state.pitchEnvelope * state.pitchRangeSemitones;
-                                double feedbackMix = std::clamp(state.feedbackAmount, 0.0, 0.99);
+                                double pitchRangeSemitones = std::max(0.0, modulatedParams.synthPitchRange - 1.0);
+                                double pitchOffset = modulatedParams.synthPitch + state.stepPitchOffset +
+                                                     state.pitchEnvelope * pitchRangeSemitones;
+                                double feedbackMix = std::clamp(modulatedParams.synthFeedback, 0.0, 0.99);
                                 SynthWaveType waveType = trackInfo.synthWaveType;
                                 double totalVelocity = 0.0;
                                 double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
@@ -1883,8 +2155,10 @@ void audioLoop() {
                                                                        static_cast<double>(kTrackStepVelocityMax));
                                     double velocityGain = voice.velocitySmoothed;
                                     double envelopeGain = advanceEnvelope(voice.envelopeStage, voice.envelope,
-                                                                          state.synthAttack, state.synthDecay,
-                                                                          state.synthSustain, state.synthRelease,
+                                                                          modulatedParams.synthAttack,
+                                                                          modulatedParams.synthDecay,
+                                                                          modulatedParams.synthSustain,
+                                                                          modulatedParams.synthRelease,
                                                                           sampleRate);
                                     voice.envelope = envelopeGain;
                                     sampleValue += waveform * velocityGain * envelopeGain;
@@ -1936,8 +2210,19 @@ void audioLoop() {
                             trackLeft = sampleValue;
                             trackRight = sampleValue;
 
-                            double blend = std::clamp(state.formantBlend, 0.0, 1.0);
-                            if (blend < 1.0 || state.formantResonance > 0.0) {
+                            double modFormant = std::clamp(modulatedParams.synthFormant, 0.0, 1.0);
+                            double modResonance = std::clamp(modulatedParams.synthResonance, 0.0, 1.0);
+                            bool formantNeedsUpdate = std::abs(modFormant - state.modulation.lastAppliedFormant) > 1e-4 ||
+                                                      std::abs(modResonance - state.modulation.lastAppliedResonance) > 1e-4;
+                            if (formantNeedsUpdate)
+                            {
+                                configureFormantFilter(state.formantFilter, sampleRate, modFormant, modResonance);
+                                state.modulation.lastAppliedFormant = modFormant;
+                                state.modulation.lastAppliedResonance = modResonance;
+                            }
+
+                            double blend = std::clamp(modFormant, 0.0, 1.0);
+                            if (blend < 1.0 || modResonance > 0.0) {
                                 double filteredLeft = processBiquadSample(state.formantFilter, trackLeft, false);
                                 double filteredRight = processBiquadSample(state.formantFilter, trackRight, true);
                                 trackLeft = filteredLeft * (1.0 - blend) + trackLeft * blend;
@@ -1992,10 +2277,12 @@ void audioLoop() {
                             double inputLevel = std::max(std::abs(processedLeft), std::abs(processedRight));
                             double inputDb = 20.0 * std::log10(inputLevel + 1e-12);
                             double gainDb = 0.0;
-                            if (inputDb > state.compressorThresholdDb)
+                            double compressorThreshold = modulatedParams.compressorThreshold;
+                            double compressorRatio = std::max(modulatedParams.compressorRatio, kCompressorRatioMin);
+                            if (inputDb > compressorThreshold)
                             {
-                                double overDb = inputDb - state.compressorThresholdDb;
-                                double compressedDb = state.compressorThresholdDb + overDb / state.compressorRatio;
+                                double overDb = inputDb - compressorThreshold;
+                                double compressedDb = compressorThreshold + overDb / compressorRatio;
                                 gainDb = compressedDb - inputDb;
                             }
                             double targetGain = std::pow(10.0, gainDb / 20.0);
@@ -2016,6 +2303,7 @@ void audioLoop() {
 
                         if (state.delayEnabled && state.delayEffect)
                         {
+                            state.delayEffect->setMix(static_cast<float>(modulatedParams.delayMix));
                             float delayLeft = static_cast<float>(processedLeft);
                             float delayRight = static_cast<float>(processedRight);
                             state.delayEffect->process(&delayLeft, &delayRight, 1);
@@ -2050,11 +2338,11 @@ void audioLoop() {
                         processedLeft *= sidechainGain;
                         processedRight *= sidechainGain;
 
-                        double combinedPan = std::clamp(state.pan + state.stepPan, -1.0, 1.0);
+                        double combinedPan = std::clamp(modulatedParams.pan + state.stepPan, -1.0, 1.0);
                         double panAmount = std::clamp((combinedPan + 1.0) * 0.5, 0.0, 1.0);
                         double leftPanGain = std::cos(panAmount * (kPi * 0.5));
                         double rightPanGain = std::sin(panAmount * (kPi * 0.5));
-                        double volumeGain = state.volume * state.stepVelocity;
+                        double volumeGain = std::clamp(modulatedParams.volume, 0.0, 1.0) * state.stepVelocity;
 
                         double finalLeft = processedLeft * volumeGain * leftPanGain;
                         double finalRight = processedRight * volumeGain * rightPanGain;
