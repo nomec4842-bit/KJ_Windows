@@ -329,6 +329,12 @@ void repopulateAssignmentList(ModMatrixWindowState* state)
 
     auto assignments = modMatrixGetAssignments();
 
+    if (assignments.empty())
+    {
+        addAssignment(state);
+        assignments = modMatrixGetAssignments();
+    }
+
     for (size_t i = 0; i < assignments.size(); ++i)
     {
         const auto& assignment = assignments[i];
@@ -469,11 +475,12 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     auto assignment = modMatrixGetAssignment(assignmentId);
     if (!assignment)
     {
+        populateSourceCombo(state->sourceCombo);
+        populateParameterCombo(state->parameterCombo);
         enableAssignmentControls(state, false);
         SetWindowTextW(state->amountLabel, L"Mod Amount:");
         if (state->amountEdit)
             SetWindowTextW(state->amountEdit, L"");
-        populateParameterCombo(state->parameterCombo);
         return;
     }
 
