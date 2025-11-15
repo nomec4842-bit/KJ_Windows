@@ -58,29 +58,6 @@ HMENU makeControlId(int id)
 
 constexpr int kSliderResolution = 1000;
 
-using ParameterGetter = float (*)(int);
-using ParameterSetter = void (*)(int, float);
-
-struct ModParameterInfo
-{
-    const wchar_t* label;
-    ParameterGetter getter;
-    ParameterSetter setter;
-    float minValue;
-    float maxValue;
-    uint32_t trackTypeMask;
-};
-
-constexpr uint32_t trackTypeToMask(TrackType type)
-{
-    return 1u << static_cast<uint32_t>(type);
-}
-
-constexpr uint32_t kTrackTypeMaskAll = trackTypeToMask(TrackType::Synth) | trackTypeToMask(TrackType::Sample) |
-                                        trackTypeToMask(TrackType::MidiOut) | trackTypeToMask(TrackType::VST);
-constexpr uint32_t kTrackTypeMaskSynth = trackTypeToMask(TrackType::Synth);
-constexpr uint32_t kTrackTypeMaskSample = trackTypeToMask(TrackType::Sample);
-
 constexpr std::array<const wchar_t*, 6> kModSources = {
     L"LFO 1",
     L"LFO 2",
@@ -90,46 +67,6 @@ constexpr std::array<const wchar_t*, 6> kModSources = {
     L"Macro 2"
 };
 
-struct ModParameterEntry
-{
-    ModMatrixParameter id;
-    ModParameterInfo info;
-};
-
-constexpr std::array<ModParameterEntry, 16> kModParameters = {
-    ModParameterEntry{ModMatrixParameter::Volume,
-                      ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f, kTrackTypeMaskAll}},
-    ModParameterEntry{ModMatrixParameter::Pan,
-                      ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f, kTrackTypeMaskAll}},
-    ModParameterEntry{ModMatrixParameter::SynthPitch,
-                      ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthFormant,
-                      ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthResonance,
-                      ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthFeedback,
-                      ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthPitchRange,
-                      ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthAttack,
-                      ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthDecay,
-                      ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthSustain,
-                      ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SynthRelease,
-                      ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f, kTrackTypeMaskSynth}},
-    ModParameterEntry{ModMatrixParameter::SampleAttack,
-                      ModParameterInfo{L"Sample Attack", trackGetSampleAttack, trackSetSampleAttack, 0.0f, 4.0f, kTrackTypeMaskSample}},
-    ModParameterEntry{ModMatrixParameter::SampleRelease,
-                      ModParameterInfo{L"Sample Release", trackGetSampleRelease, trackSetSampleRelease, 0.0f, 4.0f, kTrackTypeMaskSample}},
-    ModParameterEntry{ModMatrixParameter::DelayMix,
-                      ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f, kTrackTypeMaskAll}},
-    ModParameterEntry{ModMatrixParameter::CompressorThreshold,
-                      ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f, kTrackTypeMaskAll}},
-    ModParameterEntry{ModMatrixParameter::CompressorRatio,
-                      ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f, kTrackTypeMaskAll}},
-};
 
 HWND gModMatrixWindow = nullptr;
 bool gModMatrixWindowClassRegistered = false;
@@ -149,26 +86,6 @@ struct ModMatrixWindowState
 
 INITCOMMONCONTROLSEX gModMatrixInitControls = {};
 
-float clampNormalized(float value)
-{
-    return std::clamp(value, 0.0f, 1.0f);
-}
-
-float normalizedToValue(float normalized, const ModParameterInfo& info)
-{
-    float clamped = clampNormalized(normalized);
-    return info.minValue + clamped * (info.maxValue - info.minValue);
-}
-
-float valueToNormalized(float value, const ModParameterInfo& info)
-{
-    float range = info.maxValue - info.minValue;
-    if (range <= 0.0001f)
-        return 0.0f;
-    float normalized = (value - info.minValue) / range;
-    return clampNormalized(normalized);
-}
-
 std::wstring toWide(const std::string& text)
 {
     return std::wstring(text.begin(), text.end());
@@ -187,23 +104,6 @@ std::optional<TrackType> getTrackTypeForTrack(int trackId)
     if (!trackExists(trackId))
         return std::nullopt;
     return trackGetType(trackId);
-}
-
-const ModParameterInfo* getParameterInfo(int index)
-{
-    if (index < 0 || index >= static_cast<int>(kModParameters.size()))
-        return nullptr;
-    return &kModParameters[static_cast<size_t>(index)].info;
-}
-
-int getParameterIndex(ModMatrixParameter parameter)
-{
-    for (size_t i = 0; i < kModParameters.size(); ++i)
-    {
-        if (kModParameters[i].id == parameter)
-            return static_cast<int>(i);
-    }
-    return -1;
 }
 
 std::wstring getSourceLabel(int index)
@@ -239,29 +139,16 @@ std::wstring getTrackLabel(int trackId)
 
 std::wstring formatAmountText(const ModMatrixAssignment& assignment)
 {
-    const ModParameterInfo* info = getParameterInfo(assignment.parameterIndex);
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
     if (!info)
         return L"-";
 
-    float value = normalizedToValue(assignment.normalizedAmount, *info);
-    float percentage = clampNormalized(assignment.normalizedAmount) * 100.0f;
+    float value = modMatrixNormalizedToValue(assignment.normalizedAmount, *info);
+    float percentage = modMatrixClampNormalized(assignment.normalizedAmount) * 100.0f;
 
     std::wstringstream ss;
     ss << std::fixed << std::setprecision(2) << value << L" (" << std::setprecision(0) << percentage << L"%)";
     return ss.str();
-}
-
-void applyAssignment(const ModMatrixAssignment& assignment)
-{
-    if (assignment.trackId <= 0 || !trackExists(assignment.trackId))
-        return;
-
-    const ModParameterInfo* info = getParameterInfo(assignment.parameterIndex);
-    if (!info || !info->setter)
-        return;
-
-    float value = normalizedToValue(assignment.normalizedAmount, *info);
-    info->setter(assignment.trackId, value);
 }
 
 void syncAssignmentFromTrack(ModMatrixAssignment& assignment)
@@ -269,12 +156,12 @@ void syncAssignmentFromTrack(ModMatrixAssignment& assignment)
     if (assignment.trackId <= 0 || !trackExists(assignment.trackId))
         return;
 
-    const ModParameterInfo* info = getParameterInfo(assignment.parameterIndex);
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
     if (!info || !info->getter)
         return;
 
     float current = info->getter(assignment.trackId);
-    assignment.normalizedAmount = valueToNormalized(current, *info);
+    assignment.normalizedAmount = modMatrixValueToNormalized(current, *info);
 }
 
 void populateSourceCombo(HWND combo)
@@ -298,18 +185,20 @@ void populateParameterCombo(HWND combo, std::optional<TrackType> trackType = std
         return;
 
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    for (size_t i = 0; i < kModParameters.size(); ++i)
+    int parameterCount = modMatrixGetParameterCount();
+    for (int i = 0; i < parameterCount; ++i)
     {
-        const auto& entry = kModParameters[i];
-        const auto& info = entry.info;
+        const ModParameterInfo* info = modMatrixGetParameterInfo(i);
+        if (!info)
+            continue;
+
         if (trackType)
         {
-            uint32_t mask = trackTypeToMask(*trackType);
-            if ((info.trackTypeMask & mask) == 0)
+            if (!modMatrixParameterSupportsTrackType(*info, *trackType))
                 continue;
         }
 
-        const wchar_t* label = info.label;
+        const wchar_t* label = info->label;
         LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
         if (index >= 0)
             SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(i));
@@ -392,7 +281,7 @@ void setSliderFromAssignment(HWND slider, const ModMatrixAssignment& assignment)
     if (!slider)
         return;
 
-    int position = static_cast<int>(std::round(clampNormalized(assignment.normalizedAmount) * kSliderResolution));
+    int position = static_cast<int>(std::round(modMatrixClampNormalized(assignment.normalizedAmount) * kSliderResolution));
     SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, kSliderResolution));
     SendMessageW(slider, TBM_SETPOS, TRUE, position);
 }
@@ -402,14 +291,14 @@ void updateAmountLabel(HWND label, const ModMatrixAssignment& assignment)
     if (!label)
         return;
 
-    const ModParameterInfo* info = getParameterInfo(assignment.parameterIndex);
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
     std::wstringstream ss;
     ss << L"Mod Amount: ";
     if (info)
     {
-        float value = normalizedToValue(assignment.normalizedAmount, *info);
+        float value = modMatrixNormalizedToValue(assignment.normalizedAmount, *info);
         ss << std::fixed << std::setprecision(2) << value;
-        ss << L" (" << std::setprecision(0) << clampNormalized(assignment.normalizedAmount) * 100.0f << L"%)";
+        ss << L" (" << std::setprecision(0) << modMatrixClampNormalized(assignment.normalizedAmount) * 100.0f << L"%)";
     }
     else
     {
@@ -427,7 +316,7 @@ void refreshAssignmentRowText(HWND listView, int rowIndex, const ModMatrixAssign
 
     std::wstring source = getSourceLabel(assignment.sourceIndex);
     std::wstring track = getTrackLabel(assignment.trackId);
-    const ModParameterInfo* info = getParameterInfo(assignment.parameterIndex);
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
     std::wstring parameter = info ? info->label : L"Unknown";
     std::wstring amount = formatAmountText(assignment);
 
@@ -983,9 +872,9 @@ void ensureModMatrixWindowClass()
                     return 0;
 
                 int position = static_cast<int>(SendMessageW(state->amountSlider, TBM_GETPOS, 0, 0));
-                assignment->normalizedAmount = clampNormalized(static_cast<float>(position) / static_cast<float>(kSliderResolution));
+                assignment->normalizedAmount = modMatrixClampNormalized(static_cast<float>(position) / static_cast<float>(kSliderResolution));
                 modMatrixUpdateAssignment(*assignment);
-                applyAssignment(*assignment);
+                modMatrixApplyAssignment(*assignment);
                 updateAmountLabel(state->amountLabel, *assignment);
 
                 int itemCount = ListView_GetItemCount(state->listView);
@@ -1159,7 +1048,7 @@ void focusModMatrixTarget(ModMatrixParameter parameter, int trackId)
     if (!state)
         return;
 
-    int parameterIndex = getParameterIndex(parameter);
+    int parameterIndex = modMatrixGetParameterIndex(parameter);
     if (parameterIndex < 0)
         return;
 

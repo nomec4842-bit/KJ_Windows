@@ -12,28 +12,10 @@
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501
 #endif
+#include "core/mod_matrix_parameters.h"
+
 #include <windows.h>
 #include <commctrl.h>
-
-enum class ModMatrixParameter
-{
-    Volume,
-    Pan,
-    SynthPitch,
-    SynthFormant,
-    SynthResonance,
-    SynthFeedback,
-    SynthPitchRange,
-    SynthAttack,
-    SynthDecay,
-    SynthSustain,
-    SynthRelease,
-    SampleAttack,
-    SampleRelease,
-    DelayMix,
-    CompressorThreshold,
-    CompressorRatio,
-};
 
 void toggleModMatrixWindow(HWND parent);
 void openModMatrixWindow(HWND parent);
