@@ -95,6 +95,8 @@ std::wstring toWide(const std::string& text)
     return std::wstring(text.begin(), text.end());
 }
 
+void repopulateAssignmentList(ModMatrixWindowState* state);
+
 bool trackExists(int trackId)
 {
     if (trackId <= 0)
