@@ -48,11 +48,10 @@ constexpr int kListViewId = 2001;
 constexpr int kAddButtonId = 2002;
 constexpr int kRemoveButtonId = 2003;
 constexpr int kSourceComboId = 2004;
-constexpr int kTrackComboId = 2005;
-constexpr int kParameterComboId = 2006;
-constexpr int kAmountLabelId = 2007;
-constexpr int kAmountSliderId = 2008;
-constexpr int kAmountEditId = 2009;
+constexpr int kParameterComboId = 2005;
+constexpr int kAmountLabelId = 2006;
+constexpr int kAmountSliderId = 2007;
+constexpr int kAmountEditId = 2008;
 
 HMENU makeControlId(int id)
 {
@@ -80,7 +79,6 @@ struct ModMatrixWindowState
     HWND addButton = nullptr;
     HWND removeButton = nullptr;
     HWND sourceCombo = nullptr;
-    HWND trackCombo = nullptr;
     HWND parameterCombo = nullptr;
     HWND amountLabel = nullptr;
     HWND amountSlider = nullptr;
@@ -206,48 +204,6 @@ void populateParameterCombo(HWND combo, std::optional<TrackType> trackType = std
         if (index >= 0)
             SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(i));
     }
-}
-
-void populateTrackCombo(HWND combo, int selectedTrackId)
-{
-    if (!combo)
-        return;
-
-    auto tracks = getTracks();
-
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-
-    LRESULT noneIndex = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"None"));
-    if (noneIndex >= 0)
-        SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(noneIndex), 0);
-
-    for (const auto& track : tracks)
-    {
-        std::wstring label = toWide(track.name);
-        if (label.empty())
-        {
-            std::wstringstream ss;
-            ss << L"Track " << track.id;
-            label = ss.str();
-        }
-
-        LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-        if (index >= 0)
-            SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(track.id));
-    }
-
-    int itemCount = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
-    for (int i = 0; i < itemCount; ++i)
-    {
-        int trackId = static_cast<int>(SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(i), 0));
-        if (trackId == selectedTrackId)
-        {
-            SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(i), 0);
-            return;
-        }
-    }
-
-    SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(noneIndex >= 0 ? noneIndex : 0), 0);
 }
 
 int getComboSelectionData(HWND combo)
@@ -489,7 +445,6 @@ void enableAssignmentControls(ModMatrixWindowState* state, bool enable)
 
     const HWND controls[] = {
         state->sourceCombo,
-        state->trackCombo,
         state->parameterCombo,
         state->amountLabel,
         state->amountSlider,
@@ -516,13 +471,30 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
         SetWindowTextW(state->amountLabel, L"Mod Amount:");
         if (state->amountEdit)
             SetWindowTextW(state->amountEdit, L"");
-        populateTrackCombo(state->trackCombo, 0);
+        populateParameterCombo(state->parameterCombo);
         return;
     }
 
     enableAssignmentControls(state, true);
     setComboSelectionByData(state->sourceCombo, assignment->sourceIndex);
-    populateTrackCombo(state->trackCombo, assignment->trackId);
+    bool trackUpdated = false;
+    if (!trackExists(assignment->trackId))
+    {
+        int activeTrackId = getActiveSequencerTrackId();
+        if (activeTrackId <= 0)
+        {
+            auto tracks = getTracks();
+            if (!tracks.empty())
+                activeTrackId = tracks.front().id;
+        }
+
+        if (activeTrackId > 0 && activeTrackId != assignment->trackId)
+        {
+            assignment->trackId = activeTrackId;
+            trackUpdated = true;
+        }
+    }
+
     auto trackType = getTrackTypeForTrack(assignment->trackId);
     populateParameterCombo(state->parameterCombo, trackType);
 
@@ -539,7 +511,9 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
         }
     }
 
-    if (parameterChanged)
+    bool assignmentChanged = trackUpdated || parameterChanged;
+
+    if (assignmentChanged)
     {
         syncAssignmentFromTrack(*assignment);
         modMatrixUpdateAssignment(*assignment);
@@ -699,19 +673,6 @@ void ensureModMatrixWindowClass()
                                                     createStruct->hInstance,
                                                     nullptr);
 
-            newState->trackCombo = CreateWindowExW(0,
-                                                   WC_COMBOBOXW,
-                                                   L"",
-                                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   hwnd,
-                                                   makeControlId(kTrackComboId),
-                                                   createStruct->hInstance,
-                                                   nullptr);
-
             newState->parameterCombo = CreateWindowExW(0,
                                                        WC_COMBOBOXW,
                                                        L"",
@@ -780,12 +741,10 @@ void ensureModMatrixWindowClass()
             };
 
             configureComboDropdown(newState->sourceCombo);
-            configureComboDropdown(newState->trackCombo);
             configureComboDropdown(newState->parameterCombo);
 
             populateSourceCombo(newState->sourceCombo);
             populateParameterCombo(newState->parameterCombo);
-            populateTrackCombo(newState->trackCombo, 0);
 
             auto existingAssignments = modMatrixGetAssignments();
             if (existingAssignments.empty())
@@ -854,10 +813,6 @@ void ensureModMatrixWindowClass()
                 MoveWindow(state->sourceCombo, padding, formY, controlWidth, comboHeight, TRUE);
             formY += comboHeight + buttonSpacing;
 
-            if (state->trackCombo)
-                MoveWindow(state->trackCombo, padding, formY, controlWidth, comboHeight, TRUE);
-            formY += comboHeight + buttonSpacing;
-
             if (state->parameterCombo)
                 MoveWindow(state->parameterCombo, padding, formY, controlWidth, comboHeight, TRUE);
             formY += comboHeight + buttonSpacing;
@@ -904,35 +859,6 @@ void ensureModMatrixWindowClass()
                     {
                         assignment->sourceIndex = data;
                         modMatrixUpdateAssignment(*assignment);
-                        repopulateAssignmentList(state);
-                    }
-                }
-                return 0;
-            case kTrackComboId:
-                if (code == CBN_SELCHANGE)
-                {
-                    int data = getComboSelectionData(state->trackCombo);
-                    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
-                    if (assignment)
-                    {
-                        assignment->trackId = data;
-                        auto trackType = getTrackTypeForTrack(data);
-                        populateParameterCombo(state->parameterCombo, trackType);
-
-                        bool parameterSelectionSet = setComboSelectionByData(state->parameterCombo, assignment->parameterIndex);
-                        if (!parameterSelectionSet)
-                        {
-                            SendMessageW(state->parameterCombo, CB_SETCURSEL, 0, 0);
-                            int fallbackParameter = getComboSelectionData(state->parameterCombo);
-                            if (fallbackParameter >= 0)
-                                assignment->parameterIndex = fallbackParameter;
-                        }
-
-                        syncAssignmentFromTrack(*assignment);
-                        modMatrixUpdateAssignment(*assignment);
-                        setSliderFromAssignment(state->amountSlider, *assignment);
-                        updateAmountLabel(state->amountLabel, *assignment);
-                        setEditFromAssignment(state->amountEdit, *assignment);
                         repopulateAssignmentList(state);
                     }
                 }
@@ -1032,10 +958,8 @@ void ensureModMatrixWindowClass()
             if (!state)
                 return 0;
 
-            auto selection = modMatrixGetAssignment(state->selectedAssignmentId);
-            int trackId = selection ? selection->trackId : 0;
-            populateTrackCombo(state->trackCombo, trackId);
             repopulateAssignmentList(state);
+            loadAssignmentIntoControls(state, state->selectedAssignmentId);
             return 0;
         }
         case WM_MOD_MATRIX_REFRESH_VALUES:
