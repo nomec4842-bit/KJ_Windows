@@ -1,5 +1,6 @@
 #include "core/project_io.h"
 
+#include "core/mod_matrix.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
 
@@ -653,6 +654,7 @@ bool saveProjectToFile(const std::filesystem::path& path)
 
     int bpm = sequencerBPM.load(std::memory_order_relaxed);
     auto tracks = getTracks();
+    auto assignments = modMatrixGetAssignments();
 
     stream << "{\n";
     stream << "  \"version\": 1,\n";
@@ -807,6 +809,22 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "\n";
     }
 
+    stream << "  ],\n";
+    stream << "  \"modMatrix\": [\n";
+    for (size_t i = 0; i < assignments.size(); ++i)
+    {
+        const auto& assignment = assignments[i];
+        stream << "    {\n";
+        stream << "      \"id\": " << assignment.id << ",\n";
+        stream << "      \"source\": " << assignment.sourceIndex << ",\n";
+        stream << "      \"trackId\": " << assignment.trackId << ",\n";
+        stream << "      \"parameter\": " << assignment.parameterIndex << ",\n";
+        stream << "      \"amount\": " << formatFloat(assignment.normalizedAmount) << "\n";
+        stream << "    }";
+        if (i + 1 < assignments.size())
+            stream << ",";
+        stream << "\n";
+    }
     stream << "  ]\n";
     stream << "}\n";
 
@@ -852,6 +870,7 @@ bool loadProjectFromFile(const std::filesystem::path& path)
     const auto& tracksArray = tracksValue->asArray();
 
     initTracks();
+    modMatrixClearAssignments();
 
     std::vector<int> trackIds;
     auto currentTracks = getTracks();
@@ -1027,6 +1046,29 @@ bool loadProjectFromFile(const std::filesystem::path& path)
                                         jsonToFloat(findMember(stepObject, "pitchOffset"), trackGetStepPitchOffset(trackId, stepIndex)));
             }
         }
+    }
+
+    const JsonValue* modMatrixValue = findMember(rootObject, "modMatrix");
+    if (modMatrixValue && modMatrixValue->isArray())
+    {
+        std::vector<ModMatrixAssignment> assignments;
+        const auto& modArray = modMatrixValue->asArray();
+        assignments.reserve(modArray.size());
+        for (const auto& entry : modArray)
+        {
+            if (!entry.isObject())
+                continue;
+
+            const auto& entryObject = entry.asObject();
+            ModMatrixAssignment assignment;
+            assignment.id = jsonToInt(findMember(entryObject, "id"), 0);
+            assignment.sourceIndex = jsonToInt(findMember(entryObject, "source"), 0);
+            assignment.trackId = jsonToInt(findMember(entryObject, "trackId"), 0);
+            assignment.parameterIndex = jsonToInt(findMember(entryObject, "parameter"), 0);
+            assignment.normalizedAmount = jsonToFloat(findMember(entryObject, "amount"), assignment.normalizedAmount);
+            assignments.push_back(assignment);
+        }
+        modMatrixSetAssignments(assignments);
     }
 
     int clampedBpm = std::clamp(bpmValue, 40, 240);

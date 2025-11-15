@@ -1,5 +1,6 @@
 #include "gui/mod_matrix_window.h"
 
+#include "core/mod_matrix.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
 #include "gui/gui_main.h"
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -55,15 +57,6 @@ HMENU makeControlId(int id)
 }
 
 constexpr int kSliderResolution = 1000;
-
-struct ModMatrixAssignment
-{
-    int id = 0;
-    int sourceIndex = 0;
-    int trackId = 0;
-    int parameterIndex = 0;
-    float normalizedAmount = 0.5f;
-};
 
 using ParameterGetter = float (*)(int);
 using ParameterSetter = void (*)(int, float);
@@ -102,9 +95,6 @@ constexpr std::array<ModParameterInfo, 14> kModParameters = {
     ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f},
     ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f},
 };
-
-std::vector<ModMatrixAssignment> gAssignments;
-int gNextAssignmentId = 1;
 
 HWND gModMatrixWindow = nullptr;
 bool gModMatrixWindowClassRegistered = false;
@@ -162,16 +152,6 @@ const ModParameterInfo* getParameterInfo(int index)
     if (index < 0 || index >= static_cast<int>(kModParameters.size()))
         return nullptr;
     return &kModParameters[static_cast<size_t>(index)];
-}
-
-ModMatrixAssignment* findAssignment(int id)
-{
-    for (auto& assignment : gAssignments)
-    {
-        if (assignment.id == id)
-            return &assignment;
-    }
-    return nullptr;
 }
 
 std::wstring getSourceLabel(int index)
@@ -401,9 +381,11 @@ void repopulateAssignmentList(ModMatrixWindowState* state)
 
     ListView_DeleteAllItems(state->listView);
 
-    for (size_t i = 0; i < gAssignments.size(); ++i)
+    auto assignments = modMatrixGetAssignments();
+
+    for (size_t i = 0; i < assignments.size(); ++i)
     {
-        const auto& assignment = gAssignments[i];
+        const auto& assignment = assignments[i];
         std::wstring source = getSourceLabel(assignment.sourceIndex);
 
         LVITEMW item{};
@@ -419,22 +401,30 @@ void repopulateAssignmentList(ModMatrixWindowState* state)
         }
     }
 
-    if (!gAssignments.empty())
+    if (assignments.empty())
     {
-        for (int row = 0; row < ListView_GetItemCount(state->listView); ++row)
+        state->selectedAssignmentId = 0;
+        return;
+    }
+
+    bool selectionMatched = false;
+    int itemCount = ListView_GetItemCount(state->listView);
+    for (int row = 0; row < itemCount; ++row)
+    {
+        LVITEMW item{};
+        item.mask = LVIF_PARAM;
+        item.iItem = row;
+        if (ListView_GetItem(state->listView, &item) && item.lParam == state->selectedAssignmentId)
         {
-            LVITEMW item{};
-            item.mask = LVIF_PARAM;
-            item.iItem = row;
-            if (ListView_GetItem(state->listView, &item))
-            {
-                if (item.lParam == state->selectedAssignmentId)
-                {
-                    ListView_SetItemState(state->listView, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                    return;
-                }
-            }
+            ListView_SetItemState(state->listView, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            selectionMatched = true;
+            break;
         }
+    }
+
+    if (!selectionMatched)
+    {
+        state->selectedAssignmentId = assignments.front().id;
         ListView_SetItemState(state->listView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
 }
@@ -460,15 +450,17 @@ void enableAssignmentControls(ModMatrixWindowState* state, bool enable)
     }
 }
 
-void loadAssignmentIntoControls(ModMatrixWindowState* state, const ModMatrixAssignment* assignment)
+void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
 {
     if (!state)
         return;
 
+    auto assignment = modMatrixGetAssignment(assignmentId);
     if (!assignment)
     {
         enableAssignmentControls(state, false);
         SetWindowTextW(state->amountLabel, L"Mod Amount:");
+        populateTrackCombo(state->trackCombo, 0);
         return;
     }
 
@@ -487,8 +479,7 @@ ModMatrixWindowState* getWindowState(HWND hwnd)
 
 void addAssignment(ModMatrixWindowState* state)
 {
-    ModMatrixAssignment assignment;
-    assignment.id = gNextAssignmentId++;
+    ModMatrixAssignment assignment = modMatrixCreateAssignment();
     assignment.sourceIndex = 0;
     assignment.parameterIndex = 0;
     assignment.trackId = getActiveSequencerTrackId();
@@ -502,7 +493,7 @@ void addAssignment(ModMatrixWindowState* state)
     if (assignment.trackId > 0)
         syncAssignmentFromTrack(assignment);
 
-    gAssignments.push_back(assignment);
+    modMatrixUpdateAssignment(assignment);
 
     if (state)
         state->selectedAssignmentId = assignment.id;
@@ -513,19 +504,16 @@ void removeAssignment(ModMatrixWindowState* state, int assignmentId)
     if (assignmentId <= 0)
         return;
 
-    auto it = std::remove_if(gAssignments.begin(), gAssignments.end(), [assignmentId](const ModMatrixAssignment& value) {
-        return value.id == assignmentId;
-    });
-    if (it != gAssignments.end())
+    if (!modMatrixRemoveAssignment(assignmentId))
+        return;
+
+    if (state)
     {
-        gAssignments.erase(it, gAssignments.end());
-        if (state)
-        {
-            if (!gAssignments.empty())
-                state->selectedAssignmentId = gAssignments.front().id;
-            else
-                state->selectedAssignmentId = 0;
-        }
+        auto assignments = modMatrixGetAssignments();
+        if (!assignments.empty())
+            state->selectedAssignmentId = assignments.front().id;
+        else
+            state->selectedAssignmentId = 0;
     }
 }
 
@@ -683,17 +671,34 @@ void ensureModMatrixWindowClass()
                 SendMessageW(newState->amountSlider, TBM_SETTICFREQ, 100, 0);
             }
 
+            auto configureComboDropdown = [](HWND combo) {
+                if (!combo)
+                    return;
+#ifdef CB_SETMINVISIBLE
+                SendMessageW(combo, CB_SETMINVISIBLE, 8, 0);
+#endif
+            };
+
+            configureComboDropdown(newState->sourceCombo);
+            configureComboDropdown(newState->trackCombo);
+            configureComboDropdown(newState->parameterCombo);
+
             populateSourceCombo(newState->sourceCombo);
             populateParameterCombo(newState->parameterCombo);
             populateTrackCombo(newState->trackCombo, 0);
 
-            if (gAssignments.empty())
+            auto existingAssignments = modMatrixGetAssignments();
+            if (existingAssignments.empty())
             {
                 addAssignment(newState);
             }
+            else
+            {
+                newState->selectedAssignmentId = existingAssignments.front().id;
+            }
 
             repopulateAssignmentList(newState);
-            loadAssignmentIntoControls(newState, findAssignment(newState->selectedAssignmentId));
+            loadAssignmentIntoControls(newState, newState->selectedAssignmentId);
 
             RECT rect{};
             GetClientRect(hwnd, &rect);
@@ -778,21 +783,22 @@ void ensureModMatrixWindowClass()
             case kAddButtonId:
                 addAssignment(state);
                 repopulateAssignmentList(state);
-                loadAssignmentIntoControls(state, findAssignment(state->selectedAssignmentId));
+                loadAssignmentIntoControls(state, state->selectedAssignmentId);
                 return 0;
             case kRemoveButtonId:
                 removeAssignment(state, state->selectedAssignmentId);
                 repopulateAssignmentList(state);
-                loadAssignmentIntoControls(state, findAssignment(state->selectedAssignmentId));
+                loadAssignmentIntoControls(state, state->selectedAssignmentId);
                 return 0;
             case kSourceComboId:
                 if (code == CBN_SELCHANGE)
                 {
                     int data = getComboSelectionData(state->sourceCombo);
-                    ModMatrixAssignment* assignment = findAssignment(state->selectedAssignmentId);
+                    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
                     if (assignment && data >= 0)
                     {
                         assignment->sourceIndex = data;
+                        modMatrixUpdateAssignment(*assignment);
                         repopulateAssignmentList(state);
                     }
                 }
@@ -801,11 +807,12 @@ void ensureModMatrixWindowClass()
                 if (code == CBN_SELCHANGE)
                 {
                     int data = getComboSelectionData(state->trackCombo);
-                    ModMatrixAssignment* assignment = findAssignment(state->selectedAssignmentId);
+                    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
                     if (assignment)
                     {
                         assignment->trackId = data;
                         syncAssignmentFromTrack(*assignment);
+                        modMatrixUpdateAssignment(*assignment);
                         setSliderFromAssignment(state->amountSlider, *assignment);
                         updateAmountLabel(state->amountLabel, *assignment);
                         repopulateAssignmentList(state);
@@ -816,11 +823,12 @@ void ensureModMatrixWindowClass()
                 if (code == CBN_SELCHANGE)
                 {
                     int data = getComboSelectionData(state->parameterCombo);
-                    ModMatrixAssignment* assignment = findAssignment(state->selectedAssignmentId);
+                    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
                     if (assignment && data >= 0)
                     {
                         assignment->parameterIndex = data;
                         syncAssignmentFromTrack(*assignment);
+                        modMatrixUpdateAssignment(*assignment);
                         setSliderFromAssignment(state->amountSlider, *assignment);
                         updateAmountLabel(state->amountLabel, *assignment);
                         repopulateAssignmentList(state);
@@ -852,7 +860,7 @@ void ensureModMatrixWindowClass()
                         if (ListView_GetItem(state->listView, &item))
                         {
                             state->selectedAssignmentId = static_cast<int>(item.lParam);
-                            loadAssignmentIntoControls(state, findAssignment(state->selectedAssignmentId));
+                            loadAssignmentIntoControls(state, state->selectedAssignmentId);
                         }
                     }
                 }
@@ -867,12 +875,13 @@ void ensureModMatrixWindowClass()
             HWND slider = reinterpret_cast<HWND>(lParam);
             if (slider == state->amountSlider)
             {
-                ModMatrixAssignment* assignment = findAssignment(state->selectedAssignmentId);
+                auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
                 if (!assignment)
                     return 0;
 
                 int position = static_cast<int>(SendMessageW(state->amountSlider, TBM_GETPOS, 0, 0));
                 assignment->normalizedAmount = clampNormalized(static_cast<float>(position) / static_cast<float>(kSliderResolution));
+                modMatrixUpdateAssignment(*assignment);
                 applyAssignment(*assignment);
                 updateAmountLabel(state->amountLabel, *assignment);
 
@@ -896,7 +905,7 @@ void ensureModMatrixWindowClass()
             if (!state)
                 return 0;
 
-            ModMatrixAssignment* selection = findAssignment(state->selectedAssignmentId);
+            auto selection = modMatrixGetAssignment(state->selectedAssignmentId);
             int trackId = selection ? selection->trackId : 0;
             populateTrackCombo(state->trackCombo, trackId);
             repopulateAssignmentList(state);
@@ -908,15 +917,17 @@ void ensureModMatrixWindowClass()
                 return 0;
 
             int trackId = static_cast<int>(wParam);
-            for (auto& assignment : gAssignments)
+            auto assignments = modMatrixGetAssignments();
+            for (auto& assignment : assignments)
             {
                 if (trackId == 0 || assignment.trackId == trackId)
                 {
                     syncAssignmentFromTrack(assignment);
+                    modMatrixUpdateAssignment(assignment);
                 }
             }
 
-            ModMatrixAssignment* selected = findAssignment(state->selectedAssignmentId);
+            auto selected = modMatrixGetAssignment(state->selectedAssignmentId);
             if (selected)
             {
                 setSliderFromAssignment(state->amountSlider, *selected);
