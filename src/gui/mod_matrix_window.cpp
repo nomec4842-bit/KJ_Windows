@@ -345,71 +345,6 @@ std::wstring trimWhitespace(const std::wstring& text)
     return text.substr(start, end - start);
 }
 
-bool updateAssignmentAmountFromEdit(ModMatrixWindowState* state)
-{
-    if (!state || !state->amountEdit)
-        return false;
-
-    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
-    if (!assignment)
-        return false;
-
-    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment->parameterIndex);
-    if (!info)
-    {
-        SetWindowTextW(state->amountEdit, L"");
-        return false;
-    }
-
-    int length = GetWindowTextLengthW(state->amountEdit);
-    std::wstring buffer(static_cast<size_t>(length) + 1, L'\0');
-    if (length > 0)
-        GetWindowTextW(state->amountEdit, buffer.data(), length + 1);
-    buffer.resize(std::wcslen(buffer.c_str()));
-
-    std::wstring text = trimWhitespace(buffer);
-    if (text.empty())
-    {
-        assignment->normalizedAmount = 0.0f;
-    }
-    else
-    {
-        bool isPercent = false;
-        if (!text.empty() && text.back() == L'%')
-        {
-            isPercent = true;
-            text.pop_back();
-            text = trimWhitespace(text);
-        }
-
-        wchar_t* endPtr = nullptr;
-        float value = std::wcstof(text.c_str(), &endPtr);
-        if (endPtr == text.c_str())
-        {
-            setEditFromAssignment(state->amountEdit, *assignment);
-            return false;
-        }
-
-        if (isPercent)
-        {
-            float normalized = modMatrixClampNormalized(value / 100.0f);
-            assignment->normalizedAmount = normalized;
-        }
-        else
-        {
-            float normalized = modMatrixValueToNormalized(value, *info);
-            assignment->normalizedAmount = modMatrixClampNormalized(normalized);
-        }
-    }
-
-    modMatrixUpdateAssignment(*assignment);
-    setSliderFromAssignment(state->amountSlider, *assignment);
-    updateAmountLabel(state->amountLabel, *assignment);
-    setEditFromAssignment(state->amountEdit, *assignment);
-    repopulateAssignmentList(state);
-    return true;
-}
-
 void refreshAssignmentRowText(HWND listView, int rowIndex, const ModMatrixAssignment& assignment)
 {
     if (!listView)
@@ -480,6 +415,71 @@ void repopulateAssignmentList(ModMatrixWindowState* state)
         state->selectedAssignmentId = assignments.front().id;
         ListView_SetItemState(state->listView, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
+}
+
+bool updateAssignmentAmountFromEdit(ModMatrixWindowState* state)
+{
+    if (!state || !state->amountEdit)
+        return false;
+
+    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
+    if (!assignment)
+        return false;
+
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment->parameterIndex);
+    if (!info)
+    {
+        SetWindowTextW(state->amountEdit, L"");
+        return false;
+    }
+
+    int length = GetWindowTextLengthW(state->amountEdit);
+    std::wstring buffer(static_cast<size_t>(length) + 1, L'\0');
+    if (length > 0)
+        GetWindowTextW(state->amountEdit, buffer.data(), length + 1);
+    buffer.resize(std::wcslen(buffer.c_str()));
+
+    std::wstring text = trimWhitespace(buffer);
+    if (text.empty())
+    {
+        assignment->normalizedAmount = 0.0f;
+    }
+    else
+    {
+        bool isPercent = false;
+        if (!text.empty() && text.back() == L'%')
+        {
+            isPercent = true;
+            text.pop_back();
+            text = trimWhitespace(text);
+        }
+
+        wchar_t* endPtr = nullptr;
+        float value = std::wcstof(text.c_str(), &endPtr);
+        if (endPtr == text.c_str())
+        {
+            setEditFromAssignment(state->amountEdit, *assignment);
+            return false;
+        }
+
+        if (isPercent)
+        {
+            float normalized = modMatrixClampNormalized(value / 100.0f);
+            assignment->normalizedAmount = normalized;
+        }
+        else
+        {
+            float normalized = modMatrixValueToNormalized(value, *info);
+            assignment->normalizedAmount = modMatrixClampNormalized(normalized);
+        }
+    }
+
+    modMatrixUpdateAssignment(*assignment);
+    setSliderFromAssignment(state->amountSlider, *assignment);
+    updateAmountLabel(state->amountLabel, *assignment);
+    setEditFromAssignment(state->amountEdit, *assignment);
+    repopulateAssignmentList(state);
+    return true;
 }
 
 void enableAssignmentControls(ModMatrixWindowState* state, bool enable)
