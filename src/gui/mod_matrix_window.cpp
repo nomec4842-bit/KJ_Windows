@@ -10,12 +10,19 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef _WIN32_IE
+#define _WIN32_IE 0x0501
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0501
+#endif
 #include <windows.h>
 #include <commctrl.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -41,6 +48,11 @@ constexpr int kTrackComboId = 2005;
 constexpr int kParameterComboId = 2006;
 constexpr int kAmountLabelId = 2007;
 constexpr int kAmountSliderId = 2008;
+
+HMENU makeControlId(int id)
+{
+    return reinterpret_cast<HMENU>(static_cast<intptr_t>(id));
+}
 
 constexpr int kSliderResolution = 1000;
 
@@ -539,7 +551,7 @@ void ensureModMatrixWindowClass()
                                                 0,
                                                 0,
                                                 hwnd,
-                                                reinterpret_cast<HMENU>(kListViewId),
+                                                makeControlId(kListViewId),
                                                 createStruct->hInstance,
                                                 nullptr);
             if (newState->listView)
@@ -575,7 +587,7 @@ void ensureModMatrixWindowClass()
                                                   0,
                                                   0,
                                                   hwnd,
-                                                  reinterpret_cast<HMENU>(kAddButtonId),
+                                                  makeControlId(kAddButtonId),
                                                   createStruct->hInstance,
                                                   nullptr);
 
@@ -588,7 +600,7 @@ void ensureModMatrixWindowClass()
                                                      0,
                                                      0,
                                                      hwnd,
-                                                     reinterpret_cast<HMENU>(kRemoveButtonId),
+                                                     makeControlId(kRemoveButtonId),
                                                      createStruct->hInstance,
                                                      nullptr);
 
@@ -601,7 +613,7 @@ void ensureModMatrixWindowClass()
                                                     0,
                                                     0,
                                                     hwnd,
-                                                    reinterpret_cast<HMENU>(kSourceComboId),
+                                                    makeControlId(kSourceComboId),
                                                     createStruct->hInstance,
                                                     nullptr);
 
@@ -614,7 +626,7 @@ void ensureModMatrixWindowClass()
                                                    0,
                                                    0,
                                                    hwnd,
-                                                   reinterpret_cast<HMENU>(kTrackComboId),
+                                                   makeControlId(kTrackComboId),
                                                    createStruct->hInstance,
                                                    nullptr);
 
@@ -627,7 +639,7 @@ void ensureModMatrixWindowClass()
                                                        0,
                                                        0,
                                                        hwnd,
-                                                       reinterpret_cast<HMENU>(kParameterComboId),
+                                                       makeControlId(kParameterComboId),
                                                        createStruct->hInstance,
                                                        nullptr);
 
@@ -640,7 +652,7 @@ void ensureModMatrixWindowClass()
                                                     0,
                                                     0,
                                                     hwnd,
-                                                    reinterpret_cast<HMENU>(kAmountLabelId),
+                                                    makeControlId(kAmountLabelId),
                                                     createStruct->hInstance,
                                                     nullptr);
 
@@ -653,7 +665,7 @@ void ensureModMatrixWindowClass()
                                                      0,
                                                      0,
                                                      hwnd,
-                                                     reinterpret_cast<HMENU>(kAmountSliderId),
+                                                     makeControlId(kAmountSliderId),
                                                      createStruct->hInstance,
                                                      nullptr);
             if (newState->amountSlider)
