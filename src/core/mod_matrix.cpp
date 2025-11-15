@@ -109,35 +109,17 @@ void modMatrixClearAssignments()
     gNextAssignmentId = 1;
 }
 
-void modMatrixApplyAssignment(const ModMatrixAssignment& assignment)
+void modMatrixApplyAssignment(const ModMatrixAssignment&)
 {
-    if (assignment.trackId <= 0)
-        return;
-
-    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
-    if (!info || !info->setter)
-        return;
-
-    float value = modMatrixNormalizedToValue(assignment.normalizedAmount, *info);
-    info->setter(assignment.trackId, value);
+    // Runtime modulation is now handled directly inside the audio engine.
 }
 
-void modMatrixApplyAssignmentsForTrack(int trackId)
+void modMatrixApplyAssignmentsForTrack(int)
 {
-    if (trackId <= 0)
-        return;
-
-    auto assignments = modMatrixGetAssignments();
-    for (const auto& assignment : assignments)
-    {
-        if (assignment.trackId == trackId)
-            modMatrixApplyAssignment(assignment);
-    }
+    // Runtime modulation is now handled directly inside the audio engine.
 }
 
 void modMatrixApplyAllAssignments()
 {
-    auto assignments = modMatrixGetAssignments();
-    for (const auto& assignment : assignments)
-        modMatrixApplyAssignment(assignment);
+    // Runtime modulation is now handled directly inside the audio engine.
 }

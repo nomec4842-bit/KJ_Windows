@@ -9,7 +9,7 @@ struct ModMatrixAssignment
     int sourceIndex = 0;
     int trackId = 0;
     int parameterIndex = 0;
-    float normalizedAmount = 0.5f;
+    float normalizedAmount = 0.0f;
 };
 
 std::vector<ModMatrixAssignment> modMatrixGetAssignments();

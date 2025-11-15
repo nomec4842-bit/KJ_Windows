@@ -101,21 +101,23 @@ bool modMatrixParameterSupportsTrackType(const ModParameterInfo& info, TrackType
 
 float modMatrixClampNormalized(float normalized)
 {
-    return std::clamp(normalized, 0.0f, 1.0f);
+    return std::clamp(normalized, -1.0f, 1.0f);
 }
 
 float modMatrixNormalizedToValue(float normalized, const ModParameterInfo& info)
 {
-    float clamped = modMatrixClampNormalized(normalized);
-    return info.minValue + (info.maxValue - info.minValue) * clamped;
+    float depth = modMatrixClampNormalized(normalized);
+    float range = info.maxValue - info.minValue;
+    return depth * range;
 }
 
 float modMatrixValueToNormalized(float value, const ModParameterInfo& info)
 {
-    if (info.maxValue <= info.minValue)
+    float range = info.maxValue - info.minValue;
+    if (range <= 0.0f)
         return 0.0f;
 
-    float clamped = std::clamp(value, info.minValue, info.maxValue);
-    return (clamped - info.minValue) / (info.maxValue - info.minValue);
+    float clamped = std::clamp(value, -range, range);
+    return modMatrixClampNormalized(clamped / range);
 }
 
