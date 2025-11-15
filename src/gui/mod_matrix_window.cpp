@@ -68,7 +68,17 @@ struct ModParameterInfo
     ParameterSetter setter;
     float minValue;
     float maxValue;
+    uint32_t trackTypeMask;
 };
+
+constexpr uint32_t trackTypeToMask(TrackType type)
+{
+    return 1u << static_cast<uint32_t>(type);
+}
+
+constexpr uint32_t kTrackTypeMaskAll = trackTypeToMask(TrackType::Synth) | trackTypeToMask(TrackType::Sample) |
+                                        trackTypeToMask(TrackType::MidiOut) | trackTypeToMask(TrackType::VST);
+constexpr uint32_t kTrackTypeMaskSynth = trackTypeToMask(TrackType::Synth);
 
 constexpr std::array<const wchar_t*, 6> kModSources = {
     L"LFO 1",
@@ -80,20 +90,20 @@ constexpr std::array<const wchar_t*, 6> kModSources = {
 };
 
 constexpr std::array<ModParameterInfo, 14> kModParameters = {
-    ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f},
-    ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f},
-    ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f},
-    ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f},
-    ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f},
-    ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f},
-    ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f},
-    ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f},
-    ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f},
-    ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f},
-    ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f},
-    ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f},
-    ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f},
-    ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f},
+    ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f, kTrackTypeMaskAll},
+    ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f, kTrackTypeMaskAll},
+    ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f, kTrackTypeMaskSynth},
+    ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f, kTrackTypeMaskAll},
+    ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f, kTrackTypeMaskAll},
+    ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f, kTrackTypeMaskAll},
 };
 
 HWND gModMatrixWindow = nullptr;
@@ -145,6 +155,13 @@ bool trackExists(int trackId)
         return false;
     auto tracks = getTracks();
     return std::any_of(tracks.begin(), tracks.end(), [trackId](const Track& track) { return track.id == trackId; });
+}
+
+std::optional<TrackType> getTrackTypeForTrack(int trackId)
+{
+    if (!trackExists(trackId))
+        return std::nullopt;
+    return trackGetType(trackId);
 }
 
 const ModParameterInfo* getParameterInfo(int index)
@@ -240,7 +257,7 @@ void populateSourceCombo(HWND combo)
     }
 }
 
-void populateParameterCombo(HWND combo)
+void populateParameterCombo(HWND combo, std::optional<TrackType> trackType = std::nullopt)
 {
     if (!combo)
         return;
@@ -248,7 +265,15 @@ void populateParameterCombo(HWND combo)
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     for (size_t i = 0; i < kModParameters.size(); ++i)
     {
-        const wchar_t* label = kModParameters[i].label;
+        const auto& info = kModParameters[i];
+        if (trackType)
+        {
+            uint32_t mask = trackTypeToMask(*trackType);
+            if ((info.trackTypeMask & mask) == 0)
+                continue;
+        }
+
+        const wchar_t* label = info.label;
         LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
         if (index >= 0)
             SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(i));
@@ -307,10 +332,10 @@ int getComboSelectionData(HWND combo)
     return static_cast<int>(SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(index), 0));
 }
 
-void setComboSelectionByData(HWND combo, int data)
+bool setComboSelectionByData(HWND combo, int data)
 {
     if (!combo)
-        return;
+        return false;
 
     int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
     for (int i = 0; i < count; ++i)
@@ -319,9 +344,11 @@ void setComboSelectionByData(HWND combo, int data)
         if (itemData == data)
         {
             SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(i), 0);
-            return;
+            return true;
         }
     }
+
+    return false;
 }
 
 void setSliderFromAssignment(HWND slider, const ModMatrixAssignment& assignment)
@@ -467,7 +494,35 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     enableAssignmentControls(state, true);
     setComboSelectionByData(state->sourceCombo, assignment->sourceIndex);
     populateTrackCombo(state->trackCombo, assignment->trackId);
-    setComboSelectionByData(state->parameterCombo, assignment->parameterIndex);
+    auto trackType = getTrackTypeForTrack(assignment->trackId);
+    populateParameterCombo(state->parameterCombo, trackType);
+
+    bool parameterSelectionSet = setComboSelectionByData(state->parameterCombo, assignment->parameterIndex);
+    bool parameterChanged = false;
+    if (!parameterSelectionSet)
+    {
+        SendMessageW(state->parameterCombo, CB_SETCURSEL, 0, 0);
+        int fallbackParameter = getComboSelectionData(state->parameterCombo);
+        if (fallbackParameter >= 0 && fallbackParameter != assignment->parameterIndex)
+        {
+            assignment->parameterIndex = fallbackParameter;
+            parameterChanged = true;
+        }
+    }
+
+    if (parameterChanged)
+    {
+        syncAssignmentFromTrack(*assignment);
+        modMatrixUpdateAssignment(*assignment);
+
+        if (state->listView)
+        {
+            int selectedRow = ListView_GetNextItem(state->listView, -1, LVNI_SELECTED);
+            if (selectedRow >= 0)
+                refreshAssignmentRowText(state->listView, selectedRow, *assignment);
+        }
+    }
+
     setSliderFromAssignment(state->amountSlider, *assignment);
     updateAmountLabel(state->amountLabel, *assignment);
 }
@@ -811,6 +866,18 @@ void ensureModMatrixWindowClass()
                     if (assignment)
                     {
                         assignment->trackId = data;
+                        auto trackType = getTrackTypeForTrack(data);
+                        populateParameterCombo(state->parameterCombo, trackType);
+
+                        bool parameterSelectionSet = setComboSelectionByData(state->parameterCombo, assignment->parameterIndex);
+                        if (!parameterSelectionSet)
+                        {
+                            SendMessageW(state->parameterCombo, CB_SETCURSEL, 0, 0);
+                            int fallbackParameter = getComboSelectionData(state->parameterCombo);
+                            if (fallbackParameter >= 0)
+                                assignment->parameterIndex = fallbackParameter;
+                        }
+
                         syncAssignmentFromTrack(*assignment);
                         modMatrixUpdateAssignment(*assignment);
                         setSliderFromAssignment(state->amountSlider, *assignment);
