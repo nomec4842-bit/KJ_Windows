@@ -495,6 +495,13 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     if (!state)
         return;
 
+    if (state->sourceCombo)
+    {
+        LRESULT count = SendMessageW(state->sourceCombo, CB_GETCOUNT, 0, 0);
+        if (count <= 0)
+            populateSourceCombo(state->sourceCombo);
+    }
+
     auto assignment = modMatrixGetAssignment(assignmentId);
     if (!assignment)
     {
@@ -508,7 +515,24 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     }
 
     enableAssignmentControls(state, true);
-    setComboSelectionByData(state->sourceCombo, assignment->sourceIndex);
+    bool sourceSelectionSet = setComboSelectionByData(state->sourceCombo, assignment->sourceIndex);
+    if (!sourceSelectionSet)
+    {
+        SendMessageW(state->sourceCombo, CB_SETCURSEL, 0, 0);
+        int fallbackSource = getComboSelectionData(state->sourceCombo);
+        if (fallbackSource >= 0 && fallbackSource != assignment->sourceIndex)
+        {
+            assignment->sourceIndex = fallbackSource;
+            modMatrixUpdateAssignment(*assignment);
+
+            if (state->listView)
+            {
+                int selectedRow = ListView_GetNextItem(state->listView, -1, LVNI_SELECTED);
+                if (selectedRow >= 0)
+                    refreshAssignmentRowText(state->listView, selectedRow, *assignment);
+            }
+        }
+    }
     bool trackUpdated = false;
     if (!trackExists(assignment->trackId))
     {
