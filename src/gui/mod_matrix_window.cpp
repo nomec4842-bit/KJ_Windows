@@ -53,6 +53,8 @@ constexpr int kAmountLabelId = 2006;
 constexpr int kAmountSliderId = 2007;
 constexpr int kAmountEditId = 2008;
 
+constexpr int kComboDropdownHeight = 200;
+
 HMENU makeControlId(int id)
 {
     return reinterpret_cast<HMENU>(static_cast<intptr_t>(id));
@@ -667,7 +669,7 @@ void ensureModMatrixWindowClass()
                                                     0,
                                                     0,
                                                     0,
-                                                    0,
+                                                    kComboDropdownHeight,
                                                     hwnd,
                                                     makeControlId(kSourceComboId),
                                                     createStruct->hInstance,
@@ -680,7 +682,7 @@ void ensureModMatrixWindowClass()
                                                        0,
                                                        0,
                                                        0,
-                                                       0,
+                                                       kComboDropdownHeight,
                                                        hwnd,
                                                        makeControlId(kParameterComboId),
                                                        createStruct->hInstance,
