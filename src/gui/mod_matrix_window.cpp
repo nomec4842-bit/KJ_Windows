@@ -406,7 +406,7 @@ void repopulateAssignmentList(ModMatrixWindowState* state)
         item.pszText = const_cast<wchar_t*>(source.c_str());
         item.lParam = assignment.id;
 
-        int inserted = ListView_InsertItemW(state->listView, &item);
+        int inserted = ListView_InsertItem(state->listView, &item);
         if (inserted >= 0)
         {
             refreshAssignmentRowText(state->listView, inserted, assignment);
@@ -563,19 +563,19 @@ void ensureModMatrixWindowClass()
 
                 column.cx = 120;
                 column.pszText = const_cast<wchar_t*>(L"Source");
-                ListView_InsertColumnW(newState->listView, 0, &column);
+                ListView_InsertColumn(newState->listView, 0, &column);
 
                 column.cx = 150;
                 column.pszText = const_cast<wchar_t*>(L"Target");
-                ListView_InsertColumnW(newState->listView, 1, &column);
+                ListView_InsertColumn(newState->listView, 1, &column);
 
                 column.cx = 140;
                 column.pszText = const_cast<wchar_t*>(L"Parameter");
-                ListView_InsertColumnW(newState->listView, 2, &column);
+                ListView_InsertColumn(newState->listView, 2, &column);
 
                 column.cx = 120;
                 column.pszText = const_cast<wchar_t*>(L"Amount");
-                ListView_InsertColumnW(newState->listView, 3, &column);
+                ListView_InsertColumn(newState->listView, 3, &column);
             }
 
             newState->addButton = CreateWindowExW(0,
