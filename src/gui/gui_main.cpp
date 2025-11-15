@@ -7,6 +7,7 @@
 #include "gui/gui_refresh.h"
 #include "gui/menu_commands.h"
 #include "gui/compressor_window.h"
+#include "gui/mod_matrix_window.h"
 #include "gui/waveform_window.h"
 #include "hosting/VST3Host.h"
 #include "wdl/lice/lice.h"
@@ -106,7 +107,7 @@ std::filesystem::path getDefaultVstPluginPath()
 
 void notifyEffectsWindowTrackValuesChanged(int trackId)
 {
-    (void)trackId;
+    notifyModMatrixWindowValuesChanged(trackId);
     // TODO: update FX window when track parameters change.
 }
 
@@ -270,6 +271,9 @@ void updateViewMenuChecks()
 
     UINT waveformState = isWaveformWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
     CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
+
+    UINT modMatrixState = isModMatrixWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleModMatrix, MF_BYCOMMAND | modMatrixState);
 }
 
 constexpr UINT kMenuCommandLoadProject = 1001;
@@ -4478,6 +4482,7 @@ void notifyEffectsWindowTrackListChanged()
     notifySidechainWindowTrackChanged(activeTrack);
     notifyEqWindowTrackChanged(activeTrack);
     notifyDelayWindowTrackChanged(activeTrack);
+    notifyModMatrixWindowTrackListChanged();
 }
 
 void notifyEffectsWindowActiveTrackChanged(int trackId)
@@ -5889,6 +5894,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     AppendMenuW(viewMenu, MF_STRING, kMenuCommandTogglePianoRoll, L"&Piano Roll");
                     AppendMenuW(viewMenu, MF_STRING, kMenuCommandToggleEffects, L"Track &Effects");
                     AppendMenuW(viewMenu, MF_STRING, kMenuCommandToggleWaveform, L"&Waveform Visualizer");
+                    AppendMenuW(viewMenu, MF_STRING, kMenuCommandToggleModMatrix, L"&Mod Matrix");
                     AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"&View");
                     updateViewMenuChecks();
                 }
@@ -5919,6 +5925,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         case kMenuCommandToggleWaveform:
             toggleWaveformWindow(hwnd);
+            return 0;
+        case kMenuCommandToggleModMatrix:
+            toggleModMatrixWindow(hwnd);
             return 0;
         default:
             break;
