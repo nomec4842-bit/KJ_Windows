@@ -102,34 +102,6 @@ float clampLfoRate(float value)
     return std::clamp(value, kMinLfoRateHz, kMaxLfoRateHz);
 }
 
-const char* lfoShapeToString(LfoShape shape)
-{
-    switch (shape)
-    {
-    case LfoShape::Sine:
-        return "sine";
-    case LfoShape::Triangle:
-        return "triangle";
-    case LfoShape::Saw:
-        return "saw";
-    case LfoShape::Square:
-        return "square";
-    }
-
-    return "sine";
-}
-
-LfoShape lfoShapeFromString(const std::string& text)
-{
-    if (text == "triangle")
-        return LfoShape::Triangle;
-    if (text == "saw")
-        return LfoShape::Saw;
-    if (text == "square")
-        return LfoShape::Square;
-    return LfoShape::Sine;
-}
-
 struct TrackData
 {
     explicit TrackData(Track baseTrack)
@@ -336,6 +308,34 @@ std::shared_ptr<TrackData> findTrackData(int trackId)
 }
 
 } // namespace
+
+const char* lfoShapeToString(LfoShape shape)
+{
+    switch (shape)
+    {
+    case LfoShape::Sine:
+        return "sine";
+    case LfoShape::Triangle:
+        return "triangle";
+    case LfoShape::Saw:
+        return "saw";
+    case LfoShape::Square:
+        return "square";
+    }
+
+    return "sine";
+}
+
+LfoShape lfoShapeFromString(const std::string& text)
+{
+    if (text == "triangle")
+        return LfoShape::Triangle;
+    if (text == "saw")
+        return LfoShape::Saw;
+    if (text == "square")
+        return LfoShape::Square;
+    return LfoShape::Sine;
+}
 
 void initTracks()
 {
