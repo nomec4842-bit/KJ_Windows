@@ -86,12 +86,18 @@ constexpr std::array<const wchar_t*, 6> kModSources = {
     L"Macro 2"
 };
 
-constexpr std::array<ModParameterInfo, 8> kModParameters = {
+constexpr std::array<ModParameterInfo, 13> kModParameters = {
     ModParameterInfo{L"Volume", trackGetVolume, trackSetVolume, 0.0f, 1.0f},
     ModParameterInfo{L"Pan", trackGetPan, trackSetPan, -1.0f, 1.0f},
     ModParameterInfo{L"Synth Pitch", trackGetSynthPitch, trackSetSynthPitch, -12.0f, 12.0f},
     ModParameterInfo{L"Synth Formant", trackGetSynthFormant, trackSetSynthFormant, 0.0f, 1.0f},
     ModParameterInfo{L"Synth Resonance", trackGetSynthResonance, trackSetSynthResonance, 0.0f, 1.0f},
+    ModParameterInfo{L"Synth Feedback", trackGetSynthFeedback, trackSetSynthFeedback, 0.0f, 1.0f},
+    ModParameterInfo{L"Synth Pitch Range", trackGetSynthPitchRange, trackSetSynthPitchRange, 1.0f, 24.0f},
+    ModParameterInfo{L"Synth Attack", trackGetSynthAttack, trackSetSynthAttack, 0.0f, 4.0f},
+    ModParameterInfo{L"Synth Decay", trackGetSynthDecay, trackSetSynthDecay, 0.0f, 4.0f},
+    ModParameterInfo{L"Synth Sustain", trackGetSynthSustain, trackSetSynthSustain, 0.0f, 1.0f},
+    ModParameterInfo{L"Synth Release", trackGetSynthRelease, trackSetSynthRelease, 0.0f, 4.0f},
     ModParameterInfo{L"Delay Mix", trackGetDelayMix, trackSetDelayMix, 0.0f, 1.0f},
     ModParameterInfo{L"Compressor Threshold", trackGetCompressorThresholdDb, trackSetCompressorThresholdDb, -60.0f, 0.0f},
     ModParameterInfo{L"Compressor Ratio", trackGetCompressorRatio, trackSetCompressorRatio, 1.0f, 20.0f},
