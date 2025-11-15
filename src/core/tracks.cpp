@@ -79,6 +79,11 @@ constexpr float kMinSampleEnvelopeTime = 0.0f;
 constexpr float kMaxSampleEnvelopeTime = 4.0f;
 constexpr float kDefaultSampleAttack = 0.005f;
 constexpr float kDefaultSampleRelease = 0.3f;
+constexpr float kMinLfoRateHz = 0.05f;
+constexpr float kMaxLfoRateHz = 20.0f;
+constexpr float kDefaultLfoDeform = 0.0f;
+constexpr std::array<float, 3> kDefaultLfoRatesHz = {0.5f, 1.0f, 2.0f};
+constexpr std::array<LfoShape, 3> kDefaultLfoShapes = {LfoShape::Sine, LfoShape::Sine, LfoShape::Sine};
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
 constexpr int kDefaultMidiNote = 69; // A4
@@ -90,6 +95,39 @@ constexpr int kDefaultMidiPort = -1;
 int clampMidiNote(int note)
 {
     return std::clamp(note, kMinMidiNote, kMaxMidiNote);
+}
+
+float clampLfoRate(float value)
+{
+    return std::clamp(value, kMinLfoRateHz, kMaxLfoRateHz);
+}
+
+const char* lfoShapeToString(LfoShape shape)
+{
+    switch (shape)
+    {
+    case LfoShape::Sine:
+        return "sine";
+    case LfoShape::Triangle:
+        return "triangle";
+    case LfoShape::Saw:
+        return "saw";
+    case LfoShape::Square:
+        return "square";
+    }
+
+    return "sine";
+}
+
+LfoShape lfoShapeFromString(const std::string& text)
+{
+    if (text == "triangle")
+        return LfoShape::Triangle;
+    if (text == "saw")
+        return LfoShape::Saw;
+    if (text == "square")
+        return LfoShape::Square;
+    return LfoShape::Sine;
 }
 
 struct TrackData
@@ -136,6 +174,12 @@ struct TrackData
         track.synthPhaseSync = false;
         track.sampleAttack = kDefaultSampleAttack;
         track.sampleRelease = kDefaultSampleRelease;
+        for (size_t i = 0; i < track.lfoSettings.size(); ++i)
+        {
+            track.lfoSettings[i].rateHz = kDefaultLfoRatesHz[i];
+            track.lfoSettings[i].shape = kDefaultLfoShapes[i];
+            track.lfoSettings[i].deform = kDefaultLfoDeform;
+        }
         track.midiChannel = kDefaultMidiChannel;
         track.midiPort = kDefaultMidiPort;
         track.midiPortName.clear();
@@ -143,6 +187,12 @@ struct TrackData
         track.vstHost = vstHost;
 
         stepCount.store(kSequencerStepsPerPage, std::memory_order_relaxed);
+        for (size_t i = 0; i < lfoRateHz.size(); ++i)
+        {
+            lfoRateHz[i].store(kDefaultLfoRatesHz[i], std::memory_order_relaxed);
+            lfoShape[i].store(kDefaultLfoShapes[i], std::memory_order_relaxed);
+            lfoDeform[i].store(kDefaultLfoDeform, std::memory_order_relaxed);
+        }
         for (int i = 0; i < kMaxSequencerSteps; ++i)
         {
             bool enabled = (i < kSequencerStepsPerPage) ? (i % 4 == 0) : false;
@@ -197,6 +247,9 @@ struct TrackData
     std::atomic<bool> synthPhaseSync{false};
     std::atomic<float> sampleAttack{kDefaultSampleAttack};
     std::atomic<float> sampleRelease{kDefaultSampleRelease};
+    std::array<std::atomic<float>, kDefaultLfoRatesHz.size()> lfoRateHz;
+    std::array<std::atomic<LfoShape>, kDefaultLfoShapes.size()> lfoShape;
+    std::array<std::atomic<float>, kDefaultLfoRatesHz.size()> lfoDeform;
     std::array<std::atomic<bool>, kMaxSequencerSteps> steps{};
     std::array<std::atomic<int>, kMaxSequencerSteps> notes{};
     struct StepNoteEntry
@@ -359,6 +412,12 @@ std::vector<Track> getTracks()
         info.synthPhaseSync = track->synthPhaseSync.load(std::memory_order_relaxed);
         info.sampleAttack = track->sampleAttack.load(std::memory_order_relaxed);
         info.sampleRelease = track->sampleRelease.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < info.lfoSettings.size(); ++i)
+        {
+            info.lfoSettings[i].rateHz = track->lfoRateHz[i].load(std::memory_order_relaxed);
+            info.lfoSettings[i].shape = track->lfoShape[i].load(std::memory_order_relaxed);
+            info.lfoSettings[i].deform = track->lfoDeform[i].load(std::memory_order_relaxed);
+        }
         info.midiChannel = track->midiChannel.load(std::memory_order_relaxed);
         info.midiPort = track->midiPort.load(std::memory_order_relaxed);
         {
@@ -1556,6 +1615,85 @@ void trackSetSynthPhaseSync(int trackId, bool enabled)
 
     track->synthPhaseSync.store(enabled, std::memory_order_relaxed);
     track->track.synthPhaseSync = enabled;
+}
+
+float trackGetLfoRate(int trackId, int index)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
+        return kDefaultLfoRatesHz[0];
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultLfoRatesHz[static_cast<size_t>(index)];
+
+    float value = track->lfoRateHz[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+    return clampLfoRate(value);
+}
+
+void trackSetLfoRate(int trackId, int index, float value)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = clampLfoRate(value);
+    track->lfoRateHz[static_cast<size_t>(index)].store(clamped, std::memory_order_relaxed);
+    track->track.lfoSettings[static_cast<size_t>(index)].rateHz = clamped;
+}
+
+LfoShape trackGetLfoShape(int trackId, int index)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoShapes.size()))
+        return kDefaultLfoShapes[0];
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultLfoShapes[static_cast<size_t>(index)];
+
+    return track->lfoShape[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+}
+
+void trackSetLfoShape(int trackId, int index, LfoShape shape)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoShapes.size()))
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    track->lfoShape[static_cast<size_t>(index)].store(shape, std::memory_order_relaxed);
+    track->track.lfoSettings[static_cast<size_t>(index)].shape = shape;
+}
+
+float trackGetLfoDeform(int trackId, int index)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
+        return kDefaultLfoDeform;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return kDefaultLfoDeform;
+
+    float value = track->lfoDeform[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+void trackSetLfoDeform(int trackId, int index, float value)
+{
+    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
+        return;
+
+    auto track = findTrackData(trackId);
+    if (!track)
+        return;
+
+    float clamped = std::clamp(value, 0.0f, 1.0f);
+    track->lfoDeform[static_cast<size_t>(index)].store(clamped, std::memory_order_relaxed);
+    track->track.lfoSettings[static_cast<size_t>(index)].deform = clamped;
 }
 
 float trackGetSampleAttack(int trackId)

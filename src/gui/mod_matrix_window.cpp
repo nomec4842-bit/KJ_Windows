@@ -4,6 +4,7 @@
 #include "core/sequencer.h"
 #include "core/tracks.h"
 #include "gui/gui_main.h"
+#include "gui/lfo_window.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -52,6 +53,7 @@ constexpr int kParameterComboId = 2005;
 constexpr int kAmountLabelId = 2006;
 constexpr int kAmountSliderId = 2007;
 constexpr int kAmountEditId = 2008;
+constexpr int kLfoButtonId = 2009;
 
 constexpr int kComboDropdownHeight = 200;
 
@@ -85,6 +87,7 @@ struct ModMatrixWindowState
     HWND amountLabel = nullptr;
     HWND amountSlider = nullptr;
     HWND amountEdit = nullptr;
+    HWND lfoButton = nullptr;
     int selectedAssignmentId = 0;
 };
 
@@ -481,6 +484,7 @@ void enableAssignmentControls(ModMatrixWindowState* state, bool enable)
         state->amountSlider,
         state->amountEdit,
         state->removeButton,
+        state->lfoButton,
     };
 
     for (HWND control : controls)
@@ -511,10 +515,14 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
         SetWindowTextW(state->amountLabel, L"Mod Amount:");
         if (state->amountEdit)
             SetWindowTextW(state->amountEdit, L"");
+        if (state->lfoButton)
+            EnableWindow(state->lfoButton, FALSE);
         return;
     }
 
     enableAssignmentControls(state, true);
+    if (state->lfoButton)
+        EnableWindow(state->lfoButton, assignment->trackId > 0 ? TRUE : FALSE);
     bool sourceSelectionSet = setComboSelectionByData(state->sourceCombo, assignment->sourceIndex);
     if (!sourceSelectionSet)
     {
@@ -585,6 +593,9 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     setSliderFromAssignment(state->amountSlider, *assignment);
     updateAmountLabel(state->amountLabel, *assignment);
     setEditFromAssignment(state->amountEdit, *assignment);
+
+    if (assignment->trackId > 0)
+        notifyLfoWindowTrackChanged(assignment->trackId);
 }
 
 ModMatrixWindowState* getWindowState(HWND hwnd)
@@ -693,6 +704,19 @@ void ensureModMatrixWindowClass()
                                                      makeControlId(kRemoveButtonId),
                                                      createStruct->hInstance,
                                                      nullptr);
+
+            newState->lfoButton = CreateWindowExW(0,
+                                                  L"BUTTON",
+                                                  L"Edit LFOs...",
+                                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  hwnd,
+                                                  makeControlId(kLfoButtonId),
+                                                  createStruct->hInstance,
+                                                  nullptr);
 
             newState->sourceCombo = CreateWindowExW(0,
                                                     WC_COMBOBOXW,
@@ -839,6 +863,13 @@ void ensureModMatrixWindowClass()
                 MoveWindow(state->addButton, padding, buttonY, buttonWidth, buttonHeight, TRUE);
             if (state->removeButton)
                 MoveWindow(state->removeButton, padding + buttonWidth + buttonSpacing, buttonY, buttonWidth, buttonHeight, TRUE);
+            if (state->lfoButton)
+                MoveWindow(state->lfoButton,
+                           padding + (buttonWidth + buttonSpacing) * 2,
+                           buttonY,
+                           buttonWidth,
+                           buttonHeight,
+                           TRUE);
 
             int formY = buttonY + buttonHeight + buttonSpacing;
 
@@ -884,6 +915,28 @@ void ensureModMatrixWindowClass()
                 repopulateAssignmentList(state);
                 loadAssignmentIntoControls(state, state->selectedAssignmentId);
                 return 0;
+            case kLfoButtonId:
+            {
+                int targetTrackId = 0;
+                auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
+                if (assignment && assignment->trackId > 0)
+                    targetTrackId = assignment->trackId;
+
+                if (targetTrackId <= 0)
+                {
+                    targetTrackId = getActiveSequencerTrackId();
+                    if (targetTrackId <= 0)
+                    {
+                        auto tracks = getTracks();
+                        if (!tracks.empty())
+                            targetTrackId = tracks.front().id;
+                    }
+                }
+
+                if (targetTrackId > 0)
+                    openLfoWindow(hwnd, targetTrackId);
+                return 0;
+            }
             case kSourceComboId:
                 if (code == CBN_SELCHANGE)
                 {

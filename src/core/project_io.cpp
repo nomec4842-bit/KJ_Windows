@@ -733,6 +733,21 @@ bool saveProjectToFile(const std::filesystem::path& path)
         stream << "      \"phaseSync\": " << (synthPhaseSync ? "true" : "false") << ",\n";
         stream << "      \"sampleAttack\": " << formatFloat(sampleAttack) << ",\n";
         stream << "      \"sampleRelease\": " << formatFloat(sampleRelease) << ",\n";
+        stream << "      \"lfos\": [\n";
+        for (size_t lfoIndex = 0; lfoIndex < track.lfoSettings.size(); ++lfoIndex)
+        {
+            float rate = trackGetLfoRate(track.id, static_cast<int>(lfoIndex));
+            LfoShape shape = trackGetLfoShape(track.id, static_cast<int>(lfoIndex));
+            float deform = trackGetLfoDeform(track.id, static_cast<int>(lfoIndex));
+
+            stream << "        {\n";
+            stream << "          \"index\": " << lfoIndex << ",\n";
+            stream << "          \"rateHz\": " << formatFloat(rate) << ",\n";
+            stream << "          \"shape\": \"" << lfoShapeToString(shape) << "\",\n";
+            stream << "          \"deform\": " << formatFloat(deform) << "\n";
+            stream << "        }" << (lfoIndex + 1 < track.lfoSettings.size() ? ",\n" : "\n");
+        }
+        stream << "      ],\n";
         stream << "      \"midiChannel\": " << midiChannel << ",\n";
         stream << "      \"midiPort\": " << midiPort << ",\n";
         stream << "      \"midiPortName\": \"" << escapeJsonString(midiPortNameUtf8) << "\",\n";
@@ -923,6 +938,27 @@ bool loadProjectFromFile(const std::filesystem::path& path)
         trackSetSynthPhaseSync(trackId, jsonToBool(findMember(trackObject, "phaseSync"), trackGetSynthPhaseSync(trackId)));
         trackSetSampleAttack(trackId, jsonToFloat(findMember(trackObject, "sampleAttack"), trackGetSampleAttack(trackId)));
         trackSetSampleRelease(trackId, jsonToFloat(findMember(trackObject, "sampleRelease"), trackGetSampleRelease(trackId)));
+        const JsonValue* lfosValue = findMember(trackObject, "lfos");
+        if (lfosValue && lfosValue->isArray())
+        {
+            for (const auto& lfoValue : lfosValue->asArray())
+            {
+                if (!lfoValue.isObject())
+                    continue;
+
+                const auto& lfoObject = lfoValue.asObject();
+                int index = jsonToInt(findMember(lfoObject, "index"), -1);
+                if (index < 0)
+                    continue;
+
+                float rateHz = jsonToFloat(findMember(lfoObject, "rateHz"), trackGetLfoRate(trackId, index));
+                trackSetLfoRate(trackId, index, rateHz);
+                LfoShape shape = lfoShapeFromString(jsonToString(findMember(lfoObject, "shape")));
+                trackSetLfoShape(trackId, index, shape);
+                float deform = jsonToFloat(findMember(lfoObject, "deform"), trackGetLfoDeform(trackId, index));
+                trackSetLfoDeform(trackId, index, deform);
+            }
+        }
         trackSetDelayEnabled(trackId, jsonToBool(findMember(trackObject, "delayEnabled"), trackGetDelayEnabled(trackId)));
         trackSetDelayTimeMs(trackId, jsonToFloat(findMember(trackObject, "delayTimeMs"), trackGetDelayTimeMs(trackId)));
         trackSetDelayFeedback(trackId, jsonToFloat(findMember(trackObject, "delayFeedback"), trackGetDelayFeedback(trackId)));
