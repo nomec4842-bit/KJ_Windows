@@ -24,6 +24,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cwchar>
+#include <cwctype>
 #include <iomanip>
 #include <memory>
 #include <optional>
@@ -50,6 +52,7 @@ constexpr int kTrackComboId = 2005;
 constexpr int kParameterComboId = 2006;
 constexpr int kAmountLabelId = 2007;
 constexpr int kAmountSliderId = 2008;
+constexpr int kAmountEditId = 2009;
 
 HMENU makeControlId(int id)
 {
@@ -81,6 +84,7 @@ struct ModMatrixWindowState
     HWND parameterCombo = nullptr;
     HWND amountLabel = nullptr;
     HWND amountSlider = nullptr;
+    HWND amountEdit = nullptr;
     int selectedAssignmentId = 0;
 };
 
@@ -309,6 +313,101 @@ void updateAmountLabel(HWND label, const ModMatrixAssignment& assignment)
     SetWindowTextW(label, text.c_str());
 }
 
+void setEditFromAssignment(HWND edit, const ModMatrixAssignment& assignment)
+{
+    if (!edit)
+        return;
+
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment.parameterIndex);
+    if (!info)
+    {
+        SetWindowTextW(edit, L"");
+        return;
+    }
+
+    float value = modMatrixNormalizedToValue(assignment.normalizedAmount, *info);
+    std::wstringstream ss;
+    ss << std::showpos << std::fixed << std::setprecision(3) << value;
+    std::wstring text = ss.str();
+    SetWindowTextW(edit, text.c_str());
+}
+
+std::wstring trimWhitespace(const std::wstring& text)
+{
+    size_t start = 0;
+    size_t end = text.size();
+    while (start < text.size() && std::iswspace(text[start]))
+        ++start;
+    while (end > start && std::iswspace(text[end - 1]))
+        --end;
+    return text.substr(start, end - start);
+}
+
+bool updateAssignmentAmountFromEdit(ModMatrixWindowState* state)
+{
+    if (!state || !state->amountEdit)
+        return false;
+
+    auto assignment = modMatrixGetAssignment(state->selectedAssignmentId);
+    if (!assignment)
+        return false;
+
+    const ModParameterInfo* info = modMatrixGetParameterInfo(assignment->parameterIndex);
+    if (!info)
+    {
+        SetWindowTextW(state->amountEdit, L"");
+        return false;
+    }
+
+    int length = GetWindowTextLengthW(state->amountEdit);
+    std::wstring buffer(static_cast<size_t>(length) + 1, L'\0');
+    if (length > 0)
+        GetWindowTextW(state->amountEdit, buffer.data(), length + 1);
+    buffer.resize(std::wcslen(buffer.c_str()));
+
+    std::wstring text = trimWhitespace(buffer);
+    if (text.empty())
+    {
+        assignment->normalizedAmount = 0.0f;
+    }
+    else
+    {
+        bool isPercent = false;
+        if (!text.empty() && text.back() == L'%')
+        {
+            isPercent = true;
+            text.pop_back();
+            text = trimWhitespace(text);
+        }
+
+        wchar_t* endPtr = nullptr;
+        float value = std::wcstof(text.c_str(), &endPtr);
+        if (endPtr == text.c_str())
+        {
+            setEditFromAssignment(state->amountEdit, *assignment);
+            return false;
+        }
+
+        if (isPercent)
+        {
+            float normalized = modMatrixClampNormalized(value / 100.0f);
+            assignment->normalizedAmount = normalized;
+        }
+        else
+        {
+            float normalized = modMatrixValueToNormalized(value, *info);
+            assignment->normalizedAmount = modMatrixClampNormalized(normalized);
+        }
+    }
+
+    modMatrixUpdateAssignment(*assignment);
+    setSliderFromAssignment(state->amountSlider, *assignment);
+    updateAmountLabel(state->amountLabel, *assignment);
+    setEditFromAssignment(state->amountEdit, *assignment);
+    repopulateAssignmentList(state);
+    return true;
+}
+
 void refreshAssignmentRowText(HWND listView, int rowIndex, const ModMatrixAssignment& assignment)
 {
     if (!listView)
@@ -392,6 +491,7 @@ void enableAssignmentControls(ModMatrixWindowState* state, bool enable)
         state->parameterCombo,
         state->amountLabel,
         state->amountSlider,
+        state->amountEdit,
         state->removeButton,
     };
 
@@ -412,6 +512,8 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
     {
         enableAssignmentControls(state, false);
         SetWindowTextW(state->amountLabel, L"Mod Amount:");
+        if (state->amountEdit)
+            SetWindowTextW(state->amountEdit, L"");
         populateTrackCombo(state->trackCombo, 0);
         return;
     }
@@ -450,6 +552,7 @@ void loadAssignmentIntoControls(ModMatrixWindowState* state, int assignmentId)
 
     setSliderFromAssignment(state->amountSlider, *assignment);
     updateAmountLabel(state->amountLabel, *assignment);
+    setEditFromAssignment(state->amountEdit, *assignment);
 }
 
 ModMatrixWindowState* getWindowState(HWND hwnd)
@@ -651,6 +754,21 @@ void ensureModMatrixWindowClass()
                 SendMessageW(newState->amountSlider, TBM_SETTICFREQ, 100, 0);
             }
 
+            newState->amountEdit = CreateWindowExW(0,
+                                                   L"EDIT",
+                                                   L"",
+                                                   WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   hwnd,
+                                                   makeControlId(kAmountEditId),
+                                                   createStruct->hInstance,
+                                                   nullptr);
+            if (newState->amountEdit)
+                SendMessageW(newState->amountEdit, EM_SETLIMITTEXT, 32, 0);
+
             auto configureComboDropdown = [](HWND combo) {
                 if (!combo)
                     return;
@@ -712,6 +830,7 @@ void ensureModMatrixWindowClass()
             const int comboHeight = 28;
             const int labelHeight = 20;
             const int sliderHeight = 32;
+            const int editHeight = 28;
 
             int listViewHeight = std::max(140, height / 2);
 
@@ -744,6 +863,10 @@ void ensureModMatrixWindowClass()
             if (state->amountLabel)
                 MoveWindow(state->amountLabel, padding, formY, controlWidth, labelHeight, TRUE);
             formY += labelHeight + buttonSpacing;
+
+            if (state->amountEdit)
+                MoveWindow(state->amountEdit, padding, formY, controlWidth, editHeight, TRUE);
+            formY += editHeight + buttonSpacing;
 
             if (state->amountSlider)
                 MoveWindow(state->amountSlider, padding, formY, controlWidth, sliderHeight, TRUE);
@@ -807,6 +930,7 @@ void ensureModMatrixWindowClass()
                         modMatrixUpdateAssignment(*assignment);
                         setSliderFromAssignment(state->amountSlider, *assignment);
                         updateAmountLabel(state->amountLabel, *assignment);
+                        setEditFromAssignment(state->amountEdit, *assignment);
                         repopulateAssignmentList(state);
                     }
                 }
@@ -823,8 +947,15 @@ void ensureModMatrixWindowClass()
                         modMatrixUpdateAssignment(*assignment);
                         setSliderFromAssignment(state->amountSlider, *assignment);
                         updateAmountLabel(state->amountLabel, *assignment);
+                        setEditFromAssignment(state->amountEdit, *assignment);
                         repopulateAssignmentList(state);
                     }
+                }
+                return 0;
+            case kAmountEditId:
+                if (code == EN_KILLFOCUS)
+                {
+                    updateAssignmentAmountFromEdit(state);
                 }
                 return 0;
             default:
@@ -877,6 +1008,7 @@ void ensureModMatrixWindowClass()
                 modMatrixUpdateAssignment(*assignment);
                 modMatrixApplyAssignment(*assignment);
                 updateAmountLabel(state->amountLabel, *assignment);
+                setEditFromAssignment(state->amountEdit, *assignment);
 
                 int itemCount = ListView_GetItemCount(state->listView);
                 for (int row = 0; row < itemCount; ++row)
@@ -925,6 +1057,7 @@ void ensureModMatrixWindowClass()
             {
                 setSliderFromAssignment(state->amountSlider, *selected);
                 updateAmountLabel(state->amountLabel, *selected);
+                setEditFromAssignment(state->amountEdit, *selected);
             }
 
             repopulateAssignmentList(state);
