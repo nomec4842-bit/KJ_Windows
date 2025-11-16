@@ -169,6 +169,7 @@ constexpr UINT_PTR kFallbackListViewId = 2001;
 constexpr UINT_PTR kFallbackSliderId = 2002;
 constexpr int kFallbackSliderRange = 1000;
 constexpr UINT kFallbackRefreshMessage = WM_APP + 101;
+constexpr UINT_PTR kPluginViewIdleTimerId = 3001;
 
 std::wstring Utf8ToWide(const std::string& value)
 {
@@ -1530,6 +1531,7 @@ void VST3Host::onContainerResized(int width, int height)
 
 void VST3Host::onContainerDestroyed()
 {
+    stopViewIdleTimer();
     containerWindow_ = nullptr;
     headerWindow_ = nullptr;
     headerTitleStatic_ = nullptr;
@@ -1608,31 +1610,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     plugFrame_->setHostWindow(parentWindow);
     plugFrame_->setActiveView(view);
 
-    // Request the plug-in's preferred rectangle prior to attachment so that we can size our host window.
-    Steinberg::ViewRect targetRect {};
-    if (view->getSize(&targetRect) != kResultTrue)
-    {
-        targetRect.left = 0;
-        targetRect.top = 0;
-        targetRect.right = 800;
-        targetRect.bottom = 600;
-    }
-
-    if (viewAttached_ && frameAttached_)
-    {
-        // If the view is already attached simply refresh the window bounds and notify the plug-in.
-        resizePluginViewWindow(parentWindow, targetRect, true);
-        if (plugFrame_)
-            plugFrame_->setCachedRect(targetRect);
-
-        Steinberg::ViewRect notifyRect = targetRect;
-        view->onSize(&notifyRect);
-        ::ShowWindow(parentWindow, SW_SHOWNORMAL);
-        ::UpdateWindow(parentWindow);
-        ::SetFocus(parentWindow);
-        return true;
-    }
-
     if (!frameAttached_)
     {
         // Provide the plug-in with our IPlugFrame implementation so it can send resize requests back.
@@ -1650,6 +1627,34 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         view->setFrame(plugFrame_);
     }
 
+    // Request the plug-in's preferred rectangle after the frame is set so that sizing reflects the active frame callbacks.
+    Steinberg::ViewRect targetRect {};
+    if (view->getSize(&targetRect) != kResultTrue)
+    {
+        targetRect.left = 0;
+        targetRect.top = 0;
+        targetRect.right = 800;
+        targetRect.bottom = 600;
+    }
+
+    if (plugFrame_)
+        plugFrame_->setCachedRect(targetRect);
+
+    // Resize our host child window before handing it to the plug-in so the parent matches the requested dimensions.
+    resizePluginViewWindow(parentWindow, targetRect, true);
+
+    if (viewAttached_ && frameAttached_)
+    {
+        // If the view is already attached simply refresh the window bounds and notify the plug-in.
+        Steinberg::ViewRect notifyRect = targetRect;
+        view->onSize(&notifyRect);
+        ::ShowWindow(parentWindow, SW_SHOWNORMAL);
+        ::UpdateWindow(parentWindow);
+        ::SetFocus(parentWindow);
+        startViewIdleTimer();
+        return true;
+    }
+
     // Hand the native HWND to the plug-in so it can create its controls as children of our window.
     if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
     {
@@ -1659,6 +1664,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         {
             plugFrame_->setActiveView(nullptr);
             plugFrame_->setHostWindow(nullptr);
+            plugFrame_->clearCachedRect();
             plugFrame_->release();
             plugFrame_ = nullptr;
         }
@@ -1666,11 +1672,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     }
 
     viewAttached_ = true;
-
-    // Align the host child window to the plug-in's requested size and notify the editor about it.
-    resizePluginViewWindow(parentWindow, targetRect, true);
-    if (plugFrame_)
-        plugFrame_->setCachedRect(targetRect);
 
     Steinberg::ViewRect notifyRect = targetRect;
     view->onSize(&notifyRect);
@@ -1684,6 +1685,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     ::ShowWindow(parentWindow, SW_SHOWNORMAL);
     ::UpdateWindow(parentWindow);
     ::SetFocus(parentWindow);
+    startViewIdleTimer();
 
     return true;
 }
@@ -1711,6 +1713,35 @@ bool VST3Host::resizePluginViewWindow(HWND window, const Steinberg::ViewRect& re
     storeCurrentViewRect(rect);
     return moved;
 }
+
+#ifdef _WIN32
+void VST3Host::startViewIdleTimer()
+{
+    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
+        return;
+
+    if (!viewIdleTimerActive_)
+    {
+        if (::SetTimer(pluginViewWindow_, kPluginViewIdleTimerId, 16, nullptr))
+            viewIdleTimerActive_ = true;
+    }
+}
+
+void VST3Host::stopViewIdleTimer()
+{
+    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
+    {
+        viewIdleTimerActive_ = false;
+        return;
+    }
+
+    if (viewIdleTimerActive_)
+    {
+        ::KillTimer(pluginViewWindow_, kPluginViewIdleTimerId);
+        viewIdleTimerActive_ = false;
+    }
+}
+#endif
 
 void VST3Host::storeCurrentViewRect(const Steinberg::ViewRect& rect)
 {
@@ -2224,6 +2255,13 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
             return 0;
         }
         break;
+    case WM_TIMER:
+        if (wParam == kPluginViewIdleTimerId && host && host->view_ && host->viewAttached_)
+        {
+            host->view_->onIdle();
+            return 0;
+        }
+        break;
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN:
@@ -2533,6 +2571,7 @@ LRESULT CALLBACK VST3Host::StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM w
 void VST3Host::destroyPluginUI()
 {
     ClosePluginEditor();
+    stopViewIdleTimer();
     resetFallbackEditState();
 
     if (view_ && viewAttached_)
