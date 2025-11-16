@@ -15,6 +15,21 @@ endif()
 
 set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
 
+# Keep build products for different architectures separated to avoid mixing x86 and
+# x64 artifacts when reusing a build directory.
+if (MSVC)
+    set(_kj_output_platform "${CMAKE_VS_PLATFORM_NAME}")
+else()
+    set(_kj_output_platform "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+foreach(_config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${_config}" _config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_config_upper} "${CMAKE_BINARY_DIR}/bin/${_kj_output_platform}/${_config}")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${_config_upper} "${CMAKE_BINARY_DIR}/lib/${_kj_output_platform}/${_config}")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${_config_upper} "${CMAKE_BINARY_DIR}/lib/${_kj_output_platform}/${_config}")
+endforeach()
+
 include_directories(
     ${VST3_SDK_DIR}
     ${VST3_SDK_DIR}/pluginterfaces
@@ -46,12 +61,6 @@ add_executable(KJ
 target_link_libraries(KJ
     PRIVATE kj_core kj_gui
     sdk sdk_common sdk_hosting pluginterfaces base
-)
-
-set_target_properties(KJ PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Release
-    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
 
 message(STATUS "KJ configured with VST3 SDK: ${VST3_SDK_DIR}")
