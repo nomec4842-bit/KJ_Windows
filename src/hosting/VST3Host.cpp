@@ -25,6 +25,7 @@ using namespace kj;
 #include <chrono>
 #include <cstdint>
 
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipersistent.h"
 #include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/gui/iplugview.h"
@@ -683,10 +684,14 @@ void VST3Host::queueParameterChange(ParamID paramId, ParamValue value, bool noti
 
     if (notifyController && controller_)
     {
+        Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing> hostEditing(controller_);
+        if (hostEditing)
+            hostEditing->beginEditFromHost(paramId);
+
         controller_->setParamNormalized(paramId, clamped);
-        controller_->beginEdit(paramId);
-        controller_->performEdit(paramId, clamped);
-        controller_->endEdit(paramId);
+
+        if (hostEditing)
+            hostEditing->endEditFromHost(paramId);
     }
 
     std::lock_guard<std::mutex> lock(parameterMutex_);
@@ -1957,9 +1962,6 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
     }
 
     controller_->setParamNormalized(parameter.info.id, normalized);
-    controller_->beginEdit(parameter.info.id);
-    controller_->performEdit(parameter.info.id, normalized);
-    controller_->endEdit(parameter.info.id);
 
     queueParameterChange(parameter.info.id, normalized, false);
 
