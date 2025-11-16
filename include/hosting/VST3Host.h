@@ -29,6 +29,7 @@
 
 #include "public.sdk/source/vst/hosting/module.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
+#include "public.sdk/source/vst/hosting/eventlist.h"
 
 namespace kj {
 
