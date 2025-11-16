@@ -60,6 +60,7 @@ public:
 
     void setTransportState(const HostTransportState& state);
 
+    void queueEvent(const Steinberg::Vst::Event& ev);
     void queueNoteEvent(const Steinberg::Vst::Event& ev);
 
     bool saveState(std::vector<uint8_t>& outState) const;
@@ -184,7 +185,7 @@ private:
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     std::vector<PendingParameterChange> pendingParameterChanges_;
     mutable std::mutex parameterMutex_;
-    Steinberg::Vst::EventList inputEvents_;
+    Steinberg::Vst::EventList inputEventList_;
     std::vector<Steinberg::Vst::Event> pendingEvents_;
     mutable std::mutex eventMutex_;
     Steinberg::Vst::ProcessContext processContext_ {};
