@@ -1229,6 +1229,7 @@ void audioLoop() {
     UINT32 bufferFrameCount = 0;
     const WAVEFORMATEX* format = nullptr;
     double sampleRate = 44100.0;
+    double transportSamplePosition = 0.0;
     const double twoPi = 6.283185307179586;
     double stepSampleCounter = 0.0;
     bool previousPlaying = false;
@@ -1534,7 +1535,7 @@ void audioLoop() {
 
                 state.midiChannel = desiredMidiChannel;
                 state.midiPort = desiredMidiPort;
-                if (trackInfo.type != TrackType::MidiOut || midiSettingsChanged)
+                if ((trackInfo.type != TrackType::MidiOut && trackInfo.type != TrackType::VST) || midiSettingsChanged)
                 {
                     state.activeMidiNotes.clear();
                 }
@@ -1664,6 +1665,7 @@ void audioLoop() {
                     }
                     previousPlaying = false;
                     stepSampleCounter = 0.0;
+                    transportSamplePosition = 0.0;
                     for (auto& entry : playbackStates) {
                         auto& state = entry.second;
                         for (auto& voice : state.voices) {
@@ -1832,7 +1834,9 @@ void audioLoop() {
                             if (getTrackStepState(trackInfo.id, stepIndex)) {
                                 gate = true;
                                 if (stepAdvanced) {
-                                    if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut) {
+                                    if (trackInfo.type == TrackType::Synth ||
+                                        trackInfo.type == TrackType::MidiOut ||
+                                        trackInfo.type == TrackType::VST) {
                                         stepNotes = getNotesForStep(trackInfo.id, stepIndex);
                                         for (const auto& noteInfo : stepNotes) {
                                             int clampedNote = std::clamp(noteInfo.midiNote, 0, 127);
@@ -1856,7 +1860,8 @@ void audioLoop() {
                         }
 
                         bool stepHasNoteOnEvents = false;
-                        if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut) {
+                        if (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut ||
+                            trackInfo.type == TrackType::VST) {
                             stepHasNoteOnEvents = !noteOnNotes.empty();
                         } else {
                             stepHasNoteOnEvents = triggered;
@@ -1996,6 +2001,85 @@ void audioLoop() {
                         } else if (trackInfo.type == TrackType::VST) {
                             auto host = trackInfo.vstHost;
                             if (host) {
+                                auto queueNoteOff = [&](int note) {
+                                    Steinberg::Vst::Event ev {};
+                                    ev.busIndex = 0;
+                                    ev.sampleOffset = 0;
+                                    ev.type = Steinberg::Vst::Event::kNoteOffEvent;
+                                    ev.noteOff.pitch = static_cast<float>(note);
+                                    ev.noteOff.velocity = 0.0f;
+                                    ev.noteOff.channel = static_cast<Steinberg::int16>(state.midiChannel);
+                                    ev.noteOff.noteId = -1;
+                                    host->queueNoteEvent(ev);
+                                };
+
+                                auto queueNoteOn = [&](const StepNoteInfo& noteInfo) {
+                                    double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                  static_cast<double>(kTrackStepVelocityMin),
+                                                                  static_cast<double>(kTrackStepVelocityMax));
+                                    if (velocity <= 0.0)
+                                        return;
+
+                                    int note = std::clamp(noteInfo.midiNote, 0, 127);
+                                    float normalizedVelocity = static_cast<float>(std::clamp(velocity, 0.0, 1.0));
+
+                                    Steinberg::Vst::Event onEvent {};
+                                    onEvent.busIndex = 0;
+                                    onEvent.sampleOffset = 0;
+                                    onEvent.type = Steinberg::Vst::Event::kNoteOnEvent;
+                                    onEvent.noteOn.pitch = static_cast<float>(note);
+                                    onEvent.noteOn.velocity = normalizedVelocity;
+                                    onEvent.noteOn.channel = static_cast<Steinberg::int16>(state.midiChannel);
+                                    onEvent.noteOn.noteId = -1;
+                                    host->queueNoteEvent(onEvent);
+
+                                    Steinberg::Vst::Event pressureEvent {};
+                                    pressureEvent.busIndex = 0;
+                                    pressureEvent.sampleOffset = 0;
+                                    pressureEvent.type = Steinberg::Vst::Event::kPolyPressureEvent;
+                                    pressureEvent.polyPressure.pitch = static_cast<float>(note);
+                                    pressureEvent.polyPressure.pressure = normalizedVelocity;
+                                    pressureEvent.polyPressure.channel = static_cast<Steinberg::int16>(state.midiChannel);
+                                    host->queueNoteEvent(pressureEvent);
+                                };
+
+                                if (!gate) {
+                                    if (!state.activeMidiNotes.empty()) {
+                                        for (int note : state.activeMidiNotes)
+                                            queueNoteOff(note);
+                                        state.activeMidiNotes.clear();
+                                    }
+                                } else if (stepAdvanced) {
+                                    std::vector<int> notesThisStep = notesPresent;
+                                    std::sort(notesThisStep.begin(), notesThisStep.end());
+                                    notesThisStep.erase(std::unique(notesThisStep.begin(), notesThisStep.end()),
+                                                        notesThisStep.end());
+
+                                    for (int activeNote : state.activeMidiNotes) {
+                                        if (!std::binary_search(notesThisStep.begin(), notesThisStep.end(), activeNote))
+                                            queueNoteOff(activeNote);
+                                    }
+
+                                    for (const auto& noteInfo : noteOnNotes) {
+                                        int note = std::clamp(noteInfo.midiNote, 0, 127);
+                                        auto wasActive = std::find(state.activeMidiNotes.begin(), state.activeMidiNotes.end(), note)
+                                                         != state.activeMidiNotes.end();
+                                        if (wasActive)
+                                            queueNoteOff(note);
+                                        queueNoteOn(noteInfo);
+                                    }
+
+                                    state.activeMidiNotes = std::move(notesThisStep);
+                                }
+
+                                kj::VST3Host::HostTransportState transport {};
+                                transport.samplePosition = transportSamplePosition + static_cast<double>(i);
+                                transport.tempo = static_cast<double>(sequencerBPM.load(std::memory_order_relaxed));
+                                transport.timeSigNum = 4;
+                                transport.timeSigDen = 4;
+                                transport.playing = playing;
+                                host->setTransportState(transport);
+
                                 float left = 0.0f;
                                 float right = 0.0f;
                                 float* outputs[2] = { &left, &right };
@@ -2411,11 +2495,16 @@ void audioLoop() {
                         mixPeak = currentPeak;
 #endif
 
+                    if (playing)
+                        transportSamplePosition += 1.0;
+
                     float monoValue = static_cast<float>((leftValue + rightValue) * 0.5);
                     capturedSamples.push_back(monoValue);
                     writeFrame(i, leftValue, rightValue);
                     continue;
                 }
+                if (playing)
+                    transportSamplePosition += 1.0;
                 capturedSamples.push_back(0.0f);
                 writeFrame(i, 0.0, 0.0);
             }
