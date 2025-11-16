@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <filesystem>
+
 #ifdef DEBUG_AUDIO
 #include <iostream>
 #endif
@@ -41,6 +43,12 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
     if (!file)
         return false;
 
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(path, ec);
+    if (ec)
+        return false;
+    const uint64_t maxChunkSize = std::min<uint64_t>(fileSize, 128ULL * 1024 * 1024);
+
     char riffId[4];
     file.read(riffId, 4);
     if (!file || std::strncmp(riffId, "RIFF", 4) != 0)
@@ -71,7 +79,21 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
         if (!readChunkHeader(file, chunkId, chunkSize))
             break;
 
+        const auto chunkDataPos = file.tellg();
+        if (chunkDataPos < 0)
+            return false;
+
+        const uint64_t remainingBytes =
+            (static_cast<uint64_t>(chunkDataPos) <= fileSize)
+                ? (fileSize - static_cast<uint64_t>(chunkDataPos))
+                : 0;
+
+        const bool chunkTooLarge = chunkSize > remainingBytes || chunkSize > maxChunkSize;
+
         if (std::strncmp(chunkId, "fmt ", 4) == 0) {
+            if (chunkTooLarge)
+                return false;
+
             std::string fmtChunk(chunkSize, '\0');
             file.read(fmtChunk.data(), chunkSize);
             if (!file)
@@ -90,6 +112,9 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
             if (chunkSize % 2 != 0)
                 file.seekg(1, std::ios::cur);
         } else if (std::strncmp(chunkId, "data", 4) == 0) {
+            if (chunkTooLarge)
+                return false;
+
             rawSampleData.resize(chunkSize);
             file.read(rawSampleData.data(), chunkSize);
             if (!file)
@@ -100,10 +125,11 @@ bool loadSampleFromFile(const std::filesystem::path& path, SampleBuffer& outBuff
             if (chunkSize % 2 != 0)
                 file.seekg(1, std::ios::cur);
         } else {
-            file.seekg(chunkSize, std::ios::cur);
+            const auto skipSize = static_cast<std::streamoff>(std::min<uint64_t>(chunkSize, remainingBytes));
+            file.seekg(skipSize, std::ios::cur);
             if (!file)
                 return false;
-            if (chunkSize % 2 != 0)
+            if (!chunkTooLarge && chunkSize % 2 != 0)
                 file.seekg(1, std::ios::cur);
         }
     }
