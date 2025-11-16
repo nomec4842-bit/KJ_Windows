@@ -1054,10 +1054,9 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
 
     inputEventList_.clear();
     inputEventList_.setMaxSize(std::max<int32>(static_cast<int32>(events.size()), 1));
-    for (const auto& ev : events)
+    for (auto ev : events)
     {
-        auto event = ev;
-        inputEventList_.addEvent(event);
+        inputEventList_.addEvent(ev);
     }
 
     const Steinberg::int32 expectedInputChannels = (mainInputBusIndex_ >= 0)
