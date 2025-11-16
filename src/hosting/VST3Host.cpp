@@ -647,18 +647,32 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     if (!processor_)
         return false;
 
+    processingActive_ = false;
     mainInputBusIndex_ = -1;
     mainOutputBusIndex_ = -1;
     inputArrangement_ = SpeakerArr::kEmpty;
     outputArrangement_ = SpeakerArr::kEmpty;
 
-    const auto findMainBus = [&](Steinberg::int32 busCount, Steinberg::Vst::BusDirection direction) {
+    const auto chooseArrangement = [](const Steinberg::Vst::BusInfo& info) {
+        if (info.channelCount >= 2)
+            return SpeakerArr::kStereo;
+        if (info.channelCount == 1)
+            return SpeakerArr::kMono;
+        return SpeakerArr::kEmpty;
+    };
+
+    const auto findMainBus = [&](Steinberg::int32 busCount, Steinberg::Vst::BusDirection direction,
+                                 std::vector<Steinberg::Vst::BusInfo>& infos) {
         Steinberg::int32 found = -1;
+        infos.clear();
+        infos.resize(static_cast<size_t>(busCount));
         for (Steinberg::int32 i = 0; i < busCount; ++i)
         {
             Steinberg::Vst::BusInfo info {};
             if (component_->getBusInfo(Steinberg::Vst::kAudio, direction, i, info) != kResultOk)
                 continue;
+
+            infos[static_cast<size_t>(i)] = info;
 
             if (info.busType == Steinberg::Vst::kMain)
                 return i;
@@ -672,13 +686,16 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     const Steinberg::int32 inputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput) : 0;
     const Steinberg::int32 outputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput) : 0;
 
+    std::vector<Steinberg::Vst::BusInfo> inputBusInfos;
+    std::vector<Steinberg::Vst::BusInfo> outputBusInfos;
+
     if (component_)
     {
-        mainInputBusIndex_ = findMainBus(inputBusCount, Steinberg::Vst::kInput);
-        mainOutputBusIndex_ = findMainBus(outputBusCount, Steinberg::Vst::kOutput);
+        mainInputBusIndex_ = findMainBus(inputBusCount, Steinberg::Vst::kInput, inputBusInfos);
+        mainOutputBusIndex_ = findMainBus(outputBusCount, Steinberg::Vst::kOutput, outputBusInfos);
     }
 
-    if (mainOutputBusIndex_ < 0)
+    if (mainOutputBusIndex_ < 0 || mainOutputBusIndex_ >= outputBusCount)
         return false;
 
     std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(static_cast<size_t>(inputBusCount), SpeakerArr::kEmpty);
@@ -686,26 +703,16 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
 
     if (mainInputBusIndex_ >= 0 && mainInputBusIndex_ < inputBusCount)
     {
-        inputArrangement_ = SpeakerArr::kStereo;
+        inputArrangement_ = chooseArrangement(inputBusInfos[static_cast<size_t>(mainInputBusIndex_)]);
         inputArrangements[static_cast<size_t>(mainInputBusIndex_)] = inputArrangement_;
     }
 
-    outputArrangement_ = SpeakerArr::kStereo;
+    outputArrangement_ = chooseArrangement(outputBusInfos[static_cast<size_t>(mainOutputBusIndex_)]);
     outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
 
     if (processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(), inputBusCount,
                                        outputArrangements.empty() ? nullptr : outputArrangements.data(), outputBusCount) != kResultOk)
         return false;
-
-    if (component_)
-        component_->setActive(true);
-
-    if (component_)
-    {
-        if (mainInputBusIndex_ >= 0)
-            component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, mainInputBusIndex_, true);
-        component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, mainOutputBusIndex_, true);
-    }
 
     ProcessSetup setup {};
     setup.processMode = kRealtime;
@@ -716,6 +723,15 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     auto result = processor_->setupProcessing(setup);
     if (result != kResultOk)
         return false;
+
+    if (component_)
+    {
+        component_->setActive(true);
+
+        if (mainInputBusIndex_ >= 0)
+            component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, mainInputBusIndex_, true);
+        component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, mainOutputBusIndex_, true);
+    }
 
     processor_->setProcessing(true);
 
@@ -758,10 +774,15 @@ void VST3Host::queueParameterChange(ParamID paramId, ParamValue value, bool noti
     }
 }
 
-void VST3Host::queueNoteEvent(const Steinberg::Vst::Event& ev)
+void VST3Host::queueEvent(const Steinberg::Vst::Event& ev)
 {
     std::lock_guard<std::mutex> lock(eventMutex_);
     pendingEvents_.push_back(ev);
+}
+
+void VST3Host::queueNoteEvent(const Steinberg::Vst::Event& ev)
+{
+    queueEvent(ev);
 }
 
 void VST3Host::setTransportState(const HostTransportState& state)
@@ -774,7 +795,8 @@ void VST3Host::setTransportState(const HostTransportState& state)
     processContext_.timeSigNumerator = state.timeSigNum;
     processContext_.timeSigDenominator = state.timeSigDen;
 
-    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kContTimeValid;
+    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid |
+                            ProcessContext::kProjectTimeSamplesValid | ProcessContext::kContTimeValid;
     if (state.playing)
         processContext_.state |= ProcessContext::kPlaying;
 }
@@ -978,38 +1000,55 @@ void VST3Host::process(float** inputs, int numInputChannels, float** outputs, in
             queue->addPoint(0, change.value, index);
     }
 
-    inputEvents_.setMaxSize(std::max<int32>(static_cast<int32>(events.size()), 1));
-    inputEvents_.clear();
+    inputEventList_.clear();
+    inputEventList_.setMaxSize(std::max<int32>(static_cast<int32>(events.size()), 1));
     for (auto& ev : events)
-        inputEvents_.addEvent(ev);
+        inputEventList_.addEvent(ev);
 
     const Steinberg::int32 expectedInputChannels = (mainInputBusIndex_ >= 0)
                                                        ? SpeakerArr::getChannelCount(inputArrangement_)
                                                        : 0;
     const Steinberg::int32 expectedOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
 
-    AudioBusBuffers inputBus {};
-    inputBus.numChannels = std::min<Steinberg::int32>(numInputChannels, expectedInputChannels);
-    inputBus.channelBuffers32 = inputs;
+    if (outputs)
+    {
+        const auto samplesToClear = static_cast<size_t>(std::max(0, numSamples));
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+        {
+            if (outputs[ch])
+                std::memset(outputs[ch], 0, samplesToClear * sizeof(float));
+        }
+    }
 
-    AudioBusBuffers outputBus {};
-    outputBus.numChannels = std::min<Steinberg::int32>(numOutputChannels, expectedOutputChannels);
-    outputBus.channelBuffers32 = outputs;
+    AudioBusBuffers inputBuses[1] {};
+    AudioBusBuffers outputBuses[1] {};
+
+    Steinberg::int32 numInputBuses = 0;
+    if (mainInputBusIndex_ >= 0 && inputs && expectedInputChannels > 0)
+    {
+        inputBuses[0].numChannels = std::min<Steinberg::int32>(numInputChannels, expectedInputChannels);
+        inputBuses[0].channelBuffers32 = inputs;
+        numInputBuses = (inputBuses[0].numChannels > 0) ? 1 : 0;
+    }
+
+    outputBuses[0].numChannels = std::min<Steinberg::int32>(numOutputChannels, expectedOutputChannels);
+    outputBuses[0].channelBuffers32 = outputs;
+    Steinberg::int32 numOutputBuses = (outputBuses[0].numChannels > 0) ? 1 : 0;
 
     ProcessData data {};
     data.processMode = kRealtime;
     data.symbolicSampleSize = kSample32;
     data.numSamples = numSamples;
-    data.numInputs = (mainInputBusIndex_ >= 0 && inputBus.numChannels > 0) ? 1 : 0;
-    data.numOutputs = (mainOutputBusIndex_ >= 0 && outputBus.numChannels > 0) ? 1 : 0;
-    data.inputs = (data.numInputs > 0) ? &inputBus : nullptr;
-    data.outputs = (data.numOutputs > 0) ? &outputBus : nullptr;
+    data.numInputs = numInputBuses;
+    data.numOutputs = numOutputBuses;
+    data.inputs = (numInputBuses > 0) ? inputBuses : nullptr;
+    data.outputs = (numOutputBuses > 0) ? outputBuses : nullptr;
     data.processContext = &processContext_;
 
     if (inputParameterChanges_.getParameterCount() > 0)
         data.inputParameterChanges = &inputParameterChanges_;
-    if (!events.empty())
-        data.inputEvents = &inputEvents_;
+    if (inputEventList_.getEventCount() > 0)
+        data.inputEvents = &inputEventList_;
 
     processor_->process(data);
 }
@@ -1059,7 +1098,7 @@ void VST3Host::unload()
 
     inputParameterChanges_.setMaxParameters(0);
     inputParameterChanges_.clearQueue();
-    inputEvents_.clear();
+    inputEventList_.clear();
     pendingEvents_.clear();
 
     requestedViewType_ = Steinberg::Vst::ViewType::kEditor;
