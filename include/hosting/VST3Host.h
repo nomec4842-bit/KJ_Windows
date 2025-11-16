@@ -49,6 +49,7 @@ public:
     bool prepare(double sampleRate, int maxBlockSize);
     void process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples);
     void process(float** outputs, int numChannels, int numSamples);
+    void renderAudio(float** out, int numChannels, int numSamples);
 
     struct HostTransportState {
         double samplePosition = 0.0;
@@ -133,6 +134,9 @@ private:
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
     bool ensureViewForRequestedType();
+    void processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
+                         const std::vector<PendingParameterChange>& changes,
+                         const std::vector<Steinberg::Vst::Event>& events);
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -184,11 +188,18 @@ private:
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     std::vector<PendingParameterChange> pendingParameterChanges_;
+    std::vector<PendingParameterChange> audioThreadParameterChanges_;
     mutable std::mutex parameterMutex_;
     Steinberg::Vst::EventList inputEventList_;
     std::vector<Steinberg::Vst::Event> pendingEvents_;
+    std::vector<Steinberg::Vst::Event> audioThreadEvents_;
     mutable std::mutex eventMutex_;
     Steinberg::Vst::ProcessContext processContext_ {};
+
+    std::vector<std::vector<float>> internalIn_;
+    std::vector<std::vector<float>> internalOut_;
+    std::vector<float*> inputChannelPointers_;
+    std::vector<float*> outputChannelPointers_;
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;

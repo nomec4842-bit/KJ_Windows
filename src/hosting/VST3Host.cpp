@@ -710,6 +710,10 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     outputArrangement_ = chooseArrangement(outputBusInfos[static_cast<size_t>(mainOutputBusIndex_)]);
     outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
 
+    const auto canProcess32 = processor_->canProcessSampleSize(kSample32);
+    if (canProcess32 != kResultOk && canProcess32 != kResultTrue)
+        return false;
+
     if (processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(), inputBusCount,
                                        outputArrangements.empty() ? nullptr : outputArrangements.data(), outputBusCount) != kResultOk)
         return false;
@@ -737,7 +741,34 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
 
     preparedSampleRate_ = sampleRate;
     preparedMaxBlockSize_ = blockSize;
+    processContext_ = {};
     processContext_.sampleRate = sampleRate;
+    processContext_.tempo = 120.0;
+    processContext_.timeSigNumerator = 4;
+    processContext_.timeSigDenominator = 4;
+    processContext_.projectTimeSamples = 0;
+    processContext_.continousTimeSamples = 0;
+    processContext_.projectTimeMusic = 0.0;
+    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kContTimeValid |
+                             ProcessContext::kProjectTimeMusicValid;
+
+    const Steinberg::int32 maxInputChannels = SpeakerArr::getChannelCount(inputArrangement_);
+    const Steinberg::int32 maxOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
+
+    internalOut_.assign(static_cast<size_t>(maxOutputChannels), std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
+    outputChannelPointers_.assign(static_cast<size_t>(maxOutputChannels), nullptr);
+
+    if (mainInputBusIndex_ >= 0 && maxInputChannels > 0)
+    {
+        internalIn_.assign(static_cast<size_t>(maxInputChannels), std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
+        inputChannelPointers_.assign(static_cast<size_t>(maxInputChannels), nullptr);
+    }
+    else
+    {
+        internalIn_.clear();
+        inputChannelPointers_.clear();
+    }
+
     processingActive_ = true;
     return true;
 }
@@ -791,11 +822,13 @@ void VST3Host::setTransportState(const HostTransportState& state)
     processContext_.sampleRate = preparedSampleRate_;
     processContext_.projectTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePosition);
     processContext_.continousTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePosition);
+    if (preparedSampleRate_ > 0.0)
+        processContext_.projectTimeMusic = (state.samplePosition / preparedSampleRate_) * (state.tempo / 60.0);
     processContext_.tempo = state.tempo;
     processContext_.timeSigNumerator = state.timeSigNum;
     processContext_.timeSigDenominator = state.timeSigDen;
 
-    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid;
+    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kProjectTimeMusicValid;
 
     // The VST3 spec states projectTimeSamples is always valid, so there is no dedicated
     // state flag for it (kProjectTimeSamplesValid does not exist). Use the continuous time
@@ -976,22 +1009,37 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
 void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
 {
-    if (!processor_ || !processingActive_ || !outputs)
-        return;
-
     std::vector<PendingParameterChange> changes;
     {
         std::lock_guard<std::mutex> lock(parameterMutex_);
-        changes = pendingParameterChanges_;
-        pendingParameterChanges_.clear();
+        changes.swap(pendingParameterChanges_);
     }
 
     std::vector<Steinberg::Vst::Event> events;
     {
         std::lock_guard<std::mutex> lock(eventMutex_);
-        events = pendingEvents_;
-        pendingEvents_.clear();
+        events.swap(pendingEvents_);
     }
+
+    processInternal(inputs, numInputChannels, outputs, numOutputChannels, numSamples, changes, events);
+}
+
+void VST3Host::processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
+                               const std::vector<PendingParameterChange>& changes,
+                               const std::vector<Steinberg::Vst::Event>& events)
+{
+    if (outputs)
+    {
+        const auto samplesToClear = static_cast<size_t>(std::max(0, numSamples));
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+        {
+            if (outputs[ch])
+                std::fill(outputs[ch], outputs[ch] + samplesToClear, 0.0f);
+        }
+    }
+
+    if (!processor_ || !processingActive_ || !outputs || numSamples <= 0)
+        return;
 
     inputParameterChanges_.clearQueue();
     for (const auto& change : changes)
@@ -1006,23 +1054,13 @@ void VST3Host::process(float** inputs, int numInputChannels, float** outputs, in
 
     inputEventList_.clear();
     inputEventList_.setMaxSize(std::max<int32>(static_cast<int32>(events.size()), 1));
-    for (auto& ev : events)
+    for (const auto& ev : events)
         inputEventList_.addEvent(ev);
 
     const Steinberg::int32 expectedInputChannels = (mainInputBusIndex_ >= 0)
                                                        ? SpeakerArr::getChannelCount(inputArrangement_)
                                                        : 0;
     const Steinberg::int32 expectedOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
-
-    if (outputs)
-    {
-        const auto samplesToClear = static_cast<size_t>(std::max(0, numSamples));
-        for (int ch = 0; ch < numOutputChannels; ++ch)
-        {
-            if (outputs[ch])
-                std::memset(outputs[ch], 0, samplesToClear * sizeof(float));
-        }
-    }
 
     AudioBusBuffers inputBuses[1] {};
     AudioBusBuffers outputBuses[1] {};
@@ -1055,6 +1093,96 @@ void VST3Host::process(float** inputs, int numInputChannels, float** outputs, in
         data.inputEvents = &inputEventList_;
 
     processor_->process(data);
+
+    inputParameterChanges_.clearQueue();
+    inputEventList_.clear();
+}
+
+void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
+{
+    if (!out || numChannels <= 0 || numSamples <= 0)
+        return;
+
+    const Steinberg::int32 expectedOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
+    const Steinberg::int32 expectedInputChannels = (mainInputBusIndex_ >= 0)
+                                                       ? SpeakerArr::getChannelCount(inputArrangement_)
+                                                       : 0;
+
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        if (out[ch])
+            std::fill(out[ch], out[ch] + static_cast<size_t>(numSamples), 0.0f);
+    }
+
+    if (!processor_ || !processingActive_ || expectedOutputChannels <= 0)
+        return;
+
+    if (static_cast<Steinberg::int32>(internalOut_.size()) < expectedOutputChannels)
+        return;
+
+    const Steinberg::int32 actualOutputChannels = std::min<Steinberg::int32>(expectedOutputChannels,
+                                                                             static_cast<Steinberg::int32>(internalOut_.size()));
+    const Steinberg::int32 actualInputChannels = std::min<Steinberg::int32>(expectedInputChannels,
+                                                                            static_cast<Steinberg::int32>(internalIn_.size()));
+
+    audioThreadParameterChanges_.clear();
+    audioThreadEvents_.clear();
+
+    if (auto lock = std::unique_lock<std::mutex>(parameterMutex_, std::try_to_lock); lock.owns_lock())
+        audioThreadParameterChanges_.swap(pendingParameterChanges_);
+    if (auto lock = std::unique_lock<std::mutex>(eventMutex_, std::try_to_lock); lock.owns_lock())
+        audioThreadEvents_.swap(pendingEvents_);
+
+    const int maxChunkSize = (preparedMaxBlockSize_ > 0) ? preparedMaxBlockSize_ : numSamples;
+    static const std::vector<PendingParameterChange> kEmptyChanges;
+    static const std::vector<Steinberg::Vst::Event> kEmptyEvents;
+
+    bool automationApplied = false;
+    int processed = 0;
+    while (processed < numSamples)
+    {
+        const int remaining = numSamples - processed;
+        const int chunkSize = std::min(remaining, maxChunkSize);
+
+        for (Steinberg::int32 ch = 0; ch < actualOutputChannels; ++ch)
+        {
+            auto& buffer = internalOut_[static_cast<size_t>(ch)];
+            const auto toClear = std::min<size_t>(buffer.size(), static_cast<size_t>(chunkSize));
+            std::fill(buffer.begin(), buffer.begin() + toClear, 0.0f);
+            outputChannelPointers_[static_cast<size_t>(ch)] = buffer.data();
+        }
+
+        float** inputBuffers = nullptr;
+        if (actualInputChannels > 0 && !internalIn_.empty())
+        {
+            for (Steinberg::int32 ch = 0; ch < actualInputChannels; ++ch)
+            {
+                auto& buffer = internalIn_[static_cast<size_t>(ch)];
+                const auto toClear = std::min<size_t>(buffer.size(), static_cast<size_t>(chunkSize));
+                std::fill(buffer.begin(), buffer.begin() + toClear, 0.0f);
+                inputChannelPointers_[static_cast<size_t>(ch)] = buffer.data();
+            }
+            inputBuffers = inputChannelPointers_.data();
+        }
+
+        const auto& chunkChanges = automationApplied ? kEmptyChanges : audioThreadParameterChanges_;
+        const auto& chunkEvents = automationApplied ? kEmptyEvents : audioThreadEvents_;
+
+        processInternal(inputBuffers, actualInputChannels, outputChannelPointers_.data(), actualOutputChannels, chunkSize,
+                        chunkChanges, chunkEvents);
+        automationApplied = true;
+
+        for (int ch = 0; ch < numChannels && ch < actualOutputChannels; ++ch)
+        {
+            if (out[ch])
+            {
+                std::memcpy(out[ch] + processed, internalOut_[static_cast<size_t>(ch)].data(),
+                            static_cast<size_t>(chunkSize) * sizeof(float));
+            }
+        }
+
+        processed += chunkSize;
+    }
 }
 
 void VST3Host::unload()
@@ -1065,10 +1193,29 @@ void VST3Host::unload()
 
     if (processor_)
         processor_->setProcessing(false);
+
+    if (processor_ && component_)
+    {
+        const Steinberg::int32 inputBusCount = component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput);
+        const Steinberg::int32 outputBusCount = component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput);
+
+        std::vector<Steinberg::Vst::SpeakerArrangement> emptyInputs(static_cast<size_t>(inputBusCount), SpeakerArr::kEmpty);
+        std::vector<Steinberg::Vst::SpeakerArrangement> emptyOutputs(static_cast<size_t>(outputBusCount), SpeakerArr::kEmpty);
+
+        processor_->setBusArrangements(emptyInputs.empty() ? nullptr : emptyInputs.data(), inputBusCount,
+                                       emptyOutputs.empty() ? nullptr : emptyOutputs.data(), outputBusCount);
+    }
     if (component_)
         component_->setActive(false);
 
     processingActive_ = false;
+
+    internalIn_.clear();
+    internalOut_.clear();
+    inputChannelPointers_.clear();
+    outputChannelPointers_.clear();
+    audioThreadParameterChanges_.clear();
+    audioThreadEvents_.clear();
 
     if (controller_ && componentHandler_)
         controller_->setComponentHandler(nullptr);
