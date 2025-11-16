@@ -1605,7 +1605,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     if (!plugFrame_)
         plugFrame_ = new PlugFrame(*this);
 
-    plugFrame_->setHostWindow(parentWindow);
+    plugFrame_->setHostWindow(pluginViewWindow_);
     plugFrame_->setActiveView(view);
 
     if (!frameAttached_)
@@ -1639,21 +1639,22 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         plugFrame_->setCachedRect(targetRect);
 
     // Resize our host child window before handing it to the plug-in so the parent matches the requested dimensions.
-    resizePluginViewWindow(parentWindow, targetRect, true);
+    resizePluginViewWindow(pluginViewWindow_, targetRect, true);
 
     if (viewAttached_ && frameAttached_)
     {
         // If the view is already attached simply refresh the window bounds and notify the plug-in.
         Steinberg::ViewRect notifyRect = targetRect;
         view->onSize(&notifyRect);
-        ::ShowWindow(parentWindow, SW_SHOWNORMAL);
-        ::UpdateWindow(parentWindow);
-        ::SetFocus(parentWindow);
+        ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
+        ::UpdateWindow(pluginViewWindow_);
+        ::SetFocus(pluginViewWindow_);
+        ::SetTimer(pluginViewWindow_, 1, 16, NULL);
         return true;
     }
 
     // Hand the native HWND to the plug-in so it can create its controls as children of our window.
-    if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
+    if (view->attached(reinterpret_cast<void*>(pluginViewWindow_), Steinberg::kPlatformTypeHWND) != kResultOk)
     {
         view->setFrame(nullptr);
         frameAttached_ = false;
@@ -1670,18 +1671,30 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
 
     viewAttached_ = true;
 
-    Steinberg::ViewRect notifyRect = targetRect;
+    Steinberg::ViewRect notifyRect {};
+    if (view->getSize(&notifyRect) != kResultTrue)
+    {
+        notifyRect.left = 0;
+        notifyRect.top = 0;
+        notifyRect.right = 800;
+        notifyRect.bottom = 600;
+    }
+    if (plugFrame_)
+        plugFrame_->setCachedRect(notifyRect);
+
+    resizePluginViewWindow(pluginViewWindow_, notifyRect, true);
     view->onSize(&notifyRect);
 
     if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view))
     {
-        float scale = GetContentScaleForWindow(parentWindow);
+        float scale = GetContentScaleForWindow(pluginViewWindow_);
         scaleSupport->setContentScaleFactor(scale);
     }
 
-    ::ShowWindow(parentWindow, SW_SHOWNORMAL);
-    ::UpdateWindow(parentWindow);
-    ::SetFocus(parentWindow);
+    ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
+    ::UpdateWindow(pluginViewWindow_);
+    ::SetFocus(pluginViewWindow_);
+    ::SetTimer(pluginViewWindow_, 1, 16, NULL);
 
     return true;
 }
@@ -2222,6 +2235,10 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
             return 0;
         }
         break;
+    case WM_TIMER:
+        if (host && host->view_)
+            host->view_->onIdle();
+        return 0;
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN:
