@@ -120,8 +120,6 @@ private:
     bool handleKeyUp(WPARAM wParam, LPARAM lParam);
     char16_t translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
     int16_t queryKeyModifiers() const;
-    void startViewIdleTimer();
-    void stopViewIdleTimer();
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -173,7 +171,6 @@ private:
     Steinberg::IPtr<Steinberg::IPlugView> standaloneEditorView_;
     HWND standaloneEditorWindow_ = nullptr;
     mutable std::mutex standaloneEditorMutex_;
-    bool viewIdleTimerActive_ = false;
 #endif
 
     double preparedSampleRate_ = 0.0;

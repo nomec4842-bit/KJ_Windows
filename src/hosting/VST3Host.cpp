@@ -169,7 +169,6 @@ constexpr UINT_PTR kFallbackListViewId = 2001;
 constexpr UINT_PTR kFallbackSliderId = 2002;
 constexpr int kFallbackSliderRange = 1000;
 constexpr UINT kFallbackRefreshMessage = WM_APP + 101;
-constexpr UINT_PTR kPluginViewIdleTimerId = 3001;
 
 std::wstring Utf8ToWide(const std::string& value)
 {
@@ -1531,7 +1530,6 @@ void VST3Host::onContainerResized(int width, int height)
 
 void VST3Host::onContainerDestroyed()
 {
-    stopViewIdleTimer();
     containerWindow_ = nullptr;
     headerWindow_ = nullptr;
     headerTitleStatic_ = nullptr;
@@ -1651,7 +1649,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         ::ShowWindow(parentWindow, SW_SHOWNORMAL);
         ::UpdateWindow(parentWindow);
         ::SetFocus(parentWindow);
-        startViewIdleTimer();
         return true;
     }
 
@@ -1685,7 +1682,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     ::ShowWindow(parentWindow, SW_SHOWNORMAL);
     ::UpdateWindow(parentWindow);
     ::SetFocus(parentWindow);
-    startViewIdleTimer();
 
     return true;
 }
@@ -1713,35 +1709,6 @@ bool VST3Host::resizePluginViewWindow(HWND window, const Steinberg::ViewRect& re
     storeCurrentViewRect(rect);
     return moved;
 }
-
-#ifdef _WIN32
-void VST3Host::startViewIdleTimer()
-{
-    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
-        return;
-
-    if (!viewIdleTimerActive_)
-    {
-        if (::SetTimer(pluginViewWindow_, kPluginViewIdleTimerId, 16, nullptr))
-            viewIdleTimerActive_ = true;
-    }
-}
-
-void VST3Host::stopViewIdleTimer()
-{
-    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
-    {
-        viewIdleTimerActive_ = false;
-        return;
-    }
-
-    if (viewIdleTimerActive_)
-    {
-        ::KillTimer(pluginViewWindow_, kPluginViewIdleTimerId);
-        viewIdleTimerActive_ = false;
-    }
-}
-#endif
 
 void VST3Host::storeCurrentViewRect(const Steinberg::ViewRect& rect)
 {
@@ -2255,13 +2222,6 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
             return 0;
         }
         break;
-    case WM_TIMER:
-        if (wParam == kPluginViewIdleTimerId && host && host->view_ && host->viewAttached_)
-        {
-            host->view_->onIdle();
-            return 0;
-        }
-        break;
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN:
@@ -2571,7 +2531,6 @@ LRESULT CALLBACK VST3Host::StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM w
 void VST3Host::destroyPluginUI()
 {
     ClosePluginEditor();
-    stopViewIdleTimer();
     resetFallbackEditState();
 
     if (view_ && viewAttached_)
