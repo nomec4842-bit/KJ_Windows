@@ -16,7 +16,7 @@ The following sequence adapts VSTHost's editor-handling ideas to the modern VST3
 ## 3. Connect component and controller
 1. Call `component->initialize(<IHostApplication*>)` and `controller->initialize(<IHostApplication*>)` with your host implementation.
 2. Connect both sides using `component->setIoMode(kRealtime)` (as needed) and `component->setActive(true)`.
-3. Provide the component with the controller connection by calling `component->setControllerClass(controllerCID)` (if required) and then use `component->connect(controller)` / `controller->setComponentHandler(...)` with your host's handler implementation to manage parameter updates.
+3. Establish the controller handshake through the `IConnectionPoint` interface instead of calling methods directly on `IComponent`. Query both the component and controller for `IConnectionPoint` and call `componentConnection->connect(controllerConnection)` and the reverse. This matches the current VST3 SDK surface and avoids compile errors from older, implementation-only helpers like `setControllerClass` or `component->connect(...)`.
 4. Complete setup with `component->setupProcessing(ProcessSetup{...})` and `component->setProcessing(true)` once audio is ready.
 
 ## 4. Create the plug-in editor view
