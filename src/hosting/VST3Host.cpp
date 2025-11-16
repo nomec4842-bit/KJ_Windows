@@ -1649,7 +1649,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
         ::UpdateWindow(pluginViewWindow_);
         ::SetFocus(pluginViewWindow_);
-        ::SetTimer(pluginViewWindow_, 1, 16, NULL);
         return true;
     }
 
@@ -1694,7 +1693,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
     ::UpdateWindow(pluginViewWindow_);
     ::SetFocus(pluginViewWindow_);
-    ::SetTimer(pluginViewWindow_, 1, 16, NULL);
 
     return true;
 }
@@ -2235,10 +2233,6 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
             return 0;
         }
         break;
-    case WM_TIMER:
-        if (host && host->view_)
-            host->view_->onIdle();
-        return 0;
     case WM_LBUTTONDOWN:
     case WM_MBUTTONDOWN:
     case WM_RBUTTONDOWN:
