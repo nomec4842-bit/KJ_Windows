@@ -23,6 +23,8 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/vstspeaker.h"
 #include "base/source/fobject.h"
 
 #include "public.sdk/source/vst/hosting/module.h"
@@ -44,7 +46,23 @@ public:
     void unload();
 
     bool prepare(double sampleRate, int maxBlockSize);
+    void process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples);
     void process(float** outputs, int numChannels, int numSamples);
+
+    struct HostTransportState {
+        double samplePosition = 0.0;
+        double tempo = 120.0;
+        Steinberg::int32 timeSigNum = 4;
+        Steinberg::int32 timeSigDen = 4;
+        bool playing = false;
+    };
+
+    void setTransportState(const HostTransportState& state);
+
+    void queueNoteEvent(const Steinberg::Vst::Event& ev);
+
+    bool saveState(std::vector<uint8_t>& outState) const;
+    bool loadState(const uint8_t* data, size_t size);
 
     void openEditor(void* nativeWindowHandle);
 
@@ -108,7 +126,7 @@ private:
     static LRESULT CALLBACK StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 
-    void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
+    void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value, bool notifyController = true);
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
@@ -157,10 +175,18 @@ private:
     double preparedSampleRate_ = 0.0;
     int preparedMaxBlockSize_ = 0;
     bool processingActive_ = false;
+    Steinberg::int32 mainInputBusIndex_ = -1;
+    Steinberg::int32 mainOutputBusIndex_ = -1;
+    Steinberg::Vst::SpeakerArrangement inputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
+    Steinberg::Vst::SpeakerArrangement outputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     std::vector<PendingParameterChange> pendingParameterChanges_;
     mutable std::mutex parameterMutex_;
+    Steinberg::Vst::EventList inputEvents_;
+    std::vector<Steinberg::Vst::Event> pendingEvents_;
+    mutable std::mutex eventMutex_;
+    Steinberg::Vst::ProcessContext processContext_ {};
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;
@@ -174,5 +200,4 @@ private:
     bool hasCurrentViewRect_ = false;
 #endif
 };
-
 } // namespace kj
