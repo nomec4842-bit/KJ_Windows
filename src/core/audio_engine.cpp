@@ -585,6 +585,10 @@ struct TrackPlaybackState {
     int resetFadeSamples = 0;
     bool resetScheduled = false;
     SequencerResetReason resetReason = SequencerResetReason::Manual;
+    bool vstPrepared = false;
+    bool vstPrepareErrorNotified = false;
+    double vstPreparedSampleRate = 0.0;
+    int vstPreparedBlockSize = 0;
     struct SynthVoice {
         int midiNote = 69;
         double frequency = midiNoteToFrequency(69);
@@ -1569,6 +1573,10 @@ void audioLoop() {
                 }
 
                 if (trackInfo.type == TrackType::Sample) {
+                    state.vstPrepared = false;
+                    state.vstPreparedSampleRate = 0.0;
+                    state.vstPreparedBlockSize = 0;
+                    state.vstPrepareErrorNotified = false;
                     auto sampleBuffer = trackGetSampleBuffer(trackInfo.id);
                     bool sampleBufferChanged = sampleBuffer != state.sampleBuffer;
                     state.sampleBuffer = std::move(sampleBuffer);
@@ -1607,9 +1615,46 @@ void audioLoop() {
 
                     auto host = trackInfo.vstHost;
                     if (host) {
-                        host->prepare(sampleRate, static_cast<int>(bufferFrameCount));
+                        bool needsPrepare = typeChanged || samplerResetPending || !state.vstPrepared ||
+                                            std::abs(state.vstPreparedSampleRate - sampleRate) > 1e-6 ||
+                                            state.vstPreparedBlockSize != static_cast<int>(bufferFrameCount);
+
+                        if (needsPrepare) {
+                            bool prepared = host->prepare(sampleRate, static_cast<int>(bufferFrameCount));
+                            state.vstPrepared = prepared;
+
+                            if (prepared) {
+                                state.vstPreparedSampleRate = sampleRate;
+                                state.vstPreparedBlockSize = static_cast<int>(bufferFrameCount);
+                                state.vstPrepareErrorNotified = false;
+                            } else {
+                                state.vstPreparedSampleRate = 0.0;
+                                state.vstPreparedBlockSize = 0;
+
+                                if (!state.vstPrepareErrorNotified) {
+                                    std::wstring trackName(trackInfo.name.begin(), trackInfo.name.end());
+                                    if (trackName.empty())
+                                        trackName = L"Unnamed";
+
+                                    std::wstring message = L"Failed to prepare VST plug-in for track '" + trackName +
+                                                           L"'.\nTry reselecting the audio device or reloading the plug-in.";
+                                    OutputDebugStringW(message.c_str());
+                                    MessageBoxW(nullptr, message.c_str(), L"VST Prepare Failed", MB_OK | MB_ICONERROR);
+                                    state.vstPrepareErrorNotified = true;
+                                }
+                            }
+                        }
+                    } else {
+                        state.vstPrepared = false;
+                        state.vstPreparedSampleRate = 0.0;
+                        state.vstPreparedBlockSize = 0;
+                        state.vstPrepareErrorNotified = false;
                     }
                 } else if (trackInfo.type == TrackType::MidiOut) {
+                    state.vstPrepared = false;
+                    state.vstPreparedSampleRate = 0.0;
+                    state.vstPreparedBlockSize = 0;
+                    state.vstPrepareErrorNotified = false;
                     if (state.sampleBuffer) {
                         state.sampleBuffer.reset();
                         state.sampleFrameCount = 0;
@@ -1625,6 +1670,10 @@ void audioLoop() {
                         state.stepPitchOffset = 0.0;
                     }
                 } else {
+                    state.vstPrepared = false;
+                    state.vstPreparedSampleRate = 0.0;
+                    state.vstPreparedBlockSize = 0;
+                    state.vstPrepareErrorNotified = false;
                     if (state.sampleBuffer) {
                         state.sampleBuffer.reset();
                         state.sampleFrameCount = 0;
@@ -2000,7 +2049,7 @@ void audioLoop() {
                             }
                         } else if (trackInfo.type == TrackType::VST) {
                             auto host = trackInfo.vstHost;
-                            if (host) {
+                            if (host && state.vstPrepared) {
                                 auto queueNoteOff = [&](int note) {
                                     Steinberg::Vst::Event ev {};
                                     ev.busIndex = 0;
@@ -2086,6 +2135,8 @@ void audioLoop() {
                                 host->process(outputs, 2, 1);
                                 trackLeft = static_cast<double>(left);
                                 trackRight = static_cast<double>(right);
+                            } else {
+                                state.activeMidiNotes.clear();
                             }
                         } else if (trackInfo.type == TrackType::MidiOut) {
                             state.samplePlaying = false;
