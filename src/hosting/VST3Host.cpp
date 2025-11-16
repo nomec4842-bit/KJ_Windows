@@ -30,13 +30,117 @@ using namespace kj;
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/base/keycodes.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
+#include "pluginterfaces/vst/vstspeaker.h"
 #include "public.sdk/source/vst/vstcomponent.h"
+#include "public.sdk/source/vst/hosting/eventlist.h"
 
 using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
 namespace {
+
+class VectorIBStream : public Steinberg::IBStream
+{
+public:
+    explicit VectorIBStream(std::vector<uint8_t>& buffer) : writeBuffer_(&buffer)
+    {
+        writeBuffer_->clear();
+    }
+
+    VectorIBStream(const uint8_t* data, size_t size) : readData_(data), readSize_(size) {}
+
+    tresult PLUGIN_API queryInterface(const TUID iid, void** obj) override
+    {
+        if (!obj)
+            return kInvalidArgument;
+
+        *obj = nullptr;
+        if (std::memcmp(iid, Steinberg::IBStream::iid, sizeof(TUID)) == 0 ||
+            std::memcmp(iid, Steinberg::FUnknown::iid, sizeof(TUID)) == 0)
+        {
+            *obj = static_cast<Steinberg::IBStream*>(this);
+            addRef();
+            return kResultOk;
+        }
+        return kNoInterface;
+    }
+
+    uint32 PLUGIN_API addRef() override { return 1; }
+    uint32 PLUGIN_API release() override { return 1; }
+
+    tresult PLUGIN_API read(void* data, int32 numBytes, int32* numRead) override
+    {
+        if (!data || numBytes < 0 || !readData_)
+            return kInvalidArgument;
+
+        const int64 available = static_cast<int64>(readSize_) - position_;
+        const int32 toRead = static_cast<int32>(std::max<int64>(0, std::min<int64>(available, numBytes)));
+
+        if (toRead > 0)
+            std::memcpy(data, readData_ + position_, static_cast<size_t>(toRead));
+
+        position_ += toRead;
+        if (numRead)
+            *numRead = toRead;
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API write(void* data, int32 numBytes, int32* numWritten) override
+    {
+        if (!data || numBytes < 0 || !writeBuffer_)
+            return kInvalidArgument;
+
+        auto* bytes = reinterpret_cast<uint8_t*>(data);
+        writeBuffer_->insert(writeBuffer_->end(), bytes, bytes + numBytes);
+        position_ += numBytes;
+
+        if (numWritten)
+            *numWritten = numBytes;
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API seek(int64 pos, int32 mode, int64* result) override
+    {
+        int64 base = 0;
+        switch (mode)
+        {
+            case Steinberg::IBStream::kIBSeekSet: base = 0; break;
+            case Steinberg::IBStream::kIBSeekCur: base = position_; break;
+            case Steinberg::IBStream::kIBSeekEnd:
+                base = writeBuffer_ ? static_cast<int64>(writeBuffer_->size())
+                                    : static_cast<int64>(readSize_);
+                break;
+            default: return kInvalidArgument;
+        }
+
+        int64 newPos = base + pos;
+        if (newPos < 0)
+            return kInvalidArgument;
+
+        position_ = newPos;
+        if (writeBuffer_ && position_ > static_cast<int64>(writeBuffer_->size()))
+            writeBuffer_->resize(static_cast<size_t>(position_), 0);
+
+        if (result)
+            *result = position_;
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API tell(int64* pos) override
+    {
+        if (!pos)
+            return kInvalidArgument;
+        *pos = position_;
+        return kResultOk;
+    }
+
+private:
+    std::vector<uint8_t>* writeBuffer_ = nullptr;
+    const uint8_t* readData_ = nullptr;
+    size_t readSize_ = 0;
+    int64 position_ = 0;
+};
 
 bool IsInvalidNormalizedValue(Steinberg::Vst::ParamValue value)
 {
@@ -491,8 +595,65 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     if (!processor_)
         return false;
 
+    mainInputBusIndex_ = -1;
+    mainOutputBusIndex_ = -1;
+    inputArrangement_ = SpeakerArr::kEmpty;
+    outputArrangement_ = SpeakerArr::kEmpty;
+
+    const auto findMainBus = [&](Steinberg::int32 busCount, Steinberg::Vst::BusDirection direction) {
+        Steinberg::int32 found = -1;
+        for (Steinberg::int32 i = 0; i < busCount; ++i)
+        {
+            Steinberg::Vst::BusInfo info {};
+            if (component_->getBusInfo(Steinberg::Vst::kAudio, direction, i, info) != kResultOk)
+                continue;
+
+            if (info.busType == Steinberg::Vst::kMain)
+                return i;
+
+            if (found < 0)
+                found = i;
+        }
+        return found;
+    };
+
+    const Steinberg::int32 inputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput) : 0;
+    const Steinberg::int32 outputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput) : 0;
+
+    if (component_)
+    {
+        mainInputBusIndex_ = findMainBus(inputBusCount, Steinberg::Vst::kInput);
+        mainOutputBusIndex_ = findMainBus(outputBusCount, Steinberg::Vst::kOutput);
+    }
+
+    if (mainOutputBusIndex_ < 0)
+        return false;
+
+    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(static_cast<size_t>(inputBusCount), SpeakerArr::kEmpty);
+    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(static_cast<size_t>(outputBusCount), SpeakerArr::kEmpty);
+
+    if (mainInputBusIndex_ >= 0 && mainInputBusIndex_ < inputBusCount)
+    {
+        inputArrangement_ = SpeakerArr::kStereo;
+        inputArrangements[static_cast<size_t>(mainInputBusIndex_)] = inputArrangement_;
+    }
+
+    outputArrangement_ = SpeakerArr::kStereo;
+    outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
+
+    if (processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(), inputBusCount,
+                                       outputArrangements.empty() ? nullptr : outputArrangements.data(), outputBusCount) != kResultOk)
+        return false;
+
     if (component_)
         component_->setActive(true);
+
+    if (component_)
+    {
+        if (mainInputBusIndex_ >= 0)
+            component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, mainInputBusIndex_, true);
+        component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, mainOutputBusIndex_, true);
+    }
 
     ProcessSetup setup {};
     setup.processMode = kRealtime;
@@ -508,16 +669,25 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
 
     preparedSampleRate_ = sampleRate;
     preparedMaxBlockSize_ = blockSize;
+    processContext_.sampleRate = sampleRate;
     processingActive_ = true;
     return true;
 }
 
-void VST3Host::queueParameterChange(ParamID paramId, ParamValue value)
+void VST3Host::queueParameterChange(ParamID paramId, ParamValue value, bool notifyController)
 {
     if (paramId == kNoParamId || IsInvalidNormalizedValue(value))
         return;
 
     ParamValue clamped = std::clamp(value, 0.0, 1.0);
+
+    if (notifyController && controller_)
+    {
+        controller_->setParamNormalized(paramId, clamped);
+        controller_->beginEdit(paramId);
+        controller_->performEdit(paramId, clamped);
+        controller_->endEdit(paramId);
+    }
 
     std::lock_guard<std::mutex> lock(parameterMutex_);
     auto it = std::find_if(pendingParameterChanges_.begin(), pendingParameterChanges_.end(),
@@ -532,9 +702,113 @@ void VST3Host::queueParameterChange(ParamID paramId, ParamValue value)
     }
 }
 
+void VST3Host::queueNoteEvent(const Steinberg::Vst::Event& ev)
+{
+    std::lock_guard<std::mutex> lock(eventMutex_);
+    pendingEvents_.push_back(ev);
+}
+
+void VST3Host::setTransportState(const HostTransportState& state)
+{
+    processContext_ = {};
+    processContext_.sampleRate = preparedSampleRate_;
+    processContext_.projectTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePosition);
+    processContext_.continousTimeSamples = static_cast<Steinberg::Vst::TSamples>(state.samplePosition);
+    processContext_.tempo = state.tempo;
+    processContext_.timeSigNumerator = state.timeSigNum;
+    processContext_.timeSigDenominator = state.timeSigDen;
+
+    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kContTimeValid;
+    if (state.playing)
+        processContext_.state |= ProcessContext::kPlaying;
+}
+
+bool VST3Host::saveState(std::vector<uint8_t>& outState) const
+{
+    if (!component_ || !controller_)
+        return false;
+
+    std::vector<uint8_t> componentState;
+    std::vector<uint8_t> controllerState;
+
+    {
+        VectorIBStream componentStream(componentState);
+        if (component_->getState(&componentStream) != kResultOk)
+            return false;
+    }
+
+    {
+        VectorIBStream controllerStream(controllerState);
+        if (controller_->getState(&controllerStream) != kResultOk)
+            return false;
+    }
+
+    outState.clear();
+    auto appendChunk = [&outState](const std::vector<uint8_t>& chunk) {
+        uint32_t size = static_cast<uint32_t>(chunk.size());
+        const uint8_t* sizeBytes = reinterpret_cast<const uint8_t*>(&size);
+        outState.insert(outState.end(), sizeBytes, sizeBytes + sizeof(uint32_t));
+        outState.insert(outState.end(), chunk.begin(), chunk.end());
+    };
+
+    appendChunk(componentState);
+    appendChunk(controllerState);
+    return true;
+}
+
+bool VST3Host::loadState(const uint8_t* data, size_t size)
+{
+    if (!component_ || !controller_ || !data || size == 0)
+        return false;
+
+    if (size < sizeof(uint32_t))
+        return false;
+
+    const uint8_t* cursor = data;
+    size_t remaining = size;
+
+    auto readChunk = [&cursor, &remaining](const uint8_t*& chunkData, size_t& chunkSize) -> bool {
+        if (remaining < sizeof(uint32_t))
+            return false;
+
+        uint32_t declaredSize = 0;
+        std::memcpy(&declaredSize, cursor, sizeof(uint32_t));
+        cursor += sizeof(uint32_t);
+        remaining -= sizeof(uint32_t);
+
+        if (remaining < declaredSize)
+            return false;
+
+        chunkData = cursor;
+        chunkSize = declaredSize;
+        cursor += declaredSize;
+        remaining -= declaredSize;
+        return true;
+    };
+
+    const uint8_t* componentData = nullptr;
+    size_t componentSize = 0;
+    if (!readChunk(componentData, componentSize))
+        return false;
+
+    const uint8_t* controllerData = nullptr;
+    size_t controllerSize = 0;
+    if (!readChunk(controllerData, controllerSize))
+        return false;
+
+    {
+        VectorIBStream componentStream(componentData, componentSize);
+        if (component_->setState(&componentStream) != kResultOk)
+            return false;
+    }
+
+    VectorIBStream controllerStream(controllerData, controllerSize);
+    return controller_->setState(&controllerStream) == kResultOk;
+}
+
 void VST3Host::onControllerParameterChanged(ParamID paramId, ParamValue value)
 {
-    queueParameterChange(paramId, value);
+    queueParameterChange(paramId, value, false);
 #ifdef _WIN32
     syncFallbackParameterValue(paramId, value);
 #endif
@@ -615,20 +889,26 @@ bool VST3Host::ensureViewForRequestedType()
 
 void VST3Host::process(float** outputs, int numChannels, int numSamples)
 {
+    process(nullptr, 0, outputs, numChannels, numSamples);
+}
+
+void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
+{
     if (!processor_ || !processingActive_ || !outputs)
         return;
-
-    for (int channel = 0; channel < numChannels; ++channel)
-    {
-        if (outputs[channel])
-            std::fill(outputs[channel], outputs[channel] + numSamples, 0.0f);
-    }
 
     std::vector<PendingParameterChange> changes;
     {
         std::lock_guard<std::mutex> lock(parameterMutex_);
         changes = pendingParameterChanges_;
         pendingParameterChanges_.clear();
+    }
+
+    std::vector<Steinberg::Vst::Event> events;
+    {
+        std::lock_guard<std::mutex> lock(eventMutex_);
+        events = pendingEvents_;
+        pendingEvents_.clear();
     }
 
     inputParameterChanges_.clearQueue();
@@ -639,23 +919,41 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
         int32 index = 0;
         if (auto* queue = inputParameterChanges_.addParameterData(change.id, index))
-        {
             queue->addPoint(0, change.value, index);
-        }
     }
 
+    inputEvents_.setMaxSize(std::max<int32>(static_cast<int32>(events.size()), 1));
+    inputEvents_.clear();
+    for (auto& ev : events)
+        inputEvents_.addEvent(ev);
+
+    const Steinberg::int32 expectedInputChannels = (mainInputBusIndex_ >= 0)
+                                                       ? SpeakerArr::getChannelCount(inputArrangement_)
+                                                       : 0;
+    const Steinberg::int32 expectedOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
+
+    AudioBusBuffers inputBus {};
+    inputBus.numChannels = std::min<Steinberg::int32>(numInputChannels, expectedInputChannels);
+    inputBus.channelBuffers32 = inputs;
+
     AudioBusBuffers outputBus {};
-    outputBus.numChannels = numChannels;
+    outputBus.numChannels = std::min<Steinberg::int32>(numOutputChannels, expectedOutputChannels);
     outputBus.channelBuffers32 = outputs;
 
     ProcessData data {};
     data.processMode = kRealtime;
     data.symbolicSampleSize = kSample32;
     data.numSamples = numSamples;
-    data.numOutputs = 1;
-    data.outputs = &outputBus;
+    data.numInputs = (mainInputBusIndex_ >= 0 && inputBus.numChannels > 0) ? 1 : 0;
+    data.numOutputs = (mainOutputBusIndex_ >= 0 && outputBus.numChannels > 0) ? 1 : 0;
+    data.inputs = (data.numInputs > 0) ? &inputBus : nullptr;
+    data.outputs = (data.numOutputs > 0) ? &outputBus : nullptr;
+    data.processContext = &processContext_;
+
     if (inputParameterChanges_.getParameterCount() > 0)
         data.inputParameterChanges = &inputParameterChanges_;
+    if (!events.empty())
+        data.inputEvents = &inputEvents_;
 
     processor_->process(data);
 }
@@ -697,9 +995,16 @@ void VST3Host::unload()
 
     preparedSampleRate_ = 0.0;
     preparedMaxBlockSize_ = 0;
+    mainInputBusIndex_ = -1;
+    mainOutputBusIndex_ = -1;
+    inputArrangement_ = SpeakerArr::kEmpty;
+    outputArrangement_ = SpeakerArr::kEmpty;
+    processContext_ = {};
 
     inputParameterChanges_.setMaxParameters(0);
     inputParameterChanges_.clearQueue();
+    inputEvents_.clear();
+    pendingEvents_.clear();
 
     requestedViewType_ = Steinberg::Vst::ViewType::kEditor;
 
@@ -1652,8 +1957,11 @@ void VST3Host::applyFallbackSliderChange(bool finalChange)
     }
 
     controller_->setParamNormalized(parameter.info.id, normalized);
+    controller_->beginEdit(parameter.info.id);
+    controller_->performEdit(parameter.info.id, normalized);
+    controller_->endEdit(parameter.info.id);
 
-    queueParameterChange(parameter.info.id, normalized);
+    queueParameterChange(parameter.info.id, normalized, false);
 
     parameter.normalizedValue = normalized;
 
