@@ -5,19 +5,26 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <string>
 #include "core/audio_engine.h"
 #include "core/sequencer.h"
 #include "core/tracks.h"
 #include "gui/gui_main.h"
 
+namespace {
+void logStartupEvent(const wchar_t* message) {
+    OutputDebugStringW((std::wstring(L"[KJ] ") + message + L"\n").c_str());
+}
+}
+
 int main() {
-    MessageBoxW(NULL, L"KJ started.", L"DEBUG", MB_OK);
+    logStartupEvent(L"KJ started.");
     initTracks();
     initSequencer();
     initAudio();
-    MessageBoxW(NULL, L"Audio initialized.", L"DEBUG", MB_OK);
+    logStartupEvent(L"Audio initialized.");
     initGUI();
-    MessageBoxW(NULL, L"GUI initialized.", L"DEBUG", MB_OK);
+    logStartupEvent(L"GUI initialized.");
     shutdownAudio();
     return 0;
 }
