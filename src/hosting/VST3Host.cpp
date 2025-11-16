@@ -524,6 +524,18 @@ bool VST3Host::load(const std::string& pluginPath)
             return false;
         }
     }
+    else
+    {
+        controller = Steinberg::FUnknownPtr<IEditController>(component);
+        if (controller)
+        {
+            if (controller->initialize(&hostContext) != kResultOk)
+            {
+                std::cerr << "[KJ] Controller initialization failed.\n";
+                return false;
+            }
+        }
+    }
 
     Steinberg::FUID controllerClassId;
     if (controller)
@@ -535,6 +547,11 @@ bool VST3Host::load(const std::string& pluginPath)
             {
                 controllerClassId.fromString(classIdString);
             }
+        }
+
+        if (!controllerClassId.isValid())
+        {
+            controllerClassId = Steinberg::FUID::fromTUID(componentClass->ID().data());
         }
     }
 
