@@ -795,8 +795,12 @@ void VST3Host::setTransportState(const HostTransportState& state)
     processContext_.timeSigNumerator = state.timeSigNum;
     processContext_.timeSigDenominator = state.timeSigDen;
 
-    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid |
-                            ProcessContext::kContTimeValid;
+    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid;
+
+    // The VST3 spec states projectTimeSamples is always valid, so there is no dedicated
+    // state flag for it (kProjectTimeSamplesValid does not exist). Use the continuous time
+    // flag to indicate the timeline position we provide.
+    processContext_.state |= ProcessContext::kContTimeValid;
     if (state.playing)
         processContext_.state |= ProcessContext::kPlaying;
 }
