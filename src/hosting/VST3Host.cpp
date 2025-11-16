@@ -796,7 +796,7 @@ void VST3Host::setTransportState(const HostTransportState& state)
     processContext_.timeSigDenominator = state.timeSigDen;
 
     processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid |
-                            ProcessContext::kProjectTimeSamplesValid | ProcessContext::kContTimeValid;
+                            ProcessContext::kContTimeValid;
     if (state.playing)
         processContext_.state |= ProcessContext::kPlaying;
 }
