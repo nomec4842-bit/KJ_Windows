@@ -27,6 +27,7 @@ using namespace kj;
 
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipersistent.h"
+#include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/base/keycodes.h"
@@ -478,6 +479,13 @@ bool VST3Host::load(const std::string& pluginPath)
     }
 
     auto factory = module->getFactory();
+    auto factory3 = Steinberg::FUnknownPtr<Steinberg::IPluginFactory3>(factory.get());
+    if (!factory3)
+    {
+        std::cerr << "[KJ] Plugin does not expose IPluginFactory3." << std::endl;
+        return false;
+    }
+
     auto classes = factory.classInfos();
     const ClassInfo* componentClass = nullptr;
     const ClassInfo* controllerClass = nullptr;
@@ -501,12 +509,16 @@ bool VST3Host::load(const std::string& pluginPath)
     pluginVendorW_ = Utf8ToWide(componentClass->vendor());
 #endif
 
-    auto component = factory.createInstance<IComponent>(componentClass->ID());
-    if (!component)
+    IComponent* rawComponent = nullptr;
+    if (factory3->createInstance(componentClass->ID().data(), IComponent::iid,
+                                 reinterpret_cast<void**>(&rawComponent)) != kResultOk ||
+        !rawComponent)
     {
         std::cerr << "Failed to instantiate component: " << componentClass->name() << std::endl;
         return false;
     }
+
+    Steinberg::IPtr<Steinberg::Vst::IComponent> component = Steinberg::owned(rawComponent);
 
     Steinberg::FObject hostContext;
     if (component->initialize(&hostContext) != kResultOk)
@@ -515,61 +527,71 @@ bool VST3Host::load(const std::string& pluginPath)
         return false;
     }
 
-    auto controller = controllerClass ? factory.createInstance<IEditController>(controllerClass->ID()) : nullptr;
-    if (controller)
+    Steinberg::FUID controllerClassId;
+    if (controllerClass)
+        controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
+
+    if (controllerClassId.isValid())
+        component->setControllerClass(controllerClassId);
+
+    Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
+    if (controllerClassId.isValid())
     {
-        if (controller->initialize(&hostContext) != kResultOk)
+        IEditController* rawController = nullptr;
+        if (factory3->createInstance(controllerClassId.getTUID(), IEditController::iid,
+                                     reinterpret_cast<void**>(&rawController)) != kResultOk ||
+            !rawController)
         {
-            std::cerr << "[KJ] Controller initialization failed.\n";
+            std::cerr << "Failed to instantiate controller: " << controllerClass->name() << std::endl;
             return false;
         }
+
+        controller = Steinberg::owned(rawController);
     }
     else
     {
         controller = Steinberg::FUnknownPtr<IEditController>(component);
-        if (controller)
-        {
-            if (controller->initialize(&hostContext) != kResultOk)
-            {
-                std::cerr << "[KJ] Controller initialization failed.\n";
-                return false;
-            }
-        }
     }
 
-    Steinberg::FUID controllerClassId;
-    if (controller)
+    if (!controller)
     {
-        if (auto persistent = Steinberg::FUnknownPtr<Steinberg::IPersistent>(controller))
-        {
-            Steinberg::FUID::String classIdString {};
-            if (persistent->getClassID(classIdString) == kResultOk)
-            {
-                controllerClassId.fromString(classIdString);
-            }
-        }
-
-        if (!controllerClassId.isValid())
-        {
-            controllerClassId = Steinberg::FUID::fromTUID(componentClass->ID().data());
-        }
+        std::cerr << "Failed to acquire controller." << std::endl;
+        return false;
     }
 
-    if (!controllerClassId.isValid() && controllerClass)
+    if (controller->initialize(&hostContext) != kResultOk)
     {
-        controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
+        std::cerr << "[KJ] Controller initialization failed.\n";
+        return false;
     }
 
-    if (auto componentImpl = Steinberg::FObject::fromUnknown<Steinberg::Vst::Component>(component))
+    auto componentHandler = new ComponentHandler(*this);
+    controller->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler));
+
+    if (component->connect(controller) != kResultOk)
     {
-        if (controllerClassId.isValid())
-            componentImpl->setControllerClass(controllerClassId);
+        std::cerr << "[KJ] Component/controller connection failed.\n";
+        controller->setComponentHandler(nullptr);
+        componentHandler->release();
+        return false;
+    }
+
+    {
+        std::vector<uint8_t> componentState;
+        VectorIBStream stateWriter(componentState);
+        if (component->getState(&stateWriter) == kResultOk && !componentState.empty())
+        {
+            VectorIBStream stateReader(componentState.data(), componentState.size());
+            controller->setComponentState(&stateReader);
+        }
     }
 
     auto processor = Steinberg::FUnknownPtr<IAudioProcessor>(component);
     if (!processor)
     {
         std::cerr << "Component does not implement IAudioProcessor.\n";
+        controller->setComponentHandler(nullptr);
+        componentHandler->release();
         return false;
     }
 
@@ -580,20 +602,12 @@ bool VST3Host::load(const std::string& pluginPath)
     view_ = nullptr;
     currentViewType_.clear();
 
-    if (controller_)
-    {
-        componentHandler_ = new ComponentHandler(*this);
-        controller_->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler_));
-        inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
+    componentHandler_ = componentHandler;
+    inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
 
-        // Request the plug-in's editor view immediately so we know if a native GUI is available.
-        if (!ensureViewForRequestedType())
-            std::cerr << "[KJ] Plug-in does not provide a usable editor view; fallback UI will be used." << std::endl;
-    }
-    else
-    {
-        inputParameterChanges_.setMaxParameters(0);
-    }
+    // Request the plug-in's editor view immediately so we know if a native GUI is available.
+    if (!ensureViewForRequestedType())
+        std::cerr << "[KJ] Plug-in does not provide a usable editor view; fallback UI will be used." << std::endl;
 
     {
         std::lock_guard<std::mutex> lock(parameterMutex_);
