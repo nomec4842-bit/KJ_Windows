@@ -548,7 +548,8 @@ bool VST3Host::load(const std::string& pluginPath)
                                      reinterpret_cast<void**>(&rawController)) != kResultOk ||
             !rawController)
         {
-            std::cerr << "Failed to instantiate controller: " << controllerClass->name() << std::endl;
+            const auto controllerName = controllerClass ? controllerClass->name() : "<controller>";
+            std::cerr << "Failed to instantiate controller: " << controllerName << std::endl;
             return false;
         }
 
@@ -574,18 +575,25 @@ bool VST3Host::load(const std::string& pluginPath)
     auto componentHandler = new ComponentHandler(*this);
     controller->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler));
 
-    auto componentConnectionPoint = Steinberg::FUnknownPtr<Steinberg::Vst::IConnectionPoint>(component);
-    auto controllerConnectionPoint = Steinberg::FUnknownPtr<Steinberg::Vst::IConnectionPoint>(controller);
-    if (componentConnectionPoint && controllerConnectionPoint)
+    auto componentConnectionPoint =
+        Steinberg::FUnknownPtr<Steinberg::Vst::IConnectionPoint>(component);
+    auto controllerConnectionPoint =
+        Steinberg::FUnknownPtr<Steinberg::Vst::IConnectionPoint>(controller);
+    if (!componentConnectionPoint || !controllerConnectionPoint)
     {
-        if (componentConnectionPoint->connect(controllerConnectionPoint) != kResultOk ||
-            controllerConnectionPoint->connect(componentConnectionPoint) != kResultOk)
-        {
-            std::cerr << "[KJ] Component/controller connection failed.\n";
-            controller->setComponentHandler(nullptr);
-            componentHandler->release();
-            return false;
-        }
+        std::cerr << "[KJ] Plug-in does not expose IConnectionPoint on component/controller.\n";
+        controller->setComponentHandler(nullptr);
+        componentHandler->release();
+        return false;
+    }
+
+    if (componentConnectionPoint->connect(controllerConnectionPoint) != kResultOk ||
+        controllerConnectionPoint->connect(componentConnectionPoint) != kResultOk)
+    {
+        std::cerr << "[KJ] Component/controller connection failed.\n";
+        controller->setComponentHandler(nullptr);
+        componentHandler->release();
+        return false;
     }
 
     {
