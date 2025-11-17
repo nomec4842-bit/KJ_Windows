@@ -13,6 +13,7 @@
 #include <mmreg.h>
 #include <ksmedia.h>
 #include <thread>
+#include <future>
 #include <chrono>
 #include <atomic>
 #include <cmath>
@@ -42,6 +43,7 @@
 #include "core/midi_output.h"
 #include "core/mod_matrix.h"
 #include "core/mod_matrix_parameters.h"
+#include "core/audio_thread_pool.h"
 #include "hosting/VST3Host.h"
 
 std::atomic<bool> isPlaying = false;
@@ -55,6 +57,7 @@ static std::wstring activeDeviceId;
 static std::wstring activeDeviceName;
 static std::wstring activeRequestedDeviceId;
 static std::atomic<bool> deviceChangeRequested{false};
+static AudioThreadPool trackProcessingPool(std::max(1u, std::thread::hardware_concurrency()));
 
 constexpr std::size_t kMasterWaveformBufferSize = 44100;
 static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
@@ -1244,6 +1247,15 @@ void audioLoop() {
     std::chrono::steady_clock::time_point lastCallbackTime{};
 #endif
 
+    struct TrackFrameResult
+    {
+        double left = 0.0;
+        double right = 0.0;
+        double detection = 0.0;
+        bool activeTrackHasSteps = false;
+        int activeTrackStep = 0;
+    };
+
     while (running.load(std::memory_order_acquire)) {
         bool changeRequested = deviceChangeRequested.exchange(false);
         std::wstring desiredDeviceId;
@@ -1783,6 +1795,43 @@ void audioLoop() {
                         stepAdvanced = true;
                     }
 
+                    std::vector<TrackModulatedParameters> modulatedParameters(trackInfos.size());
+                    std::vector<std::future<void>> modulationFutures;
+                    modulationFutures.reserve(trackInfos.size());
+                    for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
+                        modulationFutures.push_back(trackProcessingPool.submit([&, trackIndex]() {
+                            const auto& trackInfo = trackInfos[trackIndex];
+                            auto stateIt = playbackStates.find(trackInfo.id);
+                            if (stateIt == playbackStates.end())
+                                return;
+
+                            auto& state = stateIt->second;
+                            int trackStepCount = trackStepCounts[trackIndex];
+                            int stepIndex = state.currentStep;
+                            if (stepIndex < 0 || stepIndex >= trackStepCount)
+                                stepIndex = 0;
+
+                            auto assignmentIt = assignmentsByTrack.find(trackInfo.id);
+                            if (assignmentIt != assignmentsByTrack.end()) {
+                                updateTrackModulationState(state,
+                                                           assignmentIt->second,
+                                                           trackInfo,
+                                                           stepIndex,
+                                                           sampleRate,
+                                                           activeTrackId == trackInfo.id,
+                                                           trackStepCount);
+                            } else {
+                                state.modulation.parameterAmounts.assign(cachedModMatrixParameterCount(), 0.0);
+                            }
+
+                            modulatedParameters[trackIndex] = computeTrackModulatedParameters(state, trackInfo);
+                        }));
+                    }
+
+                    for (auto& future : modulationFutures) {
+                        future.get();
+                    }
+
                     double leftValue = 0.0;
                     double rightValue = 0.0;
 
@@ -1928,13 +1977,7 @@ void audioLoop() {
                             activeTrackHasSteps = true;
                         }
 
-                        const std::vector<ModMatrixAssignment>* trackAssignmentsPtr = nullptr;
-                        auto assignmentsItTrack = assignmentsByTrack.find(trackInfo.id);
-                        if (assignmentsItTrack != assignmentsByTrack.end())
-                            trackAssignmentsPtr = &assignmentsItTrack->second;
-
-                        updateTrackModulationState(state, trackInfo, sampleRate, trackAssignmentsPtr);
-                        TrackModulatedParameters modulatedParams = computeTrackModulatedParameters(state, trackInfo);
+                        TrackModulatedParameters modulatedParams = modulatedParameters[trackIndex];
 
                         double trackLeft = 0.0;
                         double trackRight = 0.0;
