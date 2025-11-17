@@ -13,7 +13,6 @@
 #include <mmreg.h>
 #include <ksmedia.h>
 #include <thread>
-#include <future>
 #include <chrono>
 #include <atomic>
 #include <cmath>
@@ -45,7 +44,7 @@
 #include "core/midi_output.h"
 #include "core/mod_matrix.h"
 #include "core/mod_matrix_parameters.h"
-#include "core/audio_thread_pool.h"
+#include "audio/thread_pool.h"
 #include "hosting/VST3Host.h"
 
 std::atomic<bool> isPlaying = false;
@@ -59,7 +58,14 @@ static std::wstring activeDeviceId;
 static std::wstring activeDeviceName;
 static std::wstring activeRequestedDeviceId;
 static std::atomic<bool> deviceChangeRequested{false};
-static AudioThreadPool trackProcessingPool(std::max(1u, std::thread::hardware_concurrency()));
+static ThreadPool& getTrackProcessingPool()
+{
+    auto concurrency = std::thread::hardware_concurrency();
+    std::size_t threadCount = (concurrency > 1) ? concurrency - 1 : 2;
+    std::size_t queueCapacity = std::max<std::size_t>(getTrackCount(), 64u);
+    static ThreadPool pool(threadCount, queueCapacity);
+    return pool;
+}
 
 constexpr std::size_t kMasterWaveformBufferSize = 44100;
 static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
@@ -1798,14 +1804,17 @@ void audioLoop() {
                     }
 
                     std::vector<TrackModulatedParameters> modulatedParameters(trackInfos.size());
-                    std::vector<std::future<void>> modulationFutures;
-                    modulationFutures.reserve(trackInfos.size());
+                    JobGroup modulationGroup;
+                    modulationGroup.remaining.store(static_cast<int>(trackInfos.size()), std::memory_order_relaxed);
+                    auto& trackProcessingPool = getTrackProcessingPool();
                     for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
-                        modulationFutures.push_back(trackProcessingPool.submit([&, trackIndex]() {
+                        auto job = [&, trackIndex]() {
                             const auto& trackInfo = trackInfos[trackIndex];
                             auto stateIt = playbackStates.find(trackInfo.id);
-                            if (stateIt == playbackStates.end())
+                            if (stateIt == playbackStates.end()) {
+                                notifyFinished(modulationGroup);
                                 return;
+                            }
 
                             auto& state = stateIt->second;
                             int trackStepCount = trackStepCounts[trackIndex];
@@ -1824,12 +1833,15 @@ void audioLoop() {
                             }
 
                             modulatedParameters[trackIndex] = computeTrackModulatedParameters(state, trackInfo);
-                        }));
+                            notifyFinished(modulationGroup);
+                        };
+
+                        if (!trackProcessingPool.enqueue(job)) {
+                            job();
+                        }
                     }
 
-                    for (auto& future : modulationFutures) {
-                        future.get();
-                    }
+                    waitUntilFinished(modulationGroup);
 
                     double leftValue = 0.0;
                     double rightValue = 0.0;
