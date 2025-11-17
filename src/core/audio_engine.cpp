@@ -1814,12 +1814,9 @@ void audioLoop() {
                             auto assignmentIt = assignmentsByTrack.find(trackInfo.id);
                             if (assignmentIt != assignmentsByTrack.end()) {
                                 updateTrackModulationState(state,
-                                                           assignmentIt->second,
                                                            trackInfo,
-                                                           stepIndex,
                                                            sampleRate,
-                                                           activeTrackId == trackInfo.id,
-                                                           trackStepCount);
+                                                           &assignmentIt->second);
                             } else {
                                 state.modulation.parameterAmounts.assign(cachedModMatrixParameterCount(), 0.0);
                             }
