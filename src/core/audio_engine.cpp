@@ -35,6 +35,8 @@
 #endif
 
 #include "core/tracks.h"
+#include "core/track_type_sample.h"
+#include "core/track_type_synth.h"
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
 #include "core/audio_device_handler.h"

@@ -1,5 +1,7 @@
 #include "core/mod_matrix_parameters.h"
 
+#include "core/track_type_sample.h"
+#include "core/track_type_synth.h"
 #include "core/tracks.h"
 
 #include <algorithm>
