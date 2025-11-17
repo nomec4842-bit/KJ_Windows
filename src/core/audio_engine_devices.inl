@@ -37,11 +37,20 @@ std::wstring getRequestedAudioOutputDeviceId() {
 }
 
 bool setActiveAudioOutputDevice(const std::wstring& deviceId) {
+    bool changeNeeded = true;
     {
         std::lock_guard<std::mutex> lock(deviceMutex);
-        requestedDeviceId = deviceId;
-        activeRequestedDeviceId = deviceId;
+        if (deviceId == activeDeviceId || deviceId == activeRequestedDeviceId) {
+            changeNeeded = false;
+        } else {
+            requestedDeviceId = deviceId;
+            activeRequestedDeviceId = deviceId;
+        }
     }
-    deviceChangeRequested.store(true, std::memory_order_release);
-    return true;
+
+    if (changeNeeded) {
+        deviceChangeRequested.store(true, std::memory_order_release);
+    }
+
+    return changeNeeded;
 }
