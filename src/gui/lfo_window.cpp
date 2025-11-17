@@ -1,5 +1,6 @@
 #include "gui/lfo_window.h"
 
+#include "core/track_type_synth.h"
 #include "core/tracks.h"
 #include "gui/gui_main.h"
 

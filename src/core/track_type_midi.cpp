@@ -1,3 +1,13 @@
+#include "core/track_type_midi.h"
+#include "core/tracks_internal.h"
+
+#include <algorithm>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+
+using namespace track_internal;
+
 int trackGetMidiChannel(int trackId)
 {
     auto track = findTrackData(trackId);
@@ -58,3 +68,4 @@ void trackSetMidiPort(int trackId, int portId, const std::wstring& portName)
     track->track.midiPort = sanitized;
     track->track.midiPortName = portName;
 }
+
