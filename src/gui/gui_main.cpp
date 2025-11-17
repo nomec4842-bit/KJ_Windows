@@ -31,8 +31,10 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <chrono>
@@ -919,6 +921,8 @@ struct AudioDeviceDropdownOption
 std::vector<AudioDeviceDropdownOption> gAudioDeviceOptions;
 std::vector<AudioOutputDevice> gCachedAudioDevices;
 std::chrono::steady_clock::time_point gLastAudioDeviceRefresh = std::chrono::steady_clock::time_point::min();
+std::mutex gAudioDeviceCacheMutex;
+std::atomic_bool gAudioDeviceRefreshInProgress {false};
 
 struct MidiPortDropdownOption
 {
@@ -1096,14 +1100,39 @@ void drawText(LICE_SysBitmap& surface, const RECT& rect, const char* text, COLOR
 void refreshAudioDeviceList(bool forceRefresh)
 {
     auto now = std::chrono::steady_clock::now();
-    if (!forceRefresh && gLastAudioDeviceRefresh != std::chrono::steady_clock::time_point::min())
     {
-        if (now - gLastAudioDeviceRefresh < std::chrono::seconds(2))
+        std::lock_guard<std::mutex> lock(gAudioDeviceCacheMutex);
+        if (!forceRefresh && gLastAudioDeviceRefresh != std::chrono::steady_clock::time_point::min())
+        {
+            if (now - gLastAudioDeviceRefresh < std::chrono::seconds(2))
+                return;
+        }
+
+        if (gAudioDeviceRefreshInProgress.load(std::memory_order_acquire))
             return;
+
+        gAudioDeviceRefreshInProgress.store(true, std::memory_order_release);
     }
 
-    gCachedAudioDevices = getAvailableAudioOutputDevices();
-    gLastAudioDeviceRefresh = now;
+    std::thread([] {
+        auto devices = getAvailableAudioOutputDevices();
+        auto completedAt = std::chrono::steady_clock::now();
+
+        {
+            std::lock_guard<std::mutex> lock(gAudioDeviceCacheMutex);
+            gCachedAudioDevices = std::move(devices);
+            gLastAudioDeviceRefresh = completedAt;
+        }
+
+        gAudioDeviceRefreshInProgress.store(false, std::memory_order_release);
+        requestMainMenuRefresh();
+    }).detach();
+}
+
+std::vector<AudioOutputDevice> getCachedAudioDevices()
+{
+    std::lock_guard<std::mutex> lock(gAudioDeviceCacheMutex);
+    return gCachedAudioDevices;
 }
 
 void refreshMidiPortList(bool forceRefresh)
@@ -5700,8 +5729,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
 
     if (audioDeviceDropdownOpen)
     {
-        refreshAudioDeviceList(false);
-        const int optionCount = 1 + static_cast<int>(gCachedAudioDevices.size());
+        auto cachedAudioDevices = getCachedAudioDevices();
+        const int optionCount = 1 + static_cast<int>(cachedAudioDevices.size());
         RECT optionRect = audioDeviceButton;
         optionRect.top = computeDropdownStartTop(audioDeviceButton, optionCount, kAudioDeviceDropdownOptionHeight,
                                                  kAudioDeviceDropdownSpacing, client);
@@ -5723,7 +5752,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
         optionRect.top = optionRect.bottom + kAudioDeviceDropdownSpacing;
         optionRect.bottom = optionRect.top + kAudioDeviceDropdownOptionHeight;
 
-        for (const auto& device : gCachedAudioDevices)
+        for (const auto& device : cachedAudioDevices)
         {
             AudioDeviceDropdownOption option{};
             option.rect = optionRect;
