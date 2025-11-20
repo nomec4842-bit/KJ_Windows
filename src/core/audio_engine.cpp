@@ -1266,18 +1266,30 @@ void audioLoop() {
 
     constexpr size_t kCachedTrackCapacity = 64;
     constexpr size_t kCachedAssignmentCapacity = 32;
+    constexpr size_t kCachedStepCapacity = kMaxSequencerSteps;
+    constexpr size_t kCachedNotesPerStep = 8;
 
     struct TrackDataSnapshot
     {
         std::vector<Track> tracks;
         std::vector<int> trackStepCounts;
         std::vector<std::pair<int, std::vector<ModMatrixAssignment>>> assignmentsByTrack;
+        std::vector<std::vector<bool>> stepStatesByTrack;
+        std::vector<std::vector<std::vector<StepNoteInfo>>> stepNotesByTrack;
+        std::vector<std::vector<float>> stepVelocityByTrack;
+        std::vector<std::vector<float>> stepPanByTrack;
+        std::vector<std::vector<float>> stepPitchByTrack;
 
         void reserve()
         {
             tracks.reserve(kCachedTrackCapacity);
             trackStepCounts.reserve(kCachedTrackCapacity);
             assignmentsByTrack.reserve(kCachedTrackCapacity);
+            stepStatesByTrack.reserve(kCachedTrackCapacity);
+            stepNotesByTrack.reserve(kCachedTrackCapacity);
+            stepVelocityByTrack.reserve(kCachedTrackCapacity);
+            stepPanByTrack.reserve(kCachedTrackCapacity);
+            stepPitchByTrack.reserve(kCachedTrackCapacity);
             for (auto& entry : assignmentsByTrack)
                 entry.second.reserve(kCachedAssignmentCapacity);
         }
@@ -1290,14 +1302,56 @@ void audioLoop() {
                 trackStepCounts.reserve(kCachedTrackCapacity);
             if (assignmentsByTrack.capacity() < kCachedTrackCapacity)
                 assignmentsByTrack.reserve(kCachedTrackCapacity);
+            if (stepStatesByTrack.capacity() < kCachedTrackCapacity)
+                stepStatesByTrack.reserve(kCachedTrackCapacity);
+            if (stepNotesByTrack.capacity() < kCachedTrackCapacity)
+                stepNotesByTrack.reserve(kCachedTrackCapacity);
+            if (stepVelocityByTrack.capacity() < kCachedTrackCapacity)
+                stepVelocityByTrack.reserve(kCachedTrackCapacity);
+            if (stepPanByTrack.capacity() < kCachedTrackCapacity)
+                stepPanByTrack.reserve(kCachedTrackCapacity);
+            if (stepPitchByTrack.capacity() < kCachedTrackCapacity)
+                stepPitchByTrack.reserve(kCachedTrackCapacity);
 
             trackStepCounts.assign(trackCount, 0);
             assignmentsByTrack.resize(trackCount);
+            stepStatesByTrack.resize(trackCount);
+            stepNotesByTrack.resize(trackCount);
+            stepVelocityByTrack.resize(trackCount);
+            stepPanByTrack.resize(trackCount);
+            stepPitchByTrack.resize(trackCount);
             for (auto& entry : assignmentsByTrack)
             {
                 entry.second.clear();
                 if (entry.second.capacity() < kCachedAssignmentCapacity)
                     entry.second.reserve(kCachedAssignmentCapacity);
+            }
+            for (auto& stepStates : stepStatesByTrack)
+            {
+                stepStates.assign(kCachedStepCapacity, false);
+            }
+            for (auto& stepNotes : stepNotesByTrack)
+            {
+                stepNotes.clear();
+                stepNotes.resize(kCachedStepCapacity);
+                for (auto& notes : stepNotes)
+                {
+                    notes.clear();
+                    if (notes.capacity() < kCachedNotesPerStep)
+                        notes.reserve(kCachedNotesPerStep);
+                }
+            }
+            for (auto& stepVelocities : stepVelocityByTrack)
+            {
+                stepVelocities.assign(kCachedStepCapacity, kTrackStepVelocityMax);
+            }
+            for (auto& stepPans : stepPanByTrack)
+            {
+                stepPans.assign(kCachedStepCapacity, 0.0f);
+            }
+            for (auto& stepPitches : stepPitchByTrack)
+            {
+                stepPitches.assign(kCachedStepCapacity, 0.0f);
             }
         }
     };
@@ -1319,6 +1373,18 @@ void audioLoop() {
         {
             snapshot.trackStepCounts[i] = getSequencerStepCount(snapshot.tracks[i].id);
             snapshot.assignmentsByTrack[i].first = snapshot.tracks[i].id;
+            int stepCount = std::clamp(snapshot.trackStepCounts[i], 0, static_cast<int>(kCachedStepCapacity));
+            snapshot.stepStatesByTrack[i].assign(stepCount, false);
+            snapshot.stepNotesByTrack[i].resize(stepCount);
+            snapshot.stepVelocityByTrack[i].assign(stepCount, kTrackStepVelocityMax);
+            snapshot.stepPanByTrack[i].assign(stepCount, 0.0f);
+            snapshot.stepPitchByTrack[i].assign(stepCount, 0.0f);
+            for (auto& notes : snapshot.stepNotesByTrack[i])
+            {
+                notes.clear();
+                if (notes.capacity() < kCachedNotesPerStep)
+                    notes.reserve(kCachedNotesPerStep);
+            }
         }
 
         auto assignments = modMatrixGetAssignments();
@@ -1331,6 +1397,34 @@ void audioLoop() {
             if (it != snapshot.assignmentsByTrack.end())
             {
                 it->second.push_back(assignment);
+            }
+        }
+
+        for (size_t i = 0; i < snapshot.tracks.size(); ++i)
+        {
+            int trackId = snapshot.tracks[i].id;
+            int stepCount = snapshot.trackStepCounts[i];
+            for (int step = 0; step < stepCount && step < static_cast<int>(kCachedStepCapacity); ++step)
+            {
+                snapshot.stepStatesByTrack[i][step] = trackGetStepState(trackId, step);
+                snapshot.stepVelocityByTrack[i][step] = trackGetStepVelocity(trackId, step);
+                snapshot.stepPanByTrack[i][step] = trackGetStepPan(trackId, step);
+                snapshot.stepPitchByTrack[i][step] = trackGetStepPitchOffset(trackId, step);
+
+                auto notes = trackGetStepNoteInfo(trackId, step);
+                if (notes.empty())
+                {
+                    int fallback = trackGetStepNote(trackId, step);
+                    if (fallback >= 0)
+                    {
+                        StepNoteInfo info{};
+                        info.midiNote = fallback;
+                        info.velocity = trackGetStepNoteVelocity(trackId, step, fallback);
+                        info.sustain = trackGetStepNoteSustain(trackId, step, fallback);
+                        notes.push_back(info);
+                    }
+                }
+                snapshot.stepNotesByTrack[i][step] = std::move(notes);
             }
         }
     };
@@ -1587,6 +1681,11 @@ void audioLoop() {
             const auto& trackInfos = trackSnapshot ? trackSnapshot->tracks : trackSnapshotA.tracks;
             const auto& trackStepCounts = trackSnapshot ? trackSnapshot->trackStepCounts : trackSnapshotA.trackStepCounts;
             const auto& assignmentsByTrack = trackSnapshot ? trackSnapshot->assignmentsByTrack : trackSnapshotA.assignmentsByTrack;
+            const auto& stepStatesByTrack = trackSnapshot ? trackSnapshot->stepStatesByTrack : trackSnapshotA.stepStatesByTrack;
+            const auto& stepNotesByTrack = trackSnapshot ? trackSnapshot->stepNotesByTrack : trackSnapshotA.stepNotesByTrack;
+            const auto& stepVelocityByTrack = trackSnapshot ? trackSnapshot->stepVelocityByTrack : trackSnapshotA.stepVelocityByTrack;
+            const auto& stepPanByTrack = trackSnapshot ? trackSnapshot->stepPanByTrack : trackSnapshotA.stepPanByTrack;
+            const auto& stepPitchByTrack = trackSnapshot ? trackSnapshot->stepPitchByTrack : trackSnapshotA.stepPitchByTrack;
 
             int activeTrackId = getActiveSequencerTrackId();
 
@@ -1928,21 +2027,6 @@ void audioLoop() {
                     double leftValue = 0.0;
                     double rightValue = 0.0;
 
-                    auto getNotesForStep = [](int trackId, int stepIndex) {
-                    std::vector<StepNoteInfo> notes = trackGetStepNoteInfo(trackId, stepIndex);
-                    if (notes.empty()) {
-                        int fallback = trackGetStepNote(trackId, stepIndex);
-                        if (fallback >= 0) {
-                            StepNoteInfo info{};
-                            info.midiNote = fallback;
-                            info.velocity = trackGetStepNoteVelocity(trackId, stepIndex, fallback);
-                            info.sustain = trackGetStepNoteSustain(trackId, stepIndex, fallback);
-                            notes.push_back(info);
-                        }
-                    }
-                    return notes;
-                };
-
                     if (stepAdvanced) {
                         for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
                             const auto& trackInfo = trackInfos[trackIndex];
@@ -1997,13 +2081,26 @@ void audioLoop() {
                         int parameterStep = (trackStepCount > 0 && stepIndex < trackStepCount) ? stepIndex : -1;
                         if (parameterStep >= 0) {
                             if (state.lastParameterStep != parameterStep) {
-                                state.stepVelocity = std::clamp(static_cast<double>(trackGetStepVelocity(trackInfo.id, parameterStep)),
+                                float cachedVelocity = (trackIndex < stepVelocityByTrack.size() &&
+                                                        parameterStep < static_cast<int>(stepVelocityByTrack[trackIndex].size()))
+                                                           ? stepVelocityByTrack[trackIndex][parameterStep]
+                                                           : kTrackStepVelocityMax;
+                                float cachedPan = (trackIndex < stepPanByTrack.size() &&
+                                                   parameterStep < static_cast<int>(stepPanByTrack[trackIndex].size()))
+                                                      ? stepPanByTrack[trackIndex][parameterStep]
+                                                      : 0.0f;
+                                float cachedPitch = (trackIndex < stepPitchByTrack.size() &&
+                                                     parameterStep < static_cast<int>(stepPitchByTrack[trackIndex].size()))
+                                                        ? stepPitchByTrack[trackIndex][parameterStep]
+                                                        : 0.0f;
+
+                                state.stepVelocity = std::clamp(static_cast<double>(cachedVelocity),
                                                                 static_cast<double>(kTrackStepVelocityMin),
                                                                 static_cast<double>(kTrackStepVelocityMax));
-                                state.stepPan = std::clamp(static_cast<double>(trackGetStepPan(trackInfo.id, parameterStep)),
+                                state.stepPan = std::clamp(static_cast<double>(cachedPan),
                                                            static_cast<double>(kTrackStepPanMin),
                                                            static_cast<double>(kTrackStepPanMax));
-                                state.stepPitchOffset = std::clamp(static_cast<double>(trackGetStepPitchOffset(trackInfo.id, parameterStep)),
+                                state.stepPitchOffset = std::clamp(static_cast<double>(cachedPitch),
                                                                    static_cast<double>(kTrackStepPitchMin),
                                                                    static_cast<double>(kTrackStepPitchMax));
                                 state.lastParameterStep = parameterStep;
@@ -2018,18 +2115,34 @@ void audioLoop() {
 
                         bool gate = false;
                         bool triggered = false;
-                        std::vector<StepNoteInfo> stepNotes;
-                        std::vector<StepNoteInfo> noteOnNotes;
-                        std::vector<int> notesPresent;
+                        const std::vector<StepNoteInfo>* stepNotes = nullptr;
+                        static thread_local std::vector<StepNoteInfo> cachedNoteOnNotes;
+                        static thread_local std::vector<int> cachedNotesPresent;
+                        cachedNoteOnNotes.clear();
+                        cachedNotesPresent.clear();
+                        auto& noteOnNotes = cachedNoteOnNotes;
+                        auto& notesPresent = cachedNotesPresent;
                         if (trackStepCount > 0 && stepIndex < trackStepCount) {
-                            if (getTrackStepState(trackInfo.id, stepIndex)) {
+                            bool stepEnabled = (trackIndex < stepStatesByTrack.size() &&
+                                                stepIndex < static_cast<int>(stepStatesByTrack[trackIndex].size()))
+                                                   ? stepStatesByTrack[trackIndex][stepIndex]
+                                                   : false;
+                            if (trackIndex < stepNotesByTrack.size() &&
+                                stepIndex < static_cast<int>(stepNotesByTrack[trackIndex].size()) &&
+                                (trackInfo.type == TrackType::Synth || trackInfo.type == TrackType::MidiOut || trackInfo.type == TrackType::VST))
+                            {
+                                stepNotes = &stepNotesByTrack[trackIndex][stepIndex];
+                            }
+
+                            if (stepEnabled) {
                                 gate = true;
                                 if (stepAdvanced) {
-                                    if (trackInfo.type == TrackType::Synth ||
-                                        trackInfo.type == TrackType::MidiOut ||
-                                        trackInfo.type == TrackType::VST) {
-                                        stepNotes = getNotesForStep(trackInfo.id, stepIndex);
-                                        for (const auto& noteInfo : stepNotes) {
+                                    if (stepNotes && (trackInfo.type == TrackType::Synth ||
+                                                      trackInfo.type == TrackType::MidiOut ||
+                                                      trackInfo.type == TrackType::VST)) {
+                                        noteOnNotes.reserve(stepNotes->size());
+                                        notesPresent.reserve(stepNotes->size());
+                                        for (const auto& noteInfo : *stepNotes) {
                                             int clampedNote = std::clamp(noteInfo.midiNote, 0, 127);
                                             double velocity = std::clamp(static_cast<double>(noteInfo.velocity),
                                                                          static_cast<double>(kTrackStepVelocityMin),
@@ -2329,7 +2442,8 @@ void audioLoop() {
 
                             if (gate && stepAdvanced) {
                                 std::vector<TrackPlaybackState::SynthVoice> updatedVoices;
-                                updatedVoices.reserve(stepNotes.size() + state.voices.size());
+                                size_t stepNoteCount = stepNotes ? stepNotes->size() : 0;
+                                updatedVoices.reserve(stepNoteCount + state.voices.size());
                                 bool createdNewVoice = false;
 
                                 auto findExistingVoice = [&state](int note) {
@@ -2339,39 +2453,41 @@ void audioLoop() {
                                         });
                                 };
 
-                                for (const auto& noteInfo : stepNotes) {
-                                    int note = std::clamp(noteInfo.midiNote, 0, 127);
-                                    double noteVelocity = std::clamp(static_cast<double>(noteInfo.velocity),
-                                                                     static_cast<double>(kTrackStepVelocityMin),
-                                                                     static_cast<double>(kTrackStepVelocityMax));
+                                if (stepNotes) {
+                                    for (const auto& noteInfo : *stepNotes) {
+                                        int note = std::clamp(noteInfo.midiNote, 0, 127);
+                                        double noteVelocity = std::clamp(static_cast<double>(noteInfo.velocity),
+                                                                         static_cast<double>(kTrackStepVelocityMin),
+                                                                         static_cast<double>(kTrackStepVelocityMax));
 
-                                    auto existingIt = findExistingVoice(note);
-                                    bool hasExistingVoice = existingIt != state.voices.end();
-                                    bool restartVoice = !noteInfo.sustain || !hasExistingVoice;
-                                    TrackPlaybackState::SynthVoice voice = hasExistingVoice
-                                        ? *existingIt
-                                        : TrackPlaybackState::SynthVoice{};
-                                    voice.midiNote = note;
-                                    voice.frequency = midiNoteToFrequency(static_cast<double>(note) + modulatedParams.synthPitch + state.stepPitchOffset);
+                                        auto existingIt = findExistingVoice(note);
+                                        bool hasExistingVoice = existingIt != state.voices.end();
+                                        bool restartVoice = !noteInfo.sustain || !hasExistingVoice;
+                                        TrackPlaybackState::SynthVoice voice = hasExistingVoice
+                                            ? *existingIt
+                                            : TrackPlaybackState::SynthVoice{};
+                                        voice.midiNote = note;
+                                        voice.frequency = midiNoteToFrequency(static_cast<double>(note) + modulatedParams.synthPitch + state.stepPitchOffset);
 
-                                    if (!hasExistingVoice) {
-                                        voice.velocitySmoothed = noteVelocity;
-                                        voice.envelope = 0.0;
-                                        voice.lastOutput = 0.0;
-                                    }
-
-                                    voice.velocity = noteVelocity;
-
-                                    if (restartVoice) {
-                                        voice.envelopeStage = EnvelopeStage::Attack;
-                                        if (state.synthPhaseSync) {
-                                            voice.phase = 0.0;
+                                        if (!hasExistingVoice) {
+                                            voice.velocitySmoothed = noteVelocity;
+                                            voice.envelope = 0.0;
                                             voice.lastOutput = 0.0;
                                         }
-                                        createdNewVoice = true;
-                                    }
 
-                                    updatedVoices.push_back(voice);
+                                        voice.velocity = noteVelocity;
+
+                                        if (restartVoice) {
+                                            voice.envelopeStage = EnvelopeStage::Attack;
+                                            if (state.synthPhaseSync) {
+                                                voice.phase = 0.0;
+                                                voice.lastOutput = 0.0;
+                                            }
+                                            createdNewVoice = true;
+                                        }
+
+                                        updatedVoices.push_back(voice);
+                                    }
                                 }
 
                                 for (auto& voice : state.voices) {
