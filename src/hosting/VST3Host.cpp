@@ -629,10 +629,10 @@ bool VST3Host::load(const std::string& pluginPath)
     if (!ensureViewForRequestedType())
         std::cerr << "[KJ] Plug-in does not provide a usable editor view; fallback UI will be used." << std::endl;
 
-    {
-        std::lock_guard<std::mutex> lock(parameterMutex_);
-        pendingParameterChanges_.clear();
-    }
+    parameterChangeQueue_.clear();
+    eventQueue_.clear();
+    processParameterChanges_.clear();
+    processEvents_.clear();
 
 #ifdef _WIN32
     refreshFallbackParameters();
@@ -769,6 +769,16 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
         inputChannelPointers_.clear();
     }
 
+    const size_t parameterQueueCapacity = std::max<size_t>(static_cast<size_t>(controller_->getParameterCount()) * 4, 64);
+    parameterChangeQueue_.reset(parameterQueueCapacity);
+    processParameterChanges_.clear();
+    processParameterChanges_.reserve(parameterChangeQueue_.capacity());
+
+    const size_t eventQueueCapacity = std::max<size_t>(static_cast<size_t>(blockSize) * 4, 128);
+    eventQueue_.reset(eventQueueCapacity);
+    processEvents_.clear();
+    processEvents_.reserve(eventQueue_.capacity());
+
     processingActive_ = true;
     return true;
 }
@@ -792,23 +802,15 @@ void VST3Host::queueParameterChange(ParamID paramId, ParamValue value, bool noti
             hostEditing->endEditFromHost(paramId);
     }
 
-    std::lock_guard<std::mutex> lock(parameterMutex_);
-    auto it = std::find_if(pendingParameterChanges_.begin(), pendingParameterChanges_.end(),
-                           [paramId](const PendingParameterChange& change) { return change.id == paramId; });
-    if (it != pendingParameterChanges_.end())
-    {
-        it->value = clamped;
-    }
-    else
-    {
-        pendingParameterChanges_.push_back({paramId, clamped});
-    }
+    PendingParameterChange change {paramId, clamped};
+    if (!parameterChangeQueue_.push(change))
+        parameterChangeQueue_.pushOverwrite(change);
 }
 
 void VST3Host::queueEvent(const Steinberg::Vst::Event& ev)
 {
-    std::lock_guard<std::mutex> lock(eventMutex_);
-    pendingEvents_.push_back(ev);
+    if (!eventQueue_.push(ev))
+        eventQueue_.pushOverwrite(ev);
 }
 
 void VST3Host::queueNoteEvent(const Steinberg::Vst::Event& ev)
@@ -1009,19 +1011,11 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
 void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
 {
-    std::vector<PendingParameterChange> changes;
-    {
-        std::lock_guard<std::mutex> lock(parameterMutex_);
-        changes.swap(pendingParameterChanges_);
-    }
+    parameterChangeQueue_.popAll(processParameterChanges_);
+    eventQueue_.popAll(processEvents_);
 
-    std::vector<Steinberg::Vst::Event> events;
-    {
-        std::lock_guard<std::mutex> lock(eventMutex_);
-        events.swap(pendingEvents_);
-    }
-
-    processInternal(inputs, numInputChannels, outputs, numOutputChannels, numSamples, changes, events);
+    processInternal(inputs, numInputChannels, outputs, numOutputChannels, numSamples, processParameterChanges_,
+                    processEvents_);
 }
 
 void VST3Host::processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
@@ -1127,13 +1121,10 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
     const Steinberg::int32 actualInputChannels = std::min<Steinberg::int32>(expectedInputChannels,
                                                                             static_cast<Steinberg::int32>(internalIn_.size()));
 
-    audioThreadParameterChanges_.clear();
-    audioThreadEvents_.clear();
-
-    if (auto lock = std::unique_lock<std::mutex>(parameterMutex_, std::try_to_lock); lock.owns_lock())
-        audioThreadParameterChanges_.swap(pendingParameterChanges_);
-    if (auto lock = std::unique_lock<std::mutex>(eventMutex_, std::try_to_lock); lock.owns_lock())
-        audioThreadEvents_.swap(pendingEvents_);
+    processParameterChanges_.clear();
+    processEvents_.clear();
+    parameterChangeQueue_.popAll(processParameterChanges_);
+    eventQueue_.popAll(processEvents_);
 
     const int maxChunkSize = (preparedMaxBlockSize_ > 0) ? preparedMaxBlockSize_ : numSamples;
     static const std::vector<PendingParameterChange> kEmptyChanges;
@@ -1167,8 +1158,8 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
             inputBuffers = inputChannelPointers_.data();
         }
 
-        const auto& chunkChanges = automationApplied ? kEmptyChanges : audioThreadParameterChanges_;
-        const auto& chunkEvents = automationApplied ? kEmptyEvents : audioThreadEvents_;
+        const auto& chunkChanges = automationApplied ? kEmptyChanges : processParameterChanges_;
+        const auto& chunkEvents = automationApplied ? kEmptyEvents : processEvents_;
 
         processInternal(inputBuffers, actualInputChannels, outputChannelPointers_.data(), actualOutputChannels, chunkSize,
                         chunkChanges, chunkEvents);
@@ -1216,9 +1207,6 @@ void VST3Host::unload()
     internalOut_.clear();
     inputChannelPointers_.clear();
     outputChannelPointers_.clear();
-    audioThreadParameterChanges_.clear();
-    audioThreadEvents_.clear();
-
     if (controller_ && componentHandler_)
         controller_->setComponentHandler(nullptr);
 
@@ -1252,7 +1240,8 @@ void VST3Host::unload()
     inputParameterChanges_.setMaxParameters(0);
     inputParameterChanges_.clearQueue();
     inputEventList_.clear();
-    pendingEvents_.clear();
+    processEvents_.clear();
+    eventQueue_.clear();
 
     requestedViewType_ = Steinberg::Vst::ViewType::kEditor;
 
@@ -1260,8 +1249,8 @@ void VST3Host::unload()
     lastParentWindow_ = nullptr;
 #endif
 
-    std::lock_guard<std::mutex> lock(parameterMutex_);
-    pendingParameterChanges_.clear();
+    parameterChangeQueue_.clear();
+    processParameterChanges_.clear();
 }
 
 bool VST3Host::isPluginLoaded() const
