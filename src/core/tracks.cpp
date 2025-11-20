@@ -712,6 +712,7 @@ void trackSetType(int trackId, TrackType type)
                 {
                     track->vstHost->unload();
                 }
+                track->vstHost.reset();
                 track->track.vstHost.reset();
             }
             return;
