@@ -1,309 +1,133 @@
 #include "core/track_type_synth.h"
-#include "core/tracks_internal.h"
+#include "core/tracks.h"
 
-#include <algorithm>
-#include <cmath>
+// Legacy synth track logic has been moved to track_type_synth_legacy_unused.cpp
+// to keep the active implementation minimal now that synth tracks are removed.
 
-using namespace track_internal;
-
-SynthWaveType trackGetSynthWaveType(int trackId)
+SynthWaveType trackGetSynthWaveType(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return SynthWaveType::Sine;
-
-    return track->waveType.load(std::memory_order_relaxed);
+    return SynthWaveType::Sine;
 }
 
-void trackSetSynthWaveType(int trackId, SynthWaveType type)
+void trackSetSynthWaveType(int, SynthWaveType)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    track->waveType.store(type, std::memory_order_relaxed);
 }
 
-float trackGetSynthFormant(int trackId)
+float trackGetSynthFormant(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultFormant;
-
-    float value = track->formant.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinFormant, kMaxFormant);
+    return 0.5f;
 }
 
-void trackSetSynthFormant(int trackId, float value)
+void trackSetSynthFormant(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinFormant, kMaxFormant);
-    track->formant.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthResonance(int trackId)
+float trackGetSynthResonance(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultResonance;
-
-    float value = track->resonance.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinResonance, kMaxResonance);
+    return 0.2f;
 }
 
-void trackSetSynthResonance(int trackId, float value)
+void trackSetSynthResonance(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinResonance, kMaxResonance);
-    track->resonance.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthFeedback(int trackId)
+float trackGetSynthFeedback(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultFeedback;
-
-    float value = track->feedback.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinFeedback, kMaxFeedback);
+    return 0.0f;
 }
 
-void trackSetSynthFeedback(int trackId, float value)
+void trackSetSynthFeedback(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinFeedback, kMaxFeedback);
-    track->feedback.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthPitch(int trackId)
+float trackGetSynthPitch(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultPitch;
-
-    float value = track->pitch.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinPitch, kMaxPitch);
+    return 0.0f;
 }
 
-void trackSetSynthPitch(int trackId, float value)
+void trackSetSynthPitch(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinPitch, kMaxPitch);
-    float quantized = static_cast<float>(std::lround(clamped));
-    track->pitch.store(quantized, std::memory_order_relaxed);
 }
 
-float trackGetSynthPitchRange(int trackId)
+float trackGetSynthPitchRange(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultPitchRange;
-
-    float value = track->pitchRange.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinPitchRange, kMaxPitchRange);
+    return 12.0f;
 }
 
-void trackSetSynthPitchRange(int trackId, float value)
+void trackSetSynthPitchRange(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinPitchRange, kMaxPitchRange);
-    float quantized = static_cast<float>(std::lround(clamped));
-    if (quantized < kMinPitchRange)
-        quantized = kMinPitchRange;
-    track->pitchRange.store(quantized, std::memory_order_relaxed);
 }
 
-float trackGetSynthAttack(int trackId)
+float trackGetSynthAttack(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultSynthAttack;
-
-    float value = track->synthAttack.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    return 0.01f;
 }
 
-void trackSetSynthAttack(int trackId, float value)
+void trackSetSynthAttack(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
-    track->synthAttack.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthDecay(int trackId)
+float trackGetSynthDecay(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultSynthDecay;
-
-    float value = track->synthDecay.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    return 0.2f;
 }
 
-void trackSetSynthDecay(int trackId, float value)
+void trackSetSynthDecay(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
-    track->synthDecay.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthSustain(int trackId)
+float trackGetSynthSustain(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultSynthSustain;
-
-    float value = track->synthSustain.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinSynthSustain, kMaxSynthSustain);
+    return 0.8f;
 }
 
-void trackSetSynthSustain(int trackId, float value)
+void trackSetSynthSustain(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinSynthSustain, kMaxSynthSustain);
-    track->synthSustain.store(clamped, std::memory_order_relaxed);
 }
 
-float trackGetSynthRelease(int trackId)
+float trackGetSynthRelease(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultSynthRelease;
-
-    float value = track->synthRelease.load(std::memory_order_relaxed);
-    return std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
+    return 0.3f;
 }
 
-void trackSetSynthRelease(int trackId, float value)
+void trackSetSynthRelease(int, float)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, kMinSynthEnvelopeTime, kMaxSynthEnvelopeTime);
-    track->synthRelease.store(clamped, std::memory_order_relaxed);
 }
 
-bool trackGetSynthPhaseSync(int trackId)
+bool trackGetSynthPhaseSync(int)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return false;
-
-    return track->synthPhaseSync.load(std::memory_order_relaxed);
+    return false;
 }
 
-void trackSetSynthPhaseSync(int trackId, bool enabled)
+void trackSetSynthPhaseSync(int, bool)
 {
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    track->synthPhaseSync.store(enabled, std::memory_order_relaxed);
-    track->track.synthPhaseSync = enabled;
 }
 
-float trackGetLfoRate(int trackId, int index)
+float trackGetLfoRate(int, int)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
-        return kDefaultLfoRatesHz[0];
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultLfoRatesHz[static_cast<size_t>(index)];
-
-    float value = track->lfoRateHz[static_cast<size_t>(index)].load(std::memory_order_relaxed);
-    return clampLfoRate(value);
+    return 1.0f;
 }
 
-void trackSetLfoRate(int trackId, int index, float value)
+void trackSetLfoRate(int, int, float)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
-        return;
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = clampLfoRate(value);
-    track->lfoRateHz[static_cast<size_t>(index)].store(clamped, std::memory_order_relaxed);
-    track->track.lfoSettings[static_cast<size_t>(index)].rateHz = clamped;
 }
 
-LfoShape trackGetLfoShape(int trackId, int index)
+LfoShape trackGetLfoShape(int, int)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoShapes.size()))
-        return kDefaultLfoShapes[0];
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultLfoShapes[static_cast<size_t>(index)];
-
-    return track->lfoShape[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+    return LfoShape::Sine;
 }
 
-void trackSetLfoShape(int trackId, int index, LfoShape shape)
+void trackSetLfoShape(int, int, LfoShape)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoShapes.size()))
-        return;
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    track->lfoShape[static_cast<size_t>(index)].store(shape, std::memory_order_relaxed);
-    track->track.lfoSettings[static_cast<size_t>(index)].shape = shape;
 }
 
-float trackGetLfoDeform(int trackId, int index)
+float trackGetLfoDeform(int, int)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
-        return kDefaultLfoDeform;
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return kDefaultLfoDeform;
-
-    float value = track->lfoDeform[static_cast<size_t>(index)].load(std::memory_order_relaxed);
-    return std::clamp(value, 0.0f, 1.0f);
+    return 0.0f;
 }
 
-void trackSetLfoDeform(int trackId, int index, float value)
+void trackSetLfoDeform(int, int, float)
 {
-    if (index < 0 || index >= static_cast<int>(kDefaultLfoRatesHz.size()))
-        return;
-
-    auto track = findTrackData(trackId);
-    if (!track)
-        return;
-
-    float clamped = std::clamp(value, 0.0f, 1.0f);
-    track->lfoDeform[static_cast<size_t>(index)].store(clamped, std::memory_order_relaxed);
-    track->track.lfoSettings[static_cast<size_t>(index)].deform = clamped;
 }
 
 const char* lfoShapeToString(LfoShape shape)
@@ -333,4 +157,3 @@ LfoShape lfoShapeFromString(const std::string& text)
         return LfoShape::Square;
     return LfoShape::Sine;
 }
-

@@ -48,7 +48,7 @@ struct Track
 {
     int id;
     std::string name;
-    TrackType type = TrackType::Synth;
+    TrackType type = TrackType::VST;
     SynthWaveType synthWaveType = SynthWaveType::Sine;
     float volume = 1.0f;
     float pan = 0.0f;

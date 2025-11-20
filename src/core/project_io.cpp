@@ -101,16 +101,12 @@ std::string trackTypeToString(TrackType type)
 {
     switch (type)
     {
-    case TrackType::Synth:
-        return "Synth";
-    case TrackType::Sample:
-        return "Sample";
     case TrackType::MidiOut:
         return "MIDI Out";
     case TrackType::VST:
         return "VST";
     }
-    return "Unknown";
+    return "VST";
 }
 
 std::string synthWaveTypeToString(SynthWaveType type)
@@ -138,13 +134,11 @@ std::string formatFloat(float value)
 
 TrackType trackTypeFromString(const std::string& value)
 {
-    if (value == "Sample")
-        return TrackType::Sample;
     if (value == "VST")
         return TrackType::VST;
     if (value == "MIDI Out" || value == "MidiOut" || value == "MIDI")
         return TrackType::MidiOut;
-    return TrackType::Synth;
+    return TrackType::VST;
 }
 
 SynthWaveType synthWaveTypeFromString(const std::string& value)
