@@ -521,10 +521,8 @@ struct TrackModulationState
 {
     std::array<double, 3> lfoPhase{0.0, 0.0, 0.0};
     std::array<double, 3> lfoValue{0.0, 0.0, 0.0};
-    double envelopeValue = 0.0;
+    std::atomic<double> envelopeValue{0.0};
     std::array<double, 2> macroValue{0.0, 0.0};
-    double lastAppliedFormant = -1.0;
-    double lastAppliedResonance = -1.0;
     std::vector<double> parameterAmounts;
 };
 
@@ -556,6 +554,8 @@ struct TrackPlaybackState {
     double stepVelocity = 1.0;
     double stepPan = 0.0;
     double stepPitchOffset = 0.0;
+    double lastAppliedFormant = -1.0;
+    double lastAppliedResonance = -1.0;
     int lastParameterStep = -1;
     BiquadFilter lowShelf;
     BiquadFilter midPeak;
@@ -635,8 +635,10 @@ void resetSamplePlaybackState(TrackPlaybackState& state)
     state.sampleTailActive = false;
     state.sampleLastLeft = 0.0;
     state.sampleLastRight = 0.0;
-    state.modulation.envelopeValue = 0.0;
-    std::fill(state.modulation.parameterAmounts.begin(), state.modulation.parameterAmounts.end(), 0.0);
+    state.modulation.envelopeValue.store(0.0, std::memory_order_relaxed);
+    prepareModulationParameters(state.modulation);
+    state.lastAppliedFormant = -1.0;
+    state.lastAppliedResonance = -1.0;
 }
 
 void resetSynthPlaybackState(TrackPlaybackState& state)
@@ -645,8 +647,10 @@ void resetSynthPlaybackState(TrackPlaybackState& state)
     state.voices.clear();
     state.synthGainSmoothed = 1.0;
     resetFilterState(state.formantFilter);
-    state.modulation.envelopeValue = 0.0;
-    std::fill(state.modulation.parameterAmounts.begin(), state.modulation.parameterAmounts.end(), 0.0);
+    state.modulation.envelopeValue.store(0.0, std::memory_order_relaxed);
+    prepareModulationParameters(state.modulation);
+    state.lastAppliedFormant = -1.0;
+    state.lastAppliedResonance = -1.0;
 }
 
 void ensureDelayEffect(TrackPlaybackState& state, double sampleRate)
@@ -759,8 +763,8 @@ void updateMixerState(TrackPlaybackState& state, const Track& track, double samp
         state.formantNormalized = newFormant;
         state.formantResonance = newResonance;
         state.formantBlend = newFormant;
-        state.modulation.lastAppliedFormant = -1.0;
-        state.modulation.lastAppliedResonance = -1.0;
+        state.lastAppliedFormant = -1.0;
+        state.lastAppliedResonance = -1.0;
     }
     if (sampleRateChanged || formantChanged || resonanceChanged)
     {
@@ -951,23 +955,11 @@ std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState
         modulation.lfoValue[i] = evaluateLfoValue(phase, shape, deform);
     }
 
-    double envelope = 0.0;
-    if (track.type == TrackType::Synth && !state.voices.empty())
-    {
-        double sum = 0.0;
-        for (const auto& voice : state.voices)
-            sum += voice.envelope;
-        envelope = sum / static_cast<double>(state.voices.size());
-    }
-    else if (track.type == TrackType::Sample)
-    {
-        envelope = state.sampleEnvelopeSmoothed;
-    }
-
+    double envelope = modulation.envelopeValue.load(std::memory_order_relaxed);
     if (!std::isfinite(envelope))
         envelope = 0.0;
     envelope = std::clamp(envelope, 0.0, 1.0);
-    modulation.envelopeValue = envelope;
+    modulation.envelopeValue.store(envelope, std::memory_order_relaxed);
 
     std::array<double, kModSourceCount> sources{};
     for (size_t i = 0; i < kDefaultLfoFrequencies.size(); ++i)
@@ -978,20 +970,26 @@ std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState
     return sources;
 }
 
+void prepareModulationParameters(TrackModulationState& modulation)
+{
+    int parameterCount = cachedModMatrixParameterCount();
+    if (parameterCount < 0)
+        parameterCount = 0;
+    size_t desiredSize = static_cast<size_t>(parameterCount);
+    if (modulation.parameterAmounts.size() != desiredSize)
+        modulation.parameterAmounts.assign(desiredSize, 0.0);
+    else
+        std::fill(modulation.parameterAmounts.begin(), modulation.parameterAmounts.end(), 0.0);
+}
+
 void updateTrackModulationState(TrackPlaybackState& state,
                                 const Track& track,
                                 double sampleRate,
                                 const std::vector<ModMatrixAssignment>* assignments)
 {
     auto& modulation = state.modulation;
-    int parameterCount = cachedModMatrixParameterCount();
-    if (parameterCount < 0)
-        parameterCount = 0;
-
-    if (modulation.parameterAmounts.size() != static_cast<size_t>(parameterCount))
-        modulation.parameterAmounts.assign(static_cast<size_t>(parameterCount), 0.0);
-    else
-        std::fill(modulation.parameterAmounts.begin(), modulation.parameterAmounts.end(), 0.0);
+    prepareModulationParameters(modulation);
+    int parameterCount = static_cast<int>(modulation.parameterAmounts.size());
 
     auto sources = evaluateModulationSources(state, track, sampleRate);
 
@@ -1255,6 +1253,147 @@ void audioLoop() {
     std::chrono::steady_clock::time_point lastCallbackTime{};
 #endif
 
+    struct ModulationRequest
+    {
+        const std::vector<Track>* tracks = nullptr;
+        const std::vector<std::pair<int, std::vector<ModMatrixAssignment>>>* assignmentsByTrack = nullptr;
+        std::unordered_map<int, TrackPlaybackState>* playbackStates = nullptr;
+        double sampleRate = 44100.0;
+        uint64_t id = 0;
+    };
+
+    struct ModulationResult
+    {
+        std::vector<TrackModulatedParameters> parameters;
+        uint64_t id = 0;
+    };
+
+    class ModulationWorker
+    {
+    public:
+        ModulationWorker()
+        {
+            m_worker = std::thread([this]() { workerLoop(); });
+        }
+
+        ~ModulationWorker()
+        {
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_stop = true;
+            }
+            m_cv.notify_all();
+            if (m_worker.joinable())
+                m_worker.join();
+        }
+
+        void submit(const std::vector<Track>& tracks,
+                    const std::vector<std::pair<int, std::vector<ModMatrixAssignment>>>& assignmentsByTrack,
+                    std::unordered_map<int, TrackPlaybackState>& playbackStates,
+                    double sampleRate)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_request.tracks = &tracks;
+            m_request.assignmentsByTrack = &assignmentsByTrack;
+            m_request.playbackStates = &playbackStates;
+            m_request.sampleRate = sampleRate;
+            m_request.id = ++m_requestCounter;
+            m_hasRequest = true;
+            m_cv.notify_one();
+        }
+
+        const std::vector<TrackModulatedParameters>* consumeLatest(uint64_t& requestIdOut)
+        {
+            int index = m_latestIndex.load(std::memory_order_acquire);
+            if (index < 0)
+                return nullptr;
+            requestIdOut = m_results[index].id;
+            return &m_results[index].parameters;
+        }
+
+    private:
+        void workerLoop()
+        {
+            while (true)
+            {
+                ModulationRequest localRequest{};
+                {
+                    std::unique_lock<std::mutex> lock(m_mutex);
+                    m_cv.wait(lock, [this]() { return m_hasRequest || m_stop; });
+                    if (m_stop)
+                        return;
+                    localRequest = m_request;
+                    m_hasRequest = false;
+                }
+
+                processRequest(localRequest);
+            }
+        }
+
+        void processRequest(const ModulationRequest& request)
+        {
+            if (!request.tracks || !request.playbackStates)
+                return;
+
+            int nextIndex = (m_latestIndex.load(std::memory_order_relaxed) + 1) % 2;
+            auto& result = m_results[nextIndex];
+            result.parameters.resize(request.tracks->size());
+
+            JobGroup group;
+            group.remaining.store(static_cast<int>(request.tracks->size()), std::memory_order_relaxed);
+            auto& pool = getTrackProcessingPool();
+            static const std::vector<ModMatrixAssignment> kEmptyAssignments;
+
+            for (size_t trackIndex = 0; trackIndex < request.tracks->size(); ++trackIndex)
+            {
+                auto job = [&, trackIndex]() {
+                    const auto& trackInfo = (*request.tracks)[trackIndex];
+                    auto stateIt = request.playbackStates->find(trackInfo.id);
+                    if (stateIt == request.playbackStates->end())
+                    {
+                        result.parameters[trackIndex] = TrackModulatedParameters{};
+                        notifyFinished(group);
+                        return;
+                    }
+
+                    auto& state = stateIt->second;
+                    prepareModulationParameters(state.modulation);
+
+                    const std::vector<ModMatrixAssignment>* assignmentList = &kEmptyAssignments;
+                    if (trackIndex < request.assignmentsByTrack->size())
+                    {
+                        const auto& assignmentEntry = (*request.assignmentsByTrack)[trackIndex];
+                        if (assignmentEntry.first == trackInfo.id)
+                            assignmentList = &assignmentEntry.second;
+                    }
+
+                    if (assignmentList && !assignmentList->empty())
+                        updateTrackModulationState(state, trackInfo, request.sampleRate, assignmentList);
+
+                    result.parameters[trackIndex] = computeTrackModulatedParameters(state, trackInfo);
+                    notifyFinished(group);
+                };
+
+                if (!pool.enqueue(job))
+                    job();
+            }
+
+            waitUntilFinished(group);
+            result.id = request.id;
+            m_latestIndex.store(nextIndex, std::memory_order_release);
+        }
+
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+        std::thread m_worker;
+        ModulationRequest m_request{};
+        bool m_hasRequest = false;
+        bool m_stop = false;
+        std::atomic<int> m_latestIndex{-1};
+        std::atomic<uint64_t> m_requestCounter{0};
+        std::array<ModulationResult, 2> m_results{};
+    };
+
     struct TrackFrameResult
     {
         double left = 0.0;
@@ -1362,6 +1501,8 @@ void audioLoop() {
     trackSnapshotB.reserve();
     std::atomic<TrackDataSnapshot*> activeTrackSnapshot{ &trackSnapshotA };
     std::atomic<bool> cacheThreadRunning{ true };
+    ModulationWorker modulationWorker;
+    std::vector<TrackModulatedParameters> fallbackModulationParameters;
 
     auto populateTrackSnapshot = [&](TrackDataSnapshot& snapshot)
     {
@@ -1687,6 +1828,25 @@ void audioLoop() {
             const auto& stepPanByTrack = trackSnapshot ? trackSnapshot->stepPanByTrack : trackSnapshotA.stepPanByTrack;
             const auto& stepPitchByTrack = trackSnapshot ? trackSnapshot->stepPitchByTrack : trackSnapshotA.stepPitchByTrack;
 
+            uint64_t modulationRequestId = 0;
+            const auto* modulatedParameters = modulationWorker.consumeLatest(modulationRequestId);
+            (void)modulationRequestId;
+            modulationWorker.submit(trackInfos, assignmentsByTrack, playbackStates, sampleRate);
+            if (!modulatedParameters || modulatedParameters->size() != trackInfos.size())
+            {
+                fallbackModulationParameters.resize(trackInfos.size());
+                for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex)
+                {
+                    const auto& trackInfo = trackInfos[trackIndex];
+                    auto stateIt = playbackStates.find(trackInfo.id);
+                    if (stateIt != playbackStates.end())
+                        fallbackModulationParameters[trackIndex] = computeTrackModulatedParameters(stateIt->second, trackInfo);
+                    else
+                        fallbackModulationParameters[trackIndex] = TrackModulatedParameters{};
+                }
+                modulatedParameters = &fallbackModulationParameters;
+            }
+
             int activeTrackId = getActiveSequencerTrackId();
 
             for (auto it = playbackStates.begin(); it != playbackStates.end(); ) {
@@ -1973,57 +2133,6 @@ void audioLoop() {
                         stepAdvanced = true;
                     }
 
-                    std::vector<TrackModulatedParameters> modulatedParameters(trackInfos.size());
-                    JobGroup modulationGroup;
-                    modulationGroup.remaining.store(static_cast<int>(trackInfos.size()), std::memory_order_relaxed);
-                    auto& trackProcessingPool = getTrackProcessingPool();
-                    static const std::vector<ModMatrixAssignment> kEmptyAssignments;
-                    for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
-                        auto job = [&, trackIndex]() {
-                            const auto& trackInfo = trackInfos[trackIndex];
-                            auto stateIt = playbackStates.find(trackInfo.id);
-                            if (stateIt == playbackStates.end()) {
-                                notifyFinished(modulationGroup);
-                                return;
-                            }
-
-                            auto& state = stateIt->second;
-                            int trackStepCount = trackStepCounts[trackIndex];
-                            int stepIndex = state.currentStep;
-                            if (stepIndex < 0 || stepIndex >= trackStepCount)
-                                stepIndex = 0;
-
-                            const std::vector<ModMatrixAssignment>* assignmentList = &kEmptyAssignments;
-                            if (trackIndex < assignmentsByTrack.size())
-                            {
-                                const auto& assignmentEntry = assignmentsByTrack[trackIndex];
-                                if (assignmentEntry.first == trackInfo.id)
-                                    assignmentList = &assignmentEntry.second;
-                            }
-
-                            if (assignmentList && !assignmentList->empty())
-                            {
-                                updateTrackModulationState(state,
-                                                           trackInfo,
-                                                           sampleRate,
-                                                           assignmentList);
-                            }
-                            else
-                            {
-                                state.modulation.parameterAmounts.assign(cachedModMatrixParameterCount(), 0.0);
-                            }
-
-                            modulatedParameters[trackIndex] = computeTrackModulatedParameters(state, trackInfo);
-                            notifyFinished(modulationGroup);
-                        };
-
-                        if (!trackProcessingPool.enqueue(job)) {
-                            job();
-                        }
-                    }
-
-                    waitUntilFinished(modulationGroup);
-
                     double leftValue = 0.0;
                     double rightValue = 0.0;
 
@@ -2183,7 +2292,7 @@ void audioLoop() {
                             activeTrackHasSteps = true;
                         }
 
-                        TrackModulatedParameters modulatedParams = modulatedParameters[trackIndex];
+                        TrackModulatedParameters modulatedParams = (*modulatedParameters)[trackIndex];
 
                         double trackLeft = 0.0;
                         double trackRight = 0.0;
@@ -2265,6 +2374,7 @@ void audioLoop() {
                             else if (delta < -maxDelta)
                                 delta = -maxDelta;
                             state.sampleEnvelopeSmoothed += delta;
+                            state.modulation.envelopeValue.store(state.sampleEnvelopeSmoothed, std::memory_order_relaxed);
 
                             double sampleGain = state.sampleEnvelopeSmoothed;
                             trackLeft *= sampleGain;
@@ -2297,6 +2407,7 @@ void audioLoop() {
                                 }
                             }
                         } else if (trackInfo.type == TrackType::VST) {
+                            state.modulation.envelopeValue.store(0.0, std::memory_order_relaxed);
                             auto host = trackInfo.vstHost;
                             if (host && state.vstPrepared) {
                                 auto queueNoteOff = [&](int note) {
@@ -2388,6 +2499,7 @@ void audioLoop() {
                                 state.activeMidiNotes.clear();
                             }
                         } else if (trackInfo.type == TrackType::MidiOut) {
+                            state.modulation.envelopeValue.store(0.0, std::memory_order_relaxed);
                             state.samplePlaying = false;
                             state.sampleTailActive = false;
                             state.voices.clear();
@@ -2528,6 +2640,7 @@ void audioLoop() {
                                 double feedbackMix = std::clamp(modulatedParams.synthFeedback, 0.0, 0.99);
                                 SynthWaveType waveType = trackInfo.synthWaveType;
                                 double totalVelocity = 0.0;
+                                double modulationEnvelope = 0.0;
                                 double sr = sampleRate > 0.0 ? sampleRate : 44100.0;
                                 double velocityMaxDelta = (kSynthEnvelopeSmoothingSeconds > 0.0)
                                     ? (1.0 / (kSynthEnvelopeSmoothingSeconds * sr))
@@ -2589,6 +2702,7 @@ void audioLoop() {
                                                                           modulatedParams.synthRelease,
                                                                           sampleRate);
                                     voice.envelope = envelopeGain;
+                                    modulationEnvelope += envelopeGain;
                                     sampleValue += waveform * velocityGain * envelopeGain;
                                     totalVelocity += velocityGain;
                                     double increment = twoPi * frequency / sampleRate;
@@ -2615,6 +2729,10 @@ void audioLoop() {
                                 if (state.synthGainSmoothed < 0.0)
                                     state.synthGainSmoothed = 0.0;
                                 sampleValue *= state.synthGainSmoothed;
+                                double envelopeAverage = modulationEnvelope / static_cast<double>(state.voices.size());
+                                if (!std::isfinite(envelopeAverage))
+                                    envelopeAverage = 0.0;
+                                state.modulation.envelopeValue.store(envelopeAverage, std::memory_order_relaxed);
                                 if (state.pitchEnvelope > 0.0)
                                 {
                                     state.pitchEnvelope = std::max(0.0, state.pitchEnvelope - state.pitchEnvelopeStep);
@@ -2623,6 +2741,7 @@ void audioLoop() {
                                 }
                             } else {
                                 state.synthGainSmoothed = 1.0;
+                                state.modulation.envelopeValue.store(0.0, std::memory_order_relaxed);
                             }
                             state.voices.erase(std::remove_if(state.voices.begin(), state.voices.end(),
                                 [](const TrackPlaybackState::SynthVoice& voice) {
@@ -2640,13 +2759,13 @@ void audioLoop() {
 
                             double modFormant = std::clamp(modulatedParams.synthFormant, 0.0, 1.0);
                             double modResonance = std::clamp(modulatedParams.synthResonance, 0.0, 1.0);
-                            bool formantNeedsUpdate = std::abs(modFormant - state.modulation.lastAppliedFormant) > 1e-4 ||
-                                                      std::abs(modResonance - state.modulation.lastAppliedResonance) > 1e-4;
+                            bool formantNeedsUpdate = std::abs(modFormant - state.lastAppliedFormant) > 1e-4 ||
+                                                      std::abs(modResonance - state.lastAppliedResonance) > 1e-4;
                             if (formantNeedsUpdate)
                             {
                                 configureFormantFilter(state.formantFilter, sampleRate, modFormant, modResonance);
-                                state.modulation.lastAppliedFormant = modFormant;
-                                state.modulation.lastAppliedResonance = modResonance;
+                                state.lastAppliedFormant = modFormant;
+                                state.lastAppliedResonance = modResonance;
                             }
 
                             double blend = std::clamp(modFormant, 0.0, 1.0);
