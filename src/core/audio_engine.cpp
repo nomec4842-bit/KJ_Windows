@@ -48,10 +48,6 @@
 #include "audio/thread_pool.h"
 #include "hosting/VST3Host.h"
 
-// Forward declarations for helpers defined later in the file
-struct TrackModulationState;
-void prepareModulationParameters(TrackModulationState& modulation);
-
 std::atomic<bool> isPlaying = false;
 static std::atomic<bool> running{true};
 static std::thread audioThread;
@@ -575,6 +571,18 @@ struct TrackModulationState
     std::vector<double> parameterAmounts;
 };
 
+void prepareModulationParameters(TrackModulationState& modulation)
+{
+    int parameterCount = cachedModMatrixParameterCount();
+    if (parameterCount < 0)
+        parameterCount = 0;
+    size_t desiredSize = static_cast<size_t>(parameterCount);
+    if (modulation.parameterAmounts.size() != desiredSize)
+        modulation.parameterAmounts.assign(desiredSize, 0.0);
+    else
+        std::fill(modulation.parameterAmounts.begin(), modulation.parameterAmounts.end(), 0.0);
+}
+
 struct TrackPlaybackState {
     TrackType type = TrackType::Synth;
     int currentMidiNote = 69;
@@ -1017,18 +1025,6 @@ std::array<double, kModSourceCount> evaluateModulationSources(TrackPlaybackState
     sources[4] = modulation.macroValue[0];
     sources[5] = modulation.macroValue[1];
     return sources;
-}
-
-void prepareModulationParameters(TrackModulationState& modulation)
-{
-    int parameterCount = cachedModMatrixParameterCount();
-    if (parameterCount < 0)
-        parameterCount = 0;
-    size_t desiredSize = static_cast<size_t>(parameterCount);
-    if (modulation.parameterAmounts.size() != desiredSize)
-        modulation.parameterAmounts.assign(desiredSize, 0.0);
-    else
-        std::fill(modulation.parameterAmounts.begin(), modulation.parameterAmounts.end(), 0.0);
 }
 
 void updateTrackModulationState(TrackPlaybackState& state,
