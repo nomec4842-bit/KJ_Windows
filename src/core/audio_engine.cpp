@@ -48,6 +48,9 @@
 #include "audio/thread_pool.h"
 #include "hosting/VST3Host.h"
 
+// Forward declarations for helpers defined later in the file
+void prepareModulationParameters(TrackModulationState& modulation);
+
 std::atomic<bool> isPlaying = false;
 static std::atomic<bool> running{true};
 static std::thread audioThread;
