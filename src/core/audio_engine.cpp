@@ -70,11 +70,36 @@ static ThreadPool& getTrackProcessingPool()
 
 constexpr std::size_t kMasterWaveformBufferSize = 44100;
 static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
-static std::size_t masterWaveformWriteIndex = 0;
-static bool masterWaveformFilled = false;
-static std::mutex masterWaveformMutex;
+static std::atomic<std::size_t> masterWaveformWriteIndex{0};
+static std::atomic<bool> masterWaveformFilled{false};
 static std::mutex audioNotificationMutex;
 static std::deque<AudioThreadNotification> audioThreadNotifications;
+
+static void writeWaveformSamples(const float* samples, std::size_t sampleCount)
+{
+    const std::size_t capacity = masterWaveformBuffer.size();
+    if (!samples || sampleCount == 0 || capacity == 0)
+        return;
+
+    std::size_t writeIndex = masterWaveformWriteIndex.load(std::memory_order_relaxed);
+    bool filled = masterWaveformFilled.load(std::memory_order_relaxed);
+
+    for (std::size_t i = 0; i < sampleCount; ++i)
+    {
+        masterWaveformBuffer[writeIndex] = samples[i];
+        writeIndex = (writeIndex + 1) % capacity;
+        if (writeIndex == 0)
+        {
+            filled = true;
+        }
+    }
+
+    if (sampleCount >= capacity)
+        filled = true;
+
+    masterWaveformFilled.store(filled, std::memory_order_release);
+    masterWaveformWriteIndex.store(writeIndex, std::memory_order_release);
+}
 
 static void enqueueAudioThreadNotification(const std::wstring& title, const std::wstring& message)
 {
@@ -2070,8 +2095,15 @@ void audioLoop() {
             }
 
             static thread_local std::vector<float> capturedSamples;
-            capturedSamples.clear();
-            capturedSamples.reserve(static_cast<std::size_t>(available));
+            static thread_local std::size_t capturedCapacity = 0;
+            std::size_t requiredCapacity = static_cast<std::size_t>(bufferFrameCount);
+            if (requiredCapacity > capturedCapacity)
+            {
+                capturedCapacity = requiredCapacity;
+                capturedSamples.assign(capturedCapacity, 0.0f);
+            }
+
+            std::size_t capturedCount = 0;
 
             for (UINT32 i = 0; i < available; i++) {
                 bool playing = isPlaying.load(std::memory_order_relaxed);
@@ -2940,32 +2972,20 @@ void audioLoop() {
                         transportSamplePosition += 1.0;
 
                     float monoValue = static_cast<float>((leftValue + rightValue) * 0.5);
-                    capturedSamples.push_back(monoValue);
+                    if (capturedCount < capturedSamples.size())
+                        capturedSamples[capturedCount++] = monoValue;
                     writeFrame(i, leftValue, rightValue);
                     continue;
                 }
                 if (playing)
                     transportSamplePosition += 1.0;
-                capturedSamples.push_back(0.0f);
+                if (capturedCount < capturedSamples.size())
+                    capturedSamples[capturedCount++] = 0.0f;
                 writeFrame(i, 0.0, 0.0);
             }
 
-            if (!capturedSamples.empty())
-            {
-                std::lock_guard<std::mutex> waveformLock(masterWaveformMutex);
-                if (!masterWaveformBuffer.empty())
-                {
-                    for (float sampleValue : capturedSamples)
-                    {
-                        masterWaveformBuffer[masterWaveformWriteIndex] = sampleValue;
-                        masterWaveformWriteIndex = (masterWaveformWriteIndex + 1) % masterWaveformBuffer.size();
-                        if (masterWaveformWriteIndex == 0)
-                        {
-                            masterWaveformFilled = true;
-                        }
-                    }
-                }
-            }
+            if (capturedCount > 0)
+                writeWaveformSamples(capturedSamples.data(), capturedCount);
 #ifdef DEBUG_AUDIO
             double averageAmplitude = (available > 0)
                 ? (mixSumAbs / (static_cast<double>(available) * 2.0))
