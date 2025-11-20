@@ -167,12 +167,7 @@ constexpr int kAudioDeviceDropdownOptionHeight = 24;
 constexpr int kWaveDropdownSpacing = 4;
 constexpr int kWaveDropdownOptionHeight = 24;
 
-const std::array<TrackType, 4> kTrackTypeOptions = {
-    TrackType::Synth,
-    TrackType::Sample,
-    TrackType::MidiOut,
-    TrackType::VST,
-};
+const std::array<TrackType, 2> kTrackTypeOptions = {TrackType::MidiOut, TrackType::VST};
 const std::array<SynthWaveType, 4> kSynthWaveOptions = {SynthWaveType::Sine, SynthWaveType::Square,
                                                         SynthWaveType::Saw, SynthWaveType::Triangle};
 
@@ -1367,16 +1362,12 @@ std::string trackTypeToString(TrackType type)
 {
     switch (type)
     {
-    case TrackType::Synth:
-        return "Synth";
-    case TrackType::Sample:
-        return "Sample";
     case TrackType::MidiOut:
         return "MIDI Out";
     case TrackType::VST:
         return "VST";
     }
-    return "Unknown";
+    return "VST";
 }
 
 std::string synthWaveTypeToString(SynthWaveType type)

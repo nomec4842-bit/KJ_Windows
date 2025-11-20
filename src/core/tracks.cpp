@@ -25,7 +25,7 @@ std::shared_ptr<TrackData> makeTrackData(const std::string& name)
     Track baseTrack;
     baseTrack.id = gNextTrackId++;
     baseTrack.name = name.empty() ? "Track " + std::to_string(baseTrack.id) : name;
-    baseTrack.type = TrackType::Synth;
+    baseTrack.type = TrackType::VST;
     baseTrack.synthWaveType = SynthWaveType::Sine;
     baseTrack.volume = 1.0f;
     baseTrack.pan = 0.0f;
