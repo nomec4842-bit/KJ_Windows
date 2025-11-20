@@ -11,6 +11,14 @@ void initAudio();
 void shutdownAudio();
 bool loadSampleFile(int trackId, const std::filesystem::path& path);
 
+struct AudioThreadNotification
+{
+    std::wstring title;
+    std::wstring message;
+};
+
+bool consumeAudioThreadNotification(AudioThreadNotification& notification);
+
 struct AudioOutputDevice {
     std::wstring id;
     std::wstring name;

@@ -6959,8 +6959,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_TIMER:
+    {
+        AudioThreadNotification notification{};
+        while (consumeAudioThreadNotification(notification))
+        {
+            if (!notification.message.empty())
+            {
+                OutputDebugStringW(notification.message.c_str());
+                MessageBoxW(hwnd, notification.message.c_str(), notification.title.c_str(), MB_OK | MB_ICONERROR);
+            }
+        }
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    }
     case WM_SIZE:
     {
         int width = LOWORD(lParam);
