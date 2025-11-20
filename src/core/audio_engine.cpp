@@ -49,6 +49,7 @@
 #include "hosting/VST3Host.h"
 
 // Forward declarations for helpers defined later in the file
+struct TrackModulationState;
 void prepareModulationParameters(TrackModulationState& modulation);
 
 std::atomic<bool> isPlaying = false;
