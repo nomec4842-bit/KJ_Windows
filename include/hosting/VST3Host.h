@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <cstdint>
 
@@ -72,6 +73,101 @@ public:
     bool isPluginLoaded() const;
 
 private:
+    template <typename T>
+    class SpscRingBuffer
+    {
+    public:
+        SpscRingBuffer() = default;
+        explicit SpscRingBuffer(size_t capacity) { reset(capacity); }
+
+        void reset(size_t capacity)
+        {
+            buffer_.assign(capacity > 0 ? capacity + 1 : 0, {});
+            head_.store(0, std::memory_order_release);
+            tail_.store(0, std::memory_order_release);
+            capacity_ = buffer_.size();
+        }
+
+        [[nodiscard]] size_t capacity() const { return capacity_ > 0 ? capacity_ - 1 : 0; }
+
+        void clear()
+        {
+            head_.store(0, std::memory_order_release);
+            tail_.store(0, std::memory_order_release);
+        }
+
+        bool push(const T& value)
+        {
+            return emplace(value);
+        }
+
+        bool push(T&& value)
+        {
+            return emplace(std::move(value));
+        }
+
+        template <typename U>
+        bool emplace(U&& value)
+        {
+            if (capacity_ == 0)
+                return false;
+
+            const size_t head = head_.load(std::memory_order_relaxed);
+            const size_t next = increment(head);
+            if (next == tail_.load(std::memory_order_acquire))
+                return false;
+
+            buffer_[head] = std::forward<U>(value);
+            head_.store(next, std::memory_order_release);
+            return true;
+        }
+
+        template <typename U>
+        void pushOverwrite(U&& value)
+        {
+            if (capacity_ == 0)
+                return;
+
+            size_t head = head_.load(std::memory_order_relaxed);
+            size_t next = increment(head);
+            if (next == tail_.load(std::memory_order_acquire))
+            {
+                tail_.store(increment(tail_.load(std::memory_order_relaxed)), std::memory_order_release);
+            }
+
+            buffer_[head] = std::forward<U>(value);
+            head_.store(next, std::memory_order_release);
+        }
+
+        size_t popAll(std::vector<T>& out)
+        {
+            const size_t availableCapacity = capacity();
+            if (out.capacity() < availableCapacity)
+                out.reserve(availableCapacity);
+            out.clear();
+
+            size_t tail = tail_.load(std::memory_order_relaxed);
+            const size_t head = head_.load(std::memory_order_acquire);
+            size_t count = 0;
+            while (tail != head)
+            {
+                out.push_back(buffer_[tail]);
+                tail = increment(tail);
+                ++count;
+            }
+            tail_.store(tail, std::memory_order_release);
+            return count;
+        }
+
+    private:
+        size_t increment(size_t index) const { return (index + 1) % capacity_; }
+
+        std::vector<T> buffer_;
+        size_t capacity_ = 0;
+        std::atomic<size_t> head_ {0};
+        std::atomic<size_t> tail_ {0};
+    };
+
     struct PendingParameterChange {
         Steinberg::Vst::ParamID id {Steinberg::Vst::kNoParamId};
         Steinberg::Vst::ParamValue value {0.0};
@@ -187,13 +283,11 @@ private:
     Steinberg::Vst::SpeakerArrangement outputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
-    std::vector<PendingParameterChange> pendingParameterChanges_;
-    std::vector<PendingParameterChange> audioThreadParameterChanges_;
-    mutable std::mutex parameterMutex_;
+    SpscRingBuffer<PendingParameterChange> parameterChangeQueue_ {512};
+    std::vector<PendingParameterChange> processParameterChanges_;
     Steinberg::Vst::EventList inputEventList_;
-    std::vector<Steinberg::Vst::Event> pendingEvents_;
-    std::vector<Steinberg::Vst::Event> audioThreadEvents_;
-    mutable std::mutex eventMutex_;
+    SpscRingBuffer<Steinberg::Vst::Event> eventQueue_ {512};
+    std::vector<Steinberg::Vst::Event> processEvents_;
     Steinberg::Vst::ProcessContext processContext_ {};
 
     std::vector<std::vector<float>> internalIn_;
