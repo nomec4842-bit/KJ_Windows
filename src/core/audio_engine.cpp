@@ -29,6 +29,7 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <deque>
 #ifdef DEBUG_AUDIO
 #include <iostream>
 #endif
@@ -72,6 +73,25 @@ static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
 static std::size_t masterWaveformWriteIndex = 0;
 static bool masterWaveformFilled = false;
 static std::mutex masterWaveformMutex;
+static std::mutex audioNotificationMutex;
+static std::deque<AudioThreadNotification> audioThreadNotifications;
+
+static void enqueueAudioThreadNotification(const std::wstring& title, const std::wstring& message)
+{
+    std::lock_guard<std::mutex> lock(audioNotificationMutex);
+    audioThreadNotifications.push_back({title, message});
+}
+
+bool consumeAudioThreadNotification(AudioThreadNotification& notification)
+{
+    std::lock_guard<std::mutex> lock(audioNotificationMutex);
+    if (audioThreadNotifications.empty())
+        return false;
+
+    notification = std::move(audioThreadNotifications.front());
+    audioThreadNotifications.pop_front();
+    return true;
+}
 
 namespace {
 
@@ -1988,8 +2008,7 @@ void audioLoop() {
 
                                     std::wstring message = L"Failed to prepare VST plug-in for track '" + trackName +
                                                            L"'.\nTry reselecting the audio device or reloading the plug-in.";
-                                    OutputDebugStringW(message.c_str());
-                                    MessageBoxW(nullptr, message.c_str(), L"VST Prepare Failed", MB_OK | MB_ICONERROR);
+                                    enqueueAudioThreadNotification(L"VST Prepare Failed", message);
                                     state.vstPrepareErrorNotified = true;
                                 }
                             }
