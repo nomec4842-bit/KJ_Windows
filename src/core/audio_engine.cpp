@@ -1264,6 +1264,90 @@ void audioLoop() {
         int activeTrackStep = 0;
     };
 
+    constexpr size_t kCachedTrackCapacity = 64;
+    constexpr size_t kCachedAssignmentCapacity = 32;
+
+    struct TrackDataSnapshot
+    {
+        std::vector<Track> tracks;
+        std::vector<int> trackStepCounts;
+        std::vector<std::pair<int, std::vector<ModMatrixAssignment>>> assignmentsByTrack;
+
+        void reserve()
+        {
+            tracks.reserve(kCachedTrackCapacity);
+            trackStepCounts.reserve(kCachedTrackCapacity);
+            assignmentsByTrack.reserve(kCachedTrackCapacity);
+            for (auto& entry : assignmentsByTrack)
+                entry.second.reserve(kCachedAssignmentCapacity);
+        }
+
+        void prepareForTracks(size_t trackCount)
+        {
+            if (tracks.capacity() < kCachedTrackCapacity)
+                tracks.reserve(kCachedTrackCapacity);
+            if (trackStepCounts.capacity() < kCachedTrackCapacity)
+                trackStepCounts.reserve(kCachedTrackCapacity);
+            if (assignmentsByTrack.capacity() < kCachedTrackCapacity)
+                assignmentsByTrack.reserve(kCachedTrackCapacity);
+
+            trackStepCounts.assign(trackCount, 0);
+            assignmentsByTrack.resize(trackCount);
+            for (auto& entry : assignmentsByTrack)
+            {
+                entry.second.clear();
+                if (entry.second.capacity() < kCachedAssignmentCapacity)
+                    entry.second.reserve(kCachedAssignmentCapacity);
+            }
+        }
+    };
+
+    TrackDataSnapshot trackSnapshotA;
+    TrackDataSnapshot trackSnapshotB;
+    trackSnapshotA.reserve();
+    trackSnapshotB.reserve();
+    std::atomic<TrackDataSnapshot*> activeTrackSnapshot{ &trackSnapshotA };
+    std::atomic<bool> cacheThreadRunning{ true };
+
+    auto populateTrackSnapshot = [&](TrackDataSnapshot& snapshot)
+    {
+        auto tracks = getTracks();
+        snapshot.prepareForTracks(tracks.size());
+        snapshot.tracks = std::move(tracks);
+
+        for (size_t i = 0; i < snapshot.tracks.size(); ++i)
+        {
+            snapshot.trackStepCounts[i] = getSequencerStepCount(snapshot.tracks[i].id);
+            snapshot.assignmentsByTrack[i].first = snapshot.tracks[i].id;
+        }
+
+        auto assignments = modMatrixGetAssignments();
+        for (const auto& assignment : assignments)
+        {
+            if (assignment.trackId <= 0)
+                continue;
+            auto it = std::find_if(snapshot.assignmentsByTrack.begin(), snapshot.assignmentsByTrack.end(),
+                                   [&](const auto& entry) { return entry.first == assignment.trackId; });
+            if (it != snapshot.assignmentsByTrack.end())
+            {
+                it->second.push_back(assignment);
+            }
+        }
+    };
+
+    populateTrackSnapshot(trackSnapshotA);
+    std::thread cacheUpdater([&]()
+    {
+        while (cacheThreadRunning.load(std::memory_order_acquire) && running.load(std::memory_order_acquire))
+        {
+            TrackDataSnapshot* current = activeTrackSnapshot.load(std::memory_order_acquire);
+            TrackDataSnapshot* staging = (current == &trackSnapshotA) ? &trackSnapshotB : &trackSnapshotA;
+            populateTrackSnapshot(*staging);
+            activeTrackSnapshot.store(staging, std::memory_order_release);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+
     while (running.load(std::memory_order_acquire)) {
         bool changeRequested = deviceChangeRequested.exchange(false);
         std::wstring desiredDeviceId;
@@ -1499,25 +1583,12 @@ void audioLoop() {
             double stepDurationSamples = sampleRate * 60.0 / (static_cast<double>(bpm) * 4.0);
             if (stepDurationSamples < 1.0) stepDurationSamples = 1.0;
 
-            auto trackInfos = getTracks();
-            auto assignments = modMatrixGetAssignments();
-            std::unordered_map<int, std::vector<ModMatrixAssignment>> assignmentsByTrack;
-            assignmentsByTrack.reserve(trackInfos.size());
-            for (const auto& assignment : assignments)
-            {
-                if (assignment.trackId > 0)
-                    assignmentsByTrack[assignment.trackId].push_back(assignment);
-            }
-
-            std::vector<int> trackStepCounts;
-            trackStepCounts.reserve(trackInfos.size());
+            TrackDataSnapshot* trackSnapshot = activeTrackSnapshot.load(std::memory_order_acquire);
+            const auto& trackInfos = trackSnapshot ? trackSnapshot->tracks : trackSnapshotA.tracks;
+            const auto& trackStepCounts = trackSnapshot ? trackSnapshot->trackStepCounts : trackSnapshotA.trackStepCounts;
+            const auto& assignmentsByTrack = trackSnapshot ? trackSnapshot->assignmentsByTrack : trackSnapshotA.assignmentsByTrack;
 
             int activeTrackId = getActiveSequencerTrackId();
-
-            for (const auto& trackInfo : trackInfos) {
-                int count = getSequencerStepCount(trackInfo.id);
-                trackStepCounts.push_back(count);
-            }
 
             for (auto it = playbackStates.begin(); it != playbackStates.end(); ) {
                 int trackId = it->first;
@@ -1807,6 +1878,7 @@ void audioLoop() {
                     JobGroup modulationGroup;
                     modulationGroup.remaining.store(static_cast<int>(trackInfos.size()), std::memory_order_relaxed);
                     auto& trackProcessingPool = getTrackProcessingPool();
+                    static const std::vector<ModMatrixAssignment> kEmptyAssignments;
                     for (size_t trackIndex = 0; trackIndex < trackInfos.size(); ++trackIndex) {
                         auto job = [&, trackIndex]() {
                             const auto& trackInfo = trackInfos[trackIndex];
@@ -1822,13 +1894,23 @@ void audioLoop() {
                             if (stepIndex < 0 || stepIndex >= trackStepCount)
                                 stepIndex = 0;
 
-                            auto assignmentIt = assignmentsByTrack.find(trackInfo.id);
-                            if (assignmentIt != assignmentsByTrack.end()) {
+                            const std::vector<ModMatrixAssignment>* assignmentList = &kEmptyAssignments;
+                            if (trackIndex < assignmentsByTrack.size())
+                            {
+                                const auto& assignmentEntry = assignmentsByTrack[trackIndex];
+                                if (assignmentEntry.first == trackInfo.id)
+                                    assignmentList = &assignmentEntry.second;
+                            }
+
+                            if (assignmentList && !assignmentList->empty())
+                            {
                                 updateTrackModulationState(state,
                                                            trackInfo,
                                                            sampleRate,
-                                                           &assignmentIt->second);
-                            } else {
+                                                           assignmentList);
+                            }
+                            else
+                            {
                                 state.modulation.parameterAmounts.assign(cachedModMatrixParameterCount(), 0.0);
                             }
 
@@ -2661,6 +2743,10 @@ void audioLoop() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    cacheThreadRunning.store(false, std::memory_order_release);
+    if (cacheUpdater.joinable())
+        cacheUpdater.join();
 
     if (deviceHandler) {
         deviceHandler->stop();
