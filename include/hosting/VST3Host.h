@@ -74,6 +74,7 @@ public:
     bool isPluginLoaded() const;
     bool isPluginReady() const;
     bool isPluginLoading() const;
+    bool waitForPluginReady();
 
 private:
     template <typename T>
@@ -242,7 +243,6 @@ private:
     void suspendProcessing();
     void resumeProcessing();
     void waitForProcessingToComplete();
-    bool waitForPluginReady();
     void markLoadStarted();
     void markLoadFinished(bool success);
 
