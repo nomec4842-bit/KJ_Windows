@@ -16,6 +16,7 @@ using namespace kj;
 #include <cmath>
 #include <cstring>
 #include <future>
+#include <mutex>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -42,6 +43,9 @@ using namespace Steinberg;
 using namespace Steinberg::Vst;
 
 namespace {
+
+std::mutex gWindowClassMutex;
+bool gWindowClassesRegistered = false;
 
 class VectorIBStream : public Steinberg::IBStream
 {
@@ -1582,10 +1586,19 @@ void VST3Host::ClosePluginEditor()
 
 bool VST3Host::ensureWindowClasses()
 {
-    if (windowClassesRegistered_)
+    std::lock_guard<std::mutex> lock(gWindowClassMutex);
+    if (gWindowClassesRegistered)
         return true;
 
     HINSTANCE instance = ::GetModuleHandleW(nullptr);
+
+    WNDCLASSEXW existingClass {};
+    existingClass.cbSize = sizeof(existingClass);
+    if (::GetClassInfoExW(instance, kContainerWindowClassName, &existingClass))
+    {
+        gWindowClassesRegistered = true;
+        return true;
+    }
 
     WNDCLASSEXW containerClass {};
     containerClass.cbSize = sizeof(containerClass);
@@ -1630,7 +1643,7 @@ bool VST3Host::ensureWindowClasses()
     if (!::RegisterClassExW(&viewHostClass))
         return false;
 
-    windowClassesRegistered_ = true;
+    gWindowClassesRegistered = true;
     return true;
 }
 
