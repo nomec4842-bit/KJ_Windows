@@ -74,6 +74,7 @@ public:
     bool isPluginLoaded() const;
     bool isPluginReady() const;
     bool isPluginLoading() const;
+    bool waitUntilReady();
     bool waitForPluginReady();
 
 private:

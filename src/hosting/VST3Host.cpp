@@ -1425,6 +1425,11 @@ bool VST3Host::isPluginLoading() const
     return loadingInProgress_;
 }
 
+bool VST3Host::waitUntilReady()
+{
+    return waitForPluginReady();
+}
+
 bool VST3Host::ShowPluginEditor()
 {
 #ifdef _WIN32
