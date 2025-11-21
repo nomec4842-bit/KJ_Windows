@@ -37,6 +37,7 @@
 #include "core/tracks.h"
 #include "core/track_type_sample.h"
 #include "core/track_type_synth.h"
+#include "core/track_type_vst.h"
 #include "core/sample_loader.h"
 #include "core/sequencer.h"
 #include "core/audio_device_handler.h"
@@ -74,6 +75,23 @@ static std::atomic<std::size_t> masterWaveformWriteIndex{0};
 static std::atomic<bool> masterWaveformFilled{false};
 static std::mutex audioNotificationMutex;
 static std::deque<AudioThreadNotification> audioThreadNotifications;
+
+enum class VstCommandType
+{
+    Load,
+    Unload,
+};
+
+struct VstCommand
+{
+    VstCommandType type = VstCommandType::Load;
+    int trackId = -1;
+    std::filesystem::path path;
+    std::shared_ptr<kj::VST3Host> host;
+};
+
+static std::mutex vstCommandMutex;
+static std::deque<VstCommand> vstCommandQueue;
 
 static void writeWaveformSamples(const float* samples, std::size_t sampleCount)
 {
@@ -115,6 +133,45 @@ bool consumeAudioThreadNotification(AudioThreadNotification& notification)
 
     notification = std::move(audioThreadNotifications.front());
     audioThreadNotifications.pop_front();
+    return true;
+}
+
+bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
+{
+    if (trackId <= 0 || path.empty())
+        return false;
+
+    auto host = trackEnsureVstHost(trackId);
+    if (!host)
+        return false;
+
+    VstCommand command{};
+    command.type = VstCommandType::Load;
+    command.trackId = trackId;
+    command.path = path;
+    command.host = std::move(host);
+
+    std::lock_guard<std::mutex> lock(vstCommandMutex);
+    vstCommandQueue.push_back(std::move(command));
+    return true;
+}
+
+bool requestTrackVstUnload(int trackId)
+{
+    if (trackId <= 0)
+        return false;
+
+    auto host = trackGetVstHost(trackId);
+    if (!host)
+        return false;
+
+    VstCommand command{};
+    command.type = VstCommandType::Unload;
+    command.trackId = trackId;
+    command.host = std::move(host);
+
+    std::lock_guard<std::mutex> lock(vstCommandMutex);
+    vstCommandQueue.push_back(std::move(command));
     return true;
 }
 
@@ -1298,6 +1355,43 @@ void audioLoop() {
     std::chrono::steady_clock::time_point lastCallbackTime{};
 #endif
 
+    auto consumeVstCommands = []() {
+        std::vector<VstCommand> commands;
+        std::lock_guard<std::mutex> lock(vstCommandMutex);
+        while (!vstCommandQueue.empty())
+        {
+            commands.push_back(std::move(vstCommandQueue.front()));
+            vstCommandQueue.pop_front();
+        }
+        return commands;
+    };
+
+    auto handleVstCommands = [&](const std::vector<VstCommand>& commands) {
+        bool handled = false;
+        for (const auto& command : commands)
+        {
+            if (!command.host)
+                continue;
+
+            handled = true;
+            if (command.type == VstCommandType::Load)
+                command.host->load(command.path.string());
+            else
+                command.host->unload();
+
+            auto stateIt = playbackStates.find(command.trackId);
+            if (stateIt != playbackStates.end())
+            {
+                auto& state = stateIt->second;
+                state.vstPrepared = false;
+                state.vstPreparedSampleRate = 0.0;
+                state.vstPreparedBlockSize = 0;
+                state.vstPrepareErrorNotified = false;
+            }
+        }
+        return handled;
+    };
+
     struct ModulationRequest
     {
         const std::vector<Track>* tracks = nullptr;
@@ -2092,6 +2186,24 @@ void audioLoop() {
             }
             if (samplerResetPending) {
                 samplerResetPending = false;
+            }
+
+            auto vstCommands = consumeVstCommands();
+            bool vstOperationHandled = handleVstCommands(vstCommands);
+            bool playingNow = isPlaying.load(std::memory_order_relaxed);
+            if (vstOperationHandled)
+            {
+                for (UINT32 i = 0; i < available; ++i)
+                {
+                    writeFrame(i, 0.0, 0.0);
+                    if (playingNow)
+                        transportSamplePosition += 1.0;
+                }
+
+                previousPlaying = playingNow;
+
+                deviceHandler->releaseBuffer(available);
+                continue;
             }
 
             static thread_local std::vector<float> capturedSamples;

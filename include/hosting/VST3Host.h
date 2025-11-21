@@ -233,6 +233,7 @@ private:
     void processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
                          const std::vector<PendingParameterChange>& changes,
                          const std::vector<Steinberg::Vst::Event>& events);
+    void unloadLocked();
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -280,6 +281,7 @@ private:
     Steinberg::int32 mainOutputBusIndex_ = -1;
     Steinberg::Vst::SpeakerArrangement inputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
     Steinberg::Vst::SpeakerArrangement outputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
+    mutable std::mutex processMutex_;
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     SpscRingBuffer<PendingParameterChange> parameterChangeQueue_ {512};

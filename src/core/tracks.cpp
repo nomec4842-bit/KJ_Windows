@@ -1,5 +1,6 @@
 #include "core/tracks.h"
 #include "core/tracks_internal.h"
+#include "core/audio_engine.h"
 
 #include "hosting/VST3Host.h"
 
@@ -710,7 +711,7 @@ void trackSetType(int trackId, TrackType type)
             {
                 if (track->vstHost)
                 {
-                    track->vstHost->unload();
+                    requestTrackVstUnload(trackId);
                 }
                 track->vstHost.reset();
                 track->track.vstHost.reset();
