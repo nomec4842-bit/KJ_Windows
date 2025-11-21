@@ -6626,7 +6626,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                     std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
                     std::thread([host = activeVstHost, trackId = activeTrackId, parent = hwnd]() {
-                        if (host->waitForPluginReady())
+                        if (host->waitUntilReady())
                         {
                             PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
                         }
