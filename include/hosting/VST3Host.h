@@ -184,6 +184,8 @@ private:
 
     class ComponentHandler;
 
+    class NonRealtimeScope;
+
 #ifdef _WIN32
     void ClosePluginEditor();
     void destroyPluginUI();
@@ -234,6 +236,9 @@ private:
                          const std::vector<PendingParameterChange>& changes,
                          const std::vector<Steinberg::Vst::Event>& events);
     void unloadLocked();
+    void suspendProcessing();
+    void resumeProcessing();
+    void waitForProcessingToComplete();
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -282,6 +287,8 @@ private:
     Steinberg::Vst::SpeakerArrangement inputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
     Steinberg::Vst::SpeakerArrangement outputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
     mutable std::mutex processMutex_;
+    std::atomic<bool> processingSuspended_ {false};
+    std::atomic<uint32_t> activeProcessCount_ {0};
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     SpscRingBuffer<PendingParameterChange> parameterChangeQueue_ {512};

@@ -47,6 +47,39 @@ namespace {
 std::mutex gWindowClassMutex;
 bool gWindowClassesRegistered = false;
 
+class AudioProcessScope
+{
+public:
+    AudioProcessScope(std::atomic<bool>& suspended, std::atomic<uint32_t>& activeCount)
+        : suspended_(suspended), activeCount_(activeCount)
+    {
+        if (suspended_.load(std::memory_order_acquire))
+            return;
+
+        activeCount_.fetch_add(1, std::memory_order_acq_rel);
+        if (suspended_.load(std::memory_order_acquire))
+        {
+            activeCount_.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
+
+        engaged_ = true;
+    }
+
+    ~AudioProcessScope()
+    {
+        if (engaged_)
+            activeCount_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    [[nodiscard]] bool engaged() const { return engaged_; }
+
+private:
+    std::atomic<bool>& suspended_;
+    std::atomic<uint32_t>& activeCount_;
+    bool engaged_ = false;
+};
+
 class VectorIBStream : public Steinberg::IBStream
 {
 public:
@@ -456,14 +489,54 @@ private:
     VST3Host& host_;
 };
 
+class VST3Host::NonRealtimeScope
+{
+public:
+    explicit NonRealtimeScope(VST3Host& host) : host_(host)
+    {
+        host_.suspendProcessing();
+        lock_ = std::unique_lock<std::mutex>(host_.processMutex_);
+    }
+
+    ~NonRealtimeScope()
+    {
+        lock_.unlock();
+        host_.resumeProcessing();
+    }
+
+    NonRealtimeScope(const NonRealtimeScope&) = delete;
+    NonRealtimeScope& operator=(const NonRealtimeScope&) = delete;
+
+private:
+    VST3Host& host_;
+    std::unique_lock<std::mutex> lock_;
+};
+
 VST3Host::~VST3Host()
 {
     unload();
 }
 
+void VST3Host::suspendProcessing()
+{
+    processingSuspended_.store(true, std::memory_order_release);
+    waitForProcessingToComplete();
+}
+
+void VST3Host::resumeProcessing()
+{
+    processingSuspended_.store(false, std::memory_order_release);
+}
+
+void VST3Host::waitForProcessingToComplete()
+{
+    while (activeProcessCount_.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+}
+
 bool VST3Host::load(const std::string& pluginPath)
 {
-    std::lock_guard<std::mutex> lock(processMutex_);
+    NonRealtimeScope scope(*this);
     unloadLocked();
 
     std::string error;
@@ -649,7 +722,7 @@ bool VST3Host::load(const std::string& pluginPath)
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
 {
-    std::lock_guard<std::mutex> lock(processMutex_);
+    NonRealtimeScope scope(*this);
     if (!processor_)
         return false;
 
@@ -1020,7 +1093,9 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
 void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
 {
-    std::lock_guard<std::mutex> lock(processMutex_);
+    AudioProcessScope processScope(processingSuspended_, activeProcessCount_);
+    if (!processScope.engaged())
+        return;
     parameterChangeQueue_.popAll(processParameterChanges_);
     eventQueue_.popAll(processEvents_);
 
@@ -1106,7 +1181,9 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
 
 void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
 {
-    std::lock_guard<std::mutex> lock(processMutex_);
+    AudioProcessScope processScope(processingSuspended_, activeProcessCount_);
+    if (!processScope.engaged())
+        return;
     if (!out || numChannels <= 0 || numSamples <= 0)
         return;
 
@@ -1191,7 +1268,7 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
 
 void VST3Host::unload()
 {
-    std::lock_guard<std::mutex> lock(processMutex_);
+    NonRealtimeScope scope(*this);
     unloadLocked();
 }
 
