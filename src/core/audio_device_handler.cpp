@@ -92,7 +92,6 @@ AudioDeviceHandler::~AudioDeviceHandler() {
 }
 
 void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     callback_ = callback;
     callbackContext_ = userData;
     callbackInvoked_.store(false, std::memory_order_relaxed);
@@ -104,12 +103,10 @@ void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, vo
 }
 
 AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     return callback_;
 }
 
 void* AudioDeviceHandler::streamCallbackContext() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     return callbackContext_;
 }
 
@@ -576,7 +573,6 @@ HRESULT AudioDeviceHandler::currentPadding(UINT32* padding) const {
     if (!padding) {
         return E_POINTER;
     }
-    std::lock_guard<std::mutex> lock(stateMutex_);
     *padding = 0;
     if (!client_) {
         return AUDCLNT_E_NOT_INITIALIZED;
@@ -588,7 +584,6 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
     if (!data) {
         return E_POINTER;
     }
-    std::lock_guard<std::mutex> lock(stateMutex_);
     *data = nullptr;
     if (!renderClient_) {
         return AUDCLNT_E_NOT_INITIALIZED;
@@ -629,7 +624,6 @@ HRESULT AudioDeviceHandler::getBuffer(UINT32 frameCount, BYTE** data) {
 }
 
 void AudioDeviceHandler::releaseBuffer(UINT32 frameCount) {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     if (renderClient_) {
         if (!bufferPendingRelease_) {
             logInfo(L"ReleaseBuffer called without an active render buffer; ignoring request.");
@@ -740,19 +734,16 @@ AudioDeviceHandler::~AudioDeviceHandler() {
 }
 
 void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     callback_ = callback;
     callbackContext_ = userData;
     callbackInvoked_.store(false, std::memory_order_relaxed);
 }
 
 AudioDeviceHandler::AudioStreamCallback AudioDeviceHandler::streamCallback() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     return callback_;
 }
 
 void* AudioDeviceHandler::streamCallbackContext() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
     return callbackContext_;
 }
 
