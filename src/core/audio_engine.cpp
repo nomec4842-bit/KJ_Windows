@@ -55,11 +55,17 @@ static std::atomic<bool> running{true};
 static std::thread audioThread;
 static std::thread sequencerThread;
 static std::atomic<bool> audioSequencerReady{false};
-static std::mutex deviceMutex;
-static std::wstring requestedDeviceId;
-static std::wstring activeDeviceId;
-static std::wstring activeDeviceName;
-static std::wstring activeRequestedDeviceId;
+struct AudioDeviceSnapshot
+{
+    std::wstring requestedId;
+    std::wstring activeId;
+    std::wstring activeName;
+};
+
+static std::array<AudioDeviceSnapshot, 2> gDeviceSnapshots{};
+static std::atomic<int> gDeviceSnapshotIndex{0};
+static std::array<std::wstring, 2> gRequestedDeviceIds{};
+static std::atomic<int> gRequestedDeviceIndex{0};
 static std::atomic<bool> deviceChangeRequested{false};
 static ThreadPool& getTrackProcessingPool()
 {
@@ -70,10 +76,28 @@ static ThreadPool& getTrackProcessingPool()
     return pool;
 }
 
+static const AudioDeviceSnapshot& getDeviceSnapshot()
+{
+    return gDeviceSnapshots[gDeviceSnapshotIndex.load(std::memory_order_acquire)];
+}
+
+static void publishDeviceSnapshot(const AudioDeviceSnapshot& snapshot)
+{
+    int nextIndex = gDeviceSnapshotIndex.load(std::memory_order_relaxed) ^ 1;
+    gDeviceSnapshots[nextIndex] = snapshot;
+    gDeviceSnapshotIndex.store(nextIndex, std::memory_order_release);
+}
+
 constexpr std::size_t kMasterWaveformBufferSize = 44100;
-static std::vector<float> masterWaveformBuffer(kMasterWaveformBufferSize, 0.0f);
-static std::atomic<std::size_t> masterWaveformWriteIndex{0};
-static std::atomic<bool> masterWaveformFilled{false};
+struct WaveformBuffer
+{
+    std::array<float, kMasterWaveformBufferSize> data{};
+    std::size_t count = 0;
+};
+
+static std::array<WaveformBuffer, 2> masterWaveformBuffers{};
+static std::atomic<int> masterWaveformPublishIndex{0};
+static int masterWaveformWriteIndex = 1;
 static std::mutex audioNotificationMutex;
 static std::deque<AudioThreadNotification> audioThreadNotifications;
 
@@ -96,39 +120,61 @@ static std::deque<VstCommand> vstCommandQueue;
 static std::condition_variable vstCommandCv;
 static std::atomic<int> vstOperationsPending{0};
 static std::thread vstCommandThread;
-static std::mutex vstStateMutex;
-static std::deque<int> vstResetQueue;
+
+constexpr std::size_t kVstResetCapacity = 128;
+
+struct VstResetBatch
+{
+    std::array<int, kVstResetCapacity> ids{};
+    std::size_t count = 0;
+};
+
+static std::array<VstResetBatch, 2> gVstResetBatches{};
+static std::atomic<int> gPublishedVstBatch{-1};
+static int gVstWriteBatchIndex = 0;
 
 static void writeWaveformSamples(const float* samples, std::size_t sampleCount)
 {
-    const std::size_t capacity = masterWaveformBuffer.size();
+    WaveformBuffer& buffer = masterWaveformBuffers[masterWaveformWriteIndex];
+    const std::size_t capacity = buffer.data.size();
     if (!samples || sampleCount == 0 || capacity == 0)
         return;
 
-    std::size_t writeIndex = masterWaveformWriteIndex.load(std::memory_order_relaxed);
-    bool filled = masterWaveformFilled.load(std::memory_order_relaxed);
+    const std::size_t copyCount = std::min(sampleCount, capacity);
+    std::memcpy(buffer.data.data(), samples, sizeof(float) * copyCount);
+    buffer.count = copyCount;
 
-    for (std::size_t i = 0; i < sampleCount; ++i)
-    {
-        masterWaveformBuffer[writeIndex] = samples[i];
-        writeIndex = (writeIndex + 1) % capacity;
-        if (writeIndex == 0)
-        {
-            filled = true;
-        }
-    }
-
-    if (sampleCount >= capacity)
-        filled = true;
-
-    masterWaveformFilled.store(filled, std::memory_order_release);
-    masterWaveformWriteIndex.store(writeIndex, std::memory_order_release);
+    masterWaveformPublishIndex.store(masterWaveformWriteIndex, std::memory_order_release);
+    masterWaveformWriteIndex ^= 1;
 }
 
 static void enqueueAudioThreadNotification(const std::wstring& title, const std::wstring& message)
 {
     std::lock_guard<std::mutex> lock(audioNotificationMutex);
     audioThreadNotifications.push_back({title, message});
+}
+
+static void enqueueVstReset(int trackId)
+{
+    if (trackId <= 0)
+        return;
+
+    auto& batch = gVstResetBatches[gVstWriteBatchIndex];
+    if (batch.count < batch.ids.size())
+    {
+        batch.ids[batch.count++] = trackId;
+    }
+}
+
+static void publishVstResetBatch()
+{
+    auto& batch = gVstResetBatches[gVstWriteBatchIndex];
+    if (batch.count == 0)
+        return;
+
+    gPublishedVstBatch.store(gVstWriteBatchIndex, std::memory_order_release);
+    gVstWriteBatchIndex ^= 1;
+    gVstResetBatches[gVstWriteBatchIndex].count = 0;
 }
 
 bool consumeAudioThreadNotification(AudioThreadNotification& notification)
@@ -216,8 +262,8 @@ static void vstCommandLoop()
 
         if (command.trackId > 0)
         {
-            std::lock_guard<std::mutex> stateLock(vstStateMutex);
-            vstResetQueue.push_back(command.trackId);
+            enqueueVstReset(command.trackId);
+            publishVstResetBatch();
         }
 
         vstOperationsPending.fetch_sub(1, std::memory_order_acq_rel);
@@ -1422,18 +1468,14 @@ void audioLoop() {
     };
 
     auto applyVstResetRequests = [&]() {
-        std::vector<int> trackIds;
-        {
-            std::lock_guard<std::mutex> lock(vstStateMutex);
-            while (!vstResetQueue.empty())
-            {
-                trackIds.push_back(vstResetQueue.front());
-                vstResetQueue.pop_front();
-            }
-        }
+        int published = gPublishedVstBatch.exchange(-1, std::memory_order_acq_rel);
+        if (published < 0)
+            return;
 
-        for (int trackId : trackIds)
+        auto& batch = gVstResetBatches[published];
+        for (std::size_t i = 0; i < batch.count; ++i)
         {
+            int trackId = batch.ids[i];
             auto stateIt = playbackStates.find(trackId);
             if (stateIt != playbackStates.end())
             {
@@ -1444,6 +1486,8 @@ void audioLoop() {
                 state.vstPrepareErrorNotified = false;
             }
         }
+
+        gVstResetBatches[published].count = 0;
     };
 
     struct ModulationResult
@@ -1769,11 +1813,7 @@ void audioLoop() {
 
     while (running.load(std::memory_order_acquire)) {
         bool changeRequested = deviceChangeRequested.exchange(false);
-        std::wstring desiredDeviceId;
-        {
-            std::lock_guard<std::mutex> lock(deviceMutex);
-            desiredDeviceId = requestedDeviceId;
-        }
+        std::wstring desiredDeviceId = gRequestedDeviceIds[gRequestedDeviceIndex.load(std::memory_order_acquire)];
 
         if (changeRequested) {
             audioSequencerReady.store(false, std::memory_order_release);
@@ -1825,12 +1865,11 @@ void audioLoop() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
                 }
-                {
-                    std::lock_guard<std::mutex> lock(deviceMutex);
-                    if (!usedFallback) {
-                        activeDeviceId.clear();
-                        activeDeviceName.clear();
-                    }
+                if (!usedFallback) {
+                    auto snapshot = getDeviceSnapshot();
+                    snapshot.activeId.clear();
+                    snapshot.activeName.clear();
+                    publishDeviceSnapshot(snapshot);
                 }
                 deviceHandler->shutdown();
                 deviceHandler.reset();
@@ -1875,18 +1914,21 @@ void audioLoop() {
                       << " name=" << narrowFromWide(logDeviceName) << std::endl;
 #endif
 
-            {
-                std::lock_guard<std::mutex> lock(deviceMutex);
-                activeDeviceId = deviceHandler->deviceId();
-                activeDeviceName = deviceHandler->deviceName();
-                if (usedFallback) {
-                    requestedDeviceId.clear();
-                    activeRequestedDeviceId.clear();
-                } else {
-                    requestedDeviceId = desiredDeviceId;
-                    activeRequestedDeviceId = desiredDeviceId;
-                }
+            AudioDeviceSnapshot snapshot = getDeviceSnapshot();
+            snapshot.activeId = deviceHandler->deviceId();
+            snapshot.activeName = deviceHandler->deviceName();
+            if (usedFallback) {
+                snapshot.requestedId.clear();
+                int nextRequested = gRequestedDeviceIndex.load(std::memory_order_relaxed) ^ 1;
+                gRequestedDeviceIds[nextRequested].clear();
+                gRequestedDeviceIndex.store(nextRequested, std::memory_order_release);
+            } else {
+                snapshot.requestedId = desiredDeviceId;
+                int nextRequested = gRequestedDeviceIndex.load(std::memory_order_relaxed) ^ 1;
+                gRequestedDeviceIds[nextRequested] = desiredDeviceId;
+                gRequestedDeviceIndex.store(nextRequested, std::memory_order_release);
             }
+            publishDeviceSnapshot(snapshot);
             audioSequencerReady.store(true, std::memory_order_release);
         }
 
@@ -1908,11 +1950,10 @@ void audioLoop() {
         if (paddingResult == AUDCLNT_E_DEVICE_INVALIDATED) {
             deviceHandler->stop();
             deviceHandler->shutdown();
-            {
-                std::lock_guard<std::mutex> lock(deviceMutex);
-                activeDeviceId.clear();
-                activeDeviceName.clear();
-            }
+            auto snapshot = getDeviceSnapshot();
+            snapshot.activeId.clear();
+            snapshot.activeName.clear();
+            publishDeviceSnapshot(snapshot);
             bufferFrameCount = 0;
             format = nullptr;
             deviceReady = false;
@@ -1930,11 +1971,10 @@ void audioLoop() {
             if (bufferResult == AUDCLNT_E_DEVICE_INVALIDATED) {
                 deviceHandler->stop();
                 deviceHandler->shutdown();
-                {
-                    std::lock_guard<std::mutex> lock(deviceMutex);
-                    activeDeviceId.clear();
-                    activeDeviceName.clear();
-                }
+                auto snapshot = getDeviceSnapshot();
+                snapshot.activeId.clear();
+                snapshot.activeName.clear();
+                publishDeviceSnapshot(snapshot);
                 bufferFrameCount = 0;
                 format = nullptr;
                 deviceReady = false;
@@ -3152,11 +3192,7 @@ void audioLoop() {
                 intervalMs = std::chrono::duration<double, std::milli>(now - lastCallbackTime).count();
             }
             lastCallbackTime = now;
-            std::wstring driverNameCopy;
-            {
-                std::lock_guard<std::mutex> lock(deviceMutex);
-                driverNameCopy = activeDeviceName;
-            }
+            std::wstring driverNameCopy = getDeviceSnapshot().activeName;
             bool playingState = isPlaying.load(std::memory_order_relaxed);
             std::cout << "[AudioEngine] driver=" << narrowFromWide(driverNameCopy)
                       << " bufferFrames=" << available
