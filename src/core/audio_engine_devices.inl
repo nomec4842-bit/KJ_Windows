@@ -24,33 +24,26 @@ std::vector<AudioOutputDevice> getAvailableAudioOutputDevices() {
 }
 
 AudioOutputDevice getActiveAudioOutputDevice() {
-    std::lock_guard<std::mutex> lock(deviceMutex);
+    const auto& snapshot = getDeviceSnapshot();
     AudioOutputDevice info;
-    info.id = activeDeviceId;
-    info.name = activeDeviceName;
+    info.id = snapshot.activeId;
+    info.name = snapshot.activeName;
     return info;
 }
 
 std::wstring getRequestedAudioOutputDeviceId() {
-    std::lock_guard<std::mutex> lock(deviceMutex);
-    return activeRequestedDeviceId;
+    int index = gRequestedDeviceIndex.load(std::memory_order_acquire);
+    return gRequestedDeviceIds[index];
 }
 
 bool setActiveAudioOutputDevice(const std::wstring& deviceId) {
-    bool changeNeeded = true;
-    {
-        std::lock_guard<std::mutex> lock(deviceMutex);
-        if (deviceId == activeDeviceId || deviceId == activeRequestedDeviceId) {
-            changeNeeded = false;
-        } else {
-            requestedDeviceId = deviceId;
-            activeRequestedDeviceId = deviceId;
-        }
-    }
+    const auto& snapshot = getDeviceSnapshot();
+    if (deviceId == snapshot.activeId || deviceId == snapshot.requestedId)
+        return false;
 
-    if (changeNeeded) {
-        deviceChangeRequested.store(true, std::memory_order_release);
-    }
-
-    return changeNeeded;
+    int nextIndex = gRequestedDeviceIndex.load(std::memory_order_relaxed) ^ 1;
+    gRequestedDeviceIds[nextIndex] = deviceId;
+    gRequestedDeviceIndex.store(nextIndex, std::memory_order_release);
+    deviceChangeRequested.store(true, std::memory_order_release);
+    return true;
 }
