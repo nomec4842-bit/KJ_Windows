@@ -463,7 +463,8 @@ VST3Host::~VST3Host()
 
 bool VST3Host::load(const std::string& pluginPath)
 {
-    unload();
+    std::lock_guard<std::mutex> lock(processMutex_);
+    unloadLocked();
 
     std::string error;
 
@@ -648,6 +649,7 @@ bool VST3Host::load(const std::string& pluginPath)
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
 {
+    std::lock_guard<std::mutex> lock(processMutex_);
     if (!processor_)
         return false;
 
@@ -1015,6 +1017,7 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
 void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
 {
+    std::lock_guard<std::mutex> lock(processMutex_);
     parameterChangeQueue_.popAll(processParameterChanges_);
     eventQueue_.popAll(processEvents_);
 
@@ -1100,6 +1103,7 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
 
 void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
 {
+    std::lock_guard<std::mutex> lock(processMutex_);
     if (!out || numChannels <= 0 || numSamples <= 0)
         return;
 
@@ -1183,6 +1187,12 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
 }
 
 void VST3Host::unload()
+{
+    std::lock_guard<std::mutex> lock(processMutex_);
+    unloadLocked();
+}
+
+void VST3Host::unloadLocked()
 {
 #ifdef _WIN32
     destroyPluginUI();

@@ -6638,13 +6638,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 }
             }
 
-            auto host = trackEnsureVstHost(activeTrackId);
-            if (!host)
-            {
-                std::cout << "[GUI] Failed to obtain VST3 host for track." << std::endl;
-                return 0;
-            }
-
             if (pluginPath.empty())
             {
                 std::cout << "[GUI] No VST3 plug-in selected." << std::endl;
@@ -6656,14 +6649,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 std::wcout << L"[GUI] Selected plug-in path does not exist: " << pluginPath.c_str() << std::endl;
             }
 
-            if (host->load(pluginPath.string()))
+            if (requestTrackVstLoad(activeTrackId, pluginPath))
             {
-                std::cout << "[GUI] Loaded VST3 plug-in: " << pluginPath.string() << std::endl;
-                host->openEditor(reinterpret_cast<void*>(hwnd));
+                std::cout << "[GUI] Enqueued VST3 plug-in load: " << pluginPath.string() << std::endl;
             }
             else
             {
-                std::cout << "[GUI] Failed to load VST3 plug-in: " << pluginPath.string() << std::endl;
+                std::cout << "[GUI] Failed to enqueue VST3 plug-in load: " << pluginPath.string() << std::endl;
             }
 
             return 0;
