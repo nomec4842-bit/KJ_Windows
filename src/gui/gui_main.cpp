@@ -6082,6 +6082,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool showMidiPortSelector = false;
         std::shared_ptr<kj::VST3Host> activeVstHost;
         bool vstEditorAvailable = false;
+        bool vstEditorLoading = false;
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
         {
             showSampleLoader = activeTrack->type == TrackType::Sample;
@@ -6110,7 +6111,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (activeVstHost)
         {
-            vstEditorAvailable = activeVstHost->isPluginLoaded();
+            vstEditorAvailable = activeVstHost->isPluginReady();
+            vstEditorLoading = activeVstHost->isPluginLoading();
         }
 
         if (!showWaveSelector)
