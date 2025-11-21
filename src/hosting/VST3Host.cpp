@@ -1413,6 +1413,18 @@ bool VST3Host::isPluginLoaded() const
     return component_ != nullptr;
 }
 
+bool VST3Host::isPluginReady() const
+{
+    std::lock_guard<std::mutex> lock(loadingMutex_);
+    return !loadingInProgress_ && pluginReady_;
+}
+
+bool VST3Host::isPluginLoading() const
+{
+    std::lock_guard<std::mutex> lock(loadingMutex_);
+    return loadingInProgress_;
+}
+
 bool VST3Host::ShowPluginEditor()
 {
 #ifdef _WIN32
@@ -1643,7 +1655,7 @@ void VST3Host::openEditor(void* hwnd)
 void VST3Host::showPluginUI(void* parentHWND)
 {
 #ifdef _WIN32
-    if (!waitForPluginReady())
+    if (!isPluginReady())
     {
         std::cerr << "[KJ] Cannot show plug-in UI because the plug-in did not finish loading.\n";
         return;

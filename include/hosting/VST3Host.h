@@ -72,6 +72,8 @@ public:
     void openEditor(void* nativeWindowHandle);
 
     bool isPluginLoaded() const;
+    bool isPluginReady() const;
+    bool isPluginLoading() const;
 
 private:
     template <typename T>
