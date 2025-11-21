@@ -125,6 +125,17 @@ static std::condition_variable vstCommandCv;
 static std::atomic<int> vstOperationsPending{0};
 static std::thread vstCommandThread;
 
+static void enqueuePluginLoad(VstCommand&& command)
+{
+    // Plugin loading happens off the audio thread, so the request queue can
+    // use conventional synchronization primitives without affecting the
+    // real-time callback.
+    std::lock_guard<std::mutex> lock(vstCommandMutex);
+    vstCommandQueue.push_back(std::move(command));
+    vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
+    vstCommandCv.notify_one();
+}
+
 constexpr std::size_t kVstResetCapacity = 128;
 
 struct VstResetBatch
@@ -222,10 +233,7 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
     command.host = std::move(host);
     command.completion = completion;
 
-    std::lock_guard<std::mutex> lock(vstCommandMutex);
-    vstCommandQueue.push_back(std::move(command));
-    vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
-    vstCommandCv.notify_one();
+    enqueuePluginLoad(std::move(command));
 
     // This synchronization is allowed because plugin loading is non-real-time.
     // Plugin loading must block until initialization is complete.
