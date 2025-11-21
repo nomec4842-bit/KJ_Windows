@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <deque>
+#include <condition_variable>
 #ifdef DEBUG_AUDIO
 #include <iostream>
 #endif
@@ -92,6 +93,11 @@ struct VstCommand
 
 static std::mutex vstCommandMutex;
 static std::deque<VstCommand> vstCommandQueue;
+static std::condition_variable vstCommandCv;
+static std::atomic<int> vstOperationsPending{0};
+static std::thread vstCommandThread;
+static std::mutex vstStateMutex;
+static std::deque<int> vstResetQueue;
 
 static void writeWaveformSamples(const float* samples, std::size_t sampleCount)
 {
@@ -153,6 +159,8 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
 
     std::lock_guard<std::mutex> lock(vstCommandMutex);
     vstCommandQueue.push_back(std::move(command));
+    vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
+    vstCommandCv.notify_one();
     return true;
 }
 
@@ -172,7 +180,56 @@ bool requestTrackVstUnload(int trackId)
 
     std::lock_guard<std::mutex> lock(vstCommandMutex);
     vstCommandQueue.push_back(std::move(command));
+    vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
+    vstCommandCv.notify_one();
     return true;
+}
+
+static void vstCommandLoop()
+{
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+    while (running.load(std::memory_order_acquire))
+    {
+        std::unique_lock<std::mutex> lock(vstCommandMutex);
+        vstCommandCv.wait(lock, [] {
+            return !vstCommandQueue.empty() || !running.load(std::memory_order_acquire);
+        });
+
+        if (!running.load(std::memory_order_acquire) && vstCommandQueue.empty())
+            break;
+
+        if (vstCommandQueue.empty())
+            continue;
+
+        auto command = std::move(vstCommandQueue.front());
+        vstCommandQueue.pop_front();
+        lock.unlock();
+
+        if (command.host)
+        {
+            if (command.type == VstCommandType::Load)
+                command.host->load(command.path.string());
+            else
+                command.host->unload();
+        }
+
+        if (command.trackId > 0)
+        {
+            std::lock_guard<std::mutex> stateLock(vstStateMutex);
+            vstResetQueue.push_back(command.trackId);
+        }
+
+        vstOperationsPending.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(vstCommandMutex);
+        vstCommandQueue.clear();
+        vstOperationsPending.store(0, std::memory_order_release);
+    }
+
+    CoUninitialize();
 }
 
 namespace {
@@ -1355,31 +1412,29 @@ void audioLoop() {
     std::chrono::steady_clock::time_point lastCallbackTime{};
 #endif
 
-    auto consumeVstCommands = []() {
-        std::vector<VstCommand> commands;
-        std::lock_guard<std::mutex> lock(vstCommandMutex);
-        while (!vstCommandQueue.empty())
-        {
-            commands.push_back(std::move(vstCommandQueue.front()));
-            vstCommandQueue.pop_front();
-        }
-        return commands;
+    struct ModulationRequest
+    {
+        const std::vector<Track>* tracks = nullptr;
+        const std::vector<std::pair<int, std::vector<ModMatrixAssignment>>>* assignmentsByTrack = nullptr;
+        std::unordered_map<int, TrackPlaybackState>* playbackStates = nullptr;
+        double sampleRate = 44100.0;
+        uint64_t id = 0;
     };
 
-    auto handleVstCommands = [&](const std::vector<VstCommand>& commands) {
-        bool handled = false;
-        for (const auto& command : commands)
+    auto applyVstResetRequests = [&]() {
+        std::vector<int> trackIds;
         {
-            if (!command.host)
-                continue;
+            std::lock_guard<std::mutex> lock(vstStateMutex);
+            while (!vstResetQueue.empty())
+            {
+                trackIds.push_back(vstResetQueue.front());
+                vstResetQueue.pop_front();
+            }
+        }
 
-            handled = true;
-            if (command.type == VstCommandType::Load)
-                command.host->load(command.path.string());
-            else
-                command.host->unload();
-
-            auto stateIt = playbackStates.find(command.trackId);
+        for (int trackId : trackIds)
+        {
+            auto stateIt = playbackStates.find(trackId);
             if (stateIt != playbackStates.end())
             {
                 auto& state = stateIt->second;
@@ -1389,16 +1444,6 @@ void audioLoop() {
                 state.vstPrepareErrorNotified = false;
             }
         }
-        return handled;
-    };
-
-    struct ModulationRequest
-    {
-        const std::vector<Track>* tracks = nullptr;
-        const std::vector<std::pair<int, std::vector<ModMatrixAssignment>>>* assignmentsByTrack = nullptr;
-        std::unordered_map<int, TrackPlaybackState>* playbackStates = nullptr;
-        double sampleRate = 44100.0;
-        uint64_t id = 0;
     };
 
     struct ModulationResult
@@ -2188,10 +2233,9 @@ void audioLoop() {
                 samplerResetPending = false;
             }
 
-            auto vstCommands = consumeVstCommands();
-            bool vstOperationHandled = handleVstCommands(vstCommands);
+            applyVstResetRequests();
             bool playingNow = isPlaying.load(std::memory_order_relaxed);
-            if (vstOperationHandled)
+            if (vstOperationsPending.load(std::memory_order_acquire) > 0)
             {
                 for (UINT32 i = 0; i < available; ++i)
                 {
@@ -3168,7 +3212,10 @@ void initAudio() {
         sequencerThread.join();
     if (audioThread.joinable())
         audioThread.join();
+    if (vstCommandThread.joinable())
+        vstCommandThread.join();
     sequencerThread = std::thread(sequencerWarmupLoop);
+    vstCommandThread = std::thread(vstCommandLoop);
     audioThread = std::thread(audioLoop);
 }
 
@@ -3176,7 +3223,9 @@ void shutdownAudio() {
     running.store(false, std::memory_order_release);
     audioSequencerReady.store(false, std::memory_order_release);
     isPlaying.store(false, std::memory_order_relaxed);
+    vstCommandCv.notify_all();
     if (audioThread.joinable()) audioThread.join();
+    if (vstCommandThread.joinable()) vstCommandThread.join();
     if (sequencerThread.joinable()) sequencerThread.join();
 }
 
