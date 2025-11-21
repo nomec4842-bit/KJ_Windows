@@ -31,6 +31,7 @@
 #include <mutex>
 #include <deque>
 #include <condition_variable>
+#include <future>
 #ifdef DEBUG_AUDIO
 #include <iostream>
 #endif
@@ -113,6 +114,7 @@ struct VstCommand
     int trackId = -1;
     std::filesystem::path path;
     std::shared_ptr<kj::VST3Host> host;
+    std::shared_ptr<std::promise<bool>> completion;
 };
 
 static std::mutex vstCommandMutex;
@@ -197,17 +199,28 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
     if (!host)
         return false;
 
+    auto completion = std::make_shared<std::promise<bool>>();
+    auto result = completion->get_future();
+
     VstCommand command{};
     command.type = VstCommandType::Load;
     command.trackId = trackId;
     command.path = path;
     command.host = std::move(host);
+    command.completion = completion;
 
     std::lock_guard<std::mutex> lock(vstCommandMutex);
     vstCommandQueue.push_back(std::move(command));
     vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
     vstCommandCv.notify_one();
-    return true;
+
+    // This synchronization is allowed because plugin loading is non-real-time.
+    // Plugin loading must block until initialization is complete.
+    constexpr auto kLoadTimeout = std::chrono::seconds(15);
+    if (result.wait_for(kLoadTimeout) != std::future_status::ready)
+        return false;
+
+    return result.get();
 }
 
 bool requestTrackVstUnload(int trackId)
@@ -219,16 +232,26 @@ bool requestTrackVstUnload(int trackId)
     if (!host)
         return false;
 
+    auto completion = std::make_shared<std::promise<bool>>();
+    auto result = completion->get_future();
+
     VstCommand command{};
     command.type = VstCommandType::Unload;
     command.trackId = trackId;
     command.host = std::move(host);
+    command.completion = completion;
 
     std::lock_guard<std::mutex> lock(vstCommandMutex);
     vstCommandQueue.push_back(std::move(command));
     vstOperationsPending.fetch_add(1, std::memory_order_acq_rel);
     vstCommandCv.notify_one();
-    return true;
+
+    // This synchronization is allowed because plugin unloading is non-real-time.
+    constexpr auto kUnloadTimeout = std::chrono::seconds(15);
+    if (result.wait_for(kUnloadTimeout) != std::future_status::ready)
+        return false;
+
+    return result.get();
 }
 
 static void vstCommandLoop()
@@ -252,13 +275,17 @@ static void vstCommandLoop()
         vstCommandQueue.pop_front();
         lock.unlock();
 
+        bool success = (command.host != nullptr);
         if (command.host)
         {
             if (command.type == VstCommandType::Load)
-                command.host->load(command.path.string());
+                success = command.host->load(command.path.string());
             else
                 command.host->unload();
         }
+
+        if (command.completion)
+            command.completion->set_value(success);
 
         if (command.trackId > 0)
         {
@@ -271,6 +298,11 @@ static void vstCommandLoop()
 
     {
         std::lock_guard<std::mutex> lock(vstCommandMutex);
+        for (auto& pending : vstCommandQueue)
+        {
+            if (pending.completion)
+                pending.completion->set_value(false);
+        }
         vstCommandQueue.clear();
         vstOperationsPending.store(0, std::memory_order_release);
     }
