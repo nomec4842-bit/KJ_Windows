@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -239,6 +240,9 @@ private:
     void suspendProcessing();
     void resumeProcessing();
     void waitForProcessingToComplete();
+    bool waitForPluginReady();
+    void markLoadStarted();
+    void markLoadFinished(bool success);
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -305,6 +309,11 @@ private:
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;
+
+    mutable std::mutex loadingMutex_;
+    std::condition_variable loadingCv_;
+    bool loadingInProgress_ = false;
+    bool pluginReady_ = false;
 
 #ifdef _WIN32
     std::wstring pluginNameW_;
