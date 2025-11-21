@@ -259,7 +259,6 @@ private:
     HFONT headerTitleFont_ = nullptr;
     HFONT headerTextFont_ = nullptr;
     bool headerFontsCreated_ = false;
-    bool windowClassesRegistered_ = false;
     bool frameAttached_ = false;
     bool viewAttached_ = false;
     bool fallbackVisible_ = false;
