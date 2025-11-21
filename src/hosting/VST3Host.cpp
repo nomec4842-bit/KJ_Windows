@@ -534,12 +534,44 @@ void VST3Host::waitForProcessingToComplete()
         std::this_thread::yield();
 }
 
+bool VST3Host::waitForPluginReady()
+{
+    std::unique_lock<std::mutex> lock(loadingMutex_);
+    loadingCv_.wait(lock, [this] { return !loadingInProgress_; });
+    return pluginReady_;
+}
+
+void VST3Host::markLoadStarted()
+{
+    // This synchronization is allowed because plugin loading is non-real-time.
+    std::lock_guard<std::mutex> lock(loadingMutex_);
+    loadingInProgress_ = true;
+    pluginReady_ = false;
+}
+
+void VST3Host::markLoadFinished(bool success)
+{
+    // This synchronization is allowed because plugin loading is non-real-time.
+    {
+        std::lock_guard<std::mutex> lock(loadingMutex_);
+        loadingInProgress_ = false;
+        pluginReady_ = success;
+    }
+    loadingCv_.notify_all();
+}
+
 bool VST3Host::load(const std::string& pluginPath)
 {
+    markLoadStarted();
     NonRealtimeScope scope(*this);
     unloadLocked();
 
     std::string error;
+
+    const auto finish = [this](bool success) {
+        markLoadFinished(success);
+        return success;
+    };
 
 #ifdef _WIN32
     pluginNameW_.clear();
@@ -554,7 +586,7 @@ bool VST3Host::load(const std::string& pluginPath)
     if (!module)
     {
         std::cerr << "Failed to load plugin: " << error << std::endl;
-        return false;
+        return finish(false);
     }
 
     auto factory = module->getFactory();
@@ -562,7 +594,7 @@ bool VST3Host::load(const std::string& pluginPath)
     if (!factory3)
     {
         std::cerr << "[KJ] Plugin does not expose IPluginFactory3." << std::endl;
-        return false;
+        return finish(false);
     }
 
     auto classes = factory.classInfos();
@@ -580,7 +612,7 @@ bool VST3Host::load(const std::string& pluginPath)
     if (!componentClass)
     {
         std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
-        return false;
+        return finish(false);
     }
 
 #ifdef _WIN32
@@ -594,7 +626,7 @@ bool VST3Host::load(const std::string& pluginPath)
         !rawComponent)
     {
         std::cerr << "Failed to instantiate component: " << componentClass->name() << std::endl;
-        return false;
+        return finish(false);
     }
 
     Steinberg::IPtr<Steinberg::Vst::IComponent> component = Steinberg::owned(rawComponent);
@@ -603,7 +635,7 @@ bool VST3Host::load(const std::string& pluginPath)
     if (component->initialize(&hostContext) != kResultOk)
     {
         std::cerr << "[KJ] Component initialization failed.\n";
-        return false;
+        return finish(false);
     }
 
     Steinberg::FUID controllerClassId;
@@ -628,7 +660,7 @@ bool VST3Host::load(const std::string& pluginPath)
         {
             const auto controllerName = controllerClass ? controllerClass->name() : "<controller>";
             std::cerr << "Failed to instantiate controller: " << controllerName << std::endl;
-            return false;
+            return finish(false);
         }
 
         controller = Steinberg::owned(rawController);
@@ -641,13 +673,13 @@ bool VST3Host::load(const std::string& pluginPath)
     if (!controller)
     {
         std::cerr << "Failed to acquire controller." << std::endl;
-        return false;
+        return finish(false);
     }
 
     if (controller->initialize(&hostContext) != kResultOk)
     {
         std::cerr << "[KJ] Controller initialization failed.\n";
-        return false;
+        return finish(false);
     }
 
     auto componentHandler = new ComponentHandler(*this);
@@ -662,7 +694,7 @@ bool VST3Host::load(const std::string& pluginPath)
         std::cerr << "[KJ] Plug-in does not expose IConnectionPoint on component/controller.\n";
         controller->setComponentHandler(nullptr);
         componentHandler->release();
-        return false;
+        return finish(false);
     }
 
     if (componentConnectionPoint->connect(controllerConnectionPoint) != kResultOk ||
@@ -671,7 +703,7 @@ bool VST3Host::load(const std::string& pluginPath)
         std::cerr << "[KJ] Component/controller connection failed.\n";
         controller->setComponentHandler(nullptr);
         componentHandler->release();
-        return false;
+        return finish(false);
     }
 
     {
@@ -690,7 +722,7 @@ bool VST3Host::load(const std::string& pluginPath)
         std::cerr << "Component does not implement IAudioProcessor.\n";
         controller->setComponentHandler(nullptr);
         componentHandler->release();
-        return false;
+        return finish(false);
     }
 
     module_ = module;
@@ -717,7 +749,7 @@ bool VST3Host::load(const std::string& pluginPath)
     updateHeaderTexts();
 #endif
 
-    return true;
+    return finish(true);
 }
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
@@ -1268,8 +1300,10 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
 
 void VST3Host::unload()
 {
+    markLoadStarted();
     NonRealtimeScope scope(*this);
     unloadLocked();
+    markLoadFinished(false);
 }
 
 void VST3Host::unloadLocked()
@@ -1355,6 +1389,8 @@ bool VST3Host::isPluginLoaded() const
 bool VST3Host::ShowPluginEditor()
 {
 #ifdef _WIN32
+    if (!waitForPluginReady())
+        return false;
     if (!controller_)
     {
         std::cerr << "[KJ] Cannot open plug-in editor without a valid controller.\n";
@@ -1577,6 +1613,8 @@ void VST3Host::openEditor(void* hwnd)
 void VST3Host::showPluginUI(void* parentHWND)
 {
 #ifdef _WIN32
+    if (!waitForPluginReady())
+        return;
     if (!component_ || !controller_)
     {
         std::cerr << "[KJ] Cannot show GUI before plugin is fully loaded.\n";
