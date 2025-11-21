@@ -717,11 +717,14 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
 
     const auto canProcess32 = processor_->canProcessSampleSize(kSample32);
-    if (canProcess32 != kResultOk && canProcess32 != kResultTrue)
+    if (canProcess32 != kResultOk && canProcess32 != kResultTrue && canProcess32 != kNotImplemented)
         return false;
 
-    if (processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(), inputBusCount,
-                                       outputArrangements.empty() ? nullptr : outputArrangements.data(), outputBusCount) != kResultOk)
+    const auto arrangementResult = processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(),
+                                                                  inputBusCount,
+                                                                  outputArrangements.empty() ? nullptr : outputArrangements.data(),
+                                                                  outputBusCount);
+    if (arrangementResult != kResultOk && arrangementResult != kResultTrue && arrangementResult != kNotImplemented)
         return false;
 
     ProcessSetup setup {};
