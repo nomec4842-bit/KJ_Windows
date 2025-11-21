@@ -359,6 +359,7 @@ constexpr UINT WM_DELAY_SET_TRACK = WM_APP + 21;
 constexpr UINT WM_SIDECHAIN_REFRESH_VALUES = WM_APP + 30;
 constexpr UINT WM_SIDECHAIN_SET_TRACK = WM_APP + 31;
 constexpr UINT WM_SIDECHAIN_RELOAD_TRACKS = WM_APP + 32;
+constexpr UINT WM_SHOW_VST_EDITOR = WM_APP + 40;
 
 struct PianoRollLayout
 {
@@ -5450,6 +5451,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     SynthWaveType activeWaveType = SynthWaveType::Sine;
     std::shared_ptr<kj::VST3Host> activeVstHost;
     bool vstEditorAvailable = false;
+    bool vstEditorLoading = false;
     int activeMidiChannel = 1;
     int activeMidiPort = -1;
     std::wstring activeMidiPortName;
@@ -5484,7 +5486,8 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     }
     if (activeVstHost)
     {
-        vstEditorAvailable = activeVstHost->isPluginLoaded();
+        vstEditorAvailable = activeVstHost->isPluginReady();
+        vstEditorLoading = activeVstHost->isPluginLoading();
     }
 
     if (waveDropdownOpen && (!showWaveSelector || waveDropdownTrackId != activeTrackId))
@@ -5517,9 +5520,10 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
                    RGB(50, 50, 50), RGB(120, 120, 120),
                    "Load VST");
 
-        COLORREF showFill = vstEditorAvailable ? RGB(50, 50, 50) : RGB(30, 30, 30);
-        COLORREF showOutline = vstEditorAvailable ? RGB(120, 120, 120) : RGB(80, 80, 80);
-        drawButton(surface, showVstButton, showFill, showOutline, "Show VST");
+        COLORREF showFill = vstEditorAvailable ? RGB(50, 50, 50) : (vstEditorLoading ? RGB(40, 40, 40) : RGB(30, 30, 30));
+        COLORREF showOutline = vstEditorAvailable ? RGB(120, 120, 120) : (vstEditorLoading ? RGB(100, 100, 100) : RGB(80, 80, 80));
+        const char* showLabel = vstEditorLoading ? "Show VST (Loading)" : "Show VST";
+        drawButton(surface, showVstButton, showFill, showOutline, showLabel);
     }
     else if (showMidiChannelSelector)
     {
@@ -5895,6 +5899,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_SHOW_VST_EDITOR:
+    {
+        int trackId = static_cast<int>(wParam);
+        auto host = trackGetVstHost(trackId);
+        if (host && host->isPluginReady())
+        {
+            host->openEditor(reinterpret_cast<void*>(hwnd));
+        }
+        else
+        {
+            std::cout << "[GUI] VST3 plug-in editor request received but plug-in is not ready." << std::endl;
+        }
+        return 0;
+    }
     case WM_CREATE:
         gMainWindow = hwnd;
         buildStepRects();
@@ -6597,14 +6615,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 return 0;
             }
 
-            if (!vstEditorAvailable)
-            {
-                vstEditorAvailable = activeVstHost->isPluginLoaded();
-            }
+            vstEditorAvailable = activeVstHost->isPluginReady();
+            vstEditorLoading = activeVstHost->isPluginLoading();
 
             if (!vstEditorAvailable)
             {
-                std::cout << "[GUI] No VST3 plug-in loaded to display." << std::endl;
+                if (vstEditorLoading)
+                {
+                    std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
+                    std::thread([host = activeVstHost, trackId = activeTrackId, parent = hwnd]() {
+                        if (host->waitForPluginReady())
+                        {
+                            PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
+                        }
+                        else
+                        {
+                            std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
+                        }
+                    }).detach();
+                }
+                else
+                {
+                    std::cout << "[GUI] No VST3 plug-in is ready to display." << std::endl;
+                }
                 return 0;
             }
 
