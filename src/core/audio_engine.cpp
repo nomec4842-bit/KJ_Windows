@@ -99,8 +99,10 @@ struct WaveformBuffer
 static std::array<WaveformBuffer, 2> masterWaveformBuffers{};
 static std::atomic<int> masterWaveformPublishIndex{0};
 static int masterWaveformWriteIndex = 1;
-static std::mutex audioNotificationMutex;
-static std::deque<AudioThreadNotification> audioThreadNotifications;
+constexpr std::size_t kAudioNotificationCapacity = 128;
+static std::array<AudioThreadNotification, kAudioNotificationCapacity> gAudioNotificationQueue{};
+static std::atomic<std::size_t> gAudioNotificationHead{0};
+static std::atomic<std::size_t> gAudioNotificationTail{0};
 
 enum class VstCommandType
 {
@@ -152,8 +154,16 @@ static void writeWaveformSamples(const float* samples, std::size_t sampleCount)
 
 static void enqueueAudioThreadNotification(const std::wstring& title, const std::wstring& message)
 {
-    std::lock_guard<std::mutex> lock(audioNotificationMutex);
-    audioThreadNotifications.push_back({title, message});
+    const std::size_t tail = gAudioNotificationTail.load(std::memory_order_relaxed);
+    const std::size_t nextTail = (tail + 1) % kAudioNotificationCapacity;
+    const std::size_t head = gAudioNotificationHead.load(std::memory_order_acquire);
+
+    // Drop the notification if the buffer is full; the audio thread must never block.
+    if (nextTail == head)
+        return;
+
+    gAudioNotificationQueue[tail] = AudioThreadNotification{title, message};
+    gAudioNotificationTail.store(nextTail, std::memory_order_release);
 }
 
 static void enqueueVstReset(int trackId)
@@ -181,12 +191,15 @@ static void publishVstResetBatch()
 
 bool consumeAudioThreadNotification(AudioThreadNotification& notification)
 {
-    std::lock_guard<std::mutex> lock(audioNotificationMutex);
-    if (audioThreadNotifications.empty())
+    const std::size_t head = gAudioNotificationHead.load(std::memory_order_acquire);
+    const std::size_t tail = gAudioNotificationTail.load(std::memory_order_acquire);
+
+    if (head == tail)
         return false;
 
-    notification = std::move(audioThreadNotifications.front());
-    audioThreadNotifications.pop_front();
+    notification = gAudioNotificationQueue[head];
+    const std::size_t nextHead = (head + 1) % kAudioNotificationCapacity;
+    gAudioNotificationHead.store(nextHead, std::memory_order_release);
     return true;
 }
 
@@ -1472,6 +1485,12 @@ void sequencerWarmupLoop()
     }
 }
 
+// REAL-TIME PATH ENTRY: audioLoop drives the WASAPI pull-model render thread. All
+// work reachable from this function runs on the render thread and must avoid
+// locks, waits, and allocations. Remaining legacy operations (map mutations,
+// dynamic allocations for track/state changes, etc.) still need follow-up
+// refactors; they are documented here to make the call graph boundary explicit
+// for future passes.
 void audioLoop() {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
@@ -3256,6 +3275,14 @@ void audioLoop() {
     audioSequencerReady.store(false, std::memory_order_release);
     CoUninitialize();
 }
+
+// Real-time safety summary:
+// - audioLoop is the render-thread entry; it must remain allocation- and lock-free.
+// - Replaced mutex-protected audioThreadNotifications with an SPSC ring buffer to
+//   avoid locks and waits in the render path.
+// - Additional legacy allocations and container mutations still exist in the
+//   render path and require follow-up passes to conform fully to the real-time
+//   design.
 
 #include "audio_engine_devices.inl"
 
