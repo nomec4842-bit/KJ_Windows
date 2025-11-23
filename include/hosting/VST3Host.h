@@ -204,7 +204,7 @@ private:
     void onContainerCreated(HWND hwnd);
     void onContainerResized(int width, int height);
     void onContainerDestroyed();
-    void ensurePluginViewHost();
+    HWND ensurePluginViewHost();
     bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
     bool applyViewRect(const Steinberg::ViewRect& rect);
     void updateWindowSizeForContent(int contentWidth, int contentHeight);

@@ -1810,9 +1810,9 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     if (viewCopy)
     {
-        ensurePluginViewHost();
+        HWND viewHostWindow = ensurePluginViewHost();
 
-        if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_) || !AttachView(viewCopy, pluginViewWindow_))
+        if (!viewHostWindow || !::IsWindow(viewHostWindow) || !AttachView(viewCopy, viewHostWindow))
         {
             std::cerr << "[KJ] Failed to embed VST3 editor view. Showing fallback controls.\n";
             if (viewCopy)
@@ -2087,10 +2087,10 @@ void VST3Host::onContainerDestroyed()
     fallbackEditing_ = false;
     fallbackEditingParamId_ = 0;
 }
-void VST3Host::ensurePluginViewHost()
+HWND VST3Host::ensurePluginViewHost()
 {
     if (!contentWindow_ || !::IsWindow(contentWindow_))
-        return;
+        return nullptr;
 
     // Lazily create a dedicated child HWND that will host the plug-in's native view.
     if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
@@ -2108,6 +2108,8 @@ void VST3Host::ensurePluginViewHost()
         if (plugFrame_)
             plugFrame_->setHostWindow(pluginViewWindow_);
     }
+
+    return pluginViewWindow_;
 }
 
 bool VST3Host::applyViewRect(const Steinberg::ViewRect& rect)
@@ -2120,6 +2122,8 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     if (!view || !parentWindow || !::IsWindow(parentWindow))
         return false;
 
+    pluginViewWindow_ = parentWindow;
+
     // Ensure the plug-in understands how to embed itself into a native HWND container.
     if (view->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
         return false;
@@ -2127,7 +2131,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     if (!plugFrame_)
         plugFrame_ = new PlugFrame(*this);
 
-    plugFrame_->setHostWindow(pluginViewWindow_);
+    plugFrame_->setHostWindow(parentWindow);
     plugFrame_->setActiveView(view);
 
     if (!frameAttached_)
@@ -2161,21 +2165,21 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         plugFrame_->setCachedRect(targetRect);
 
     // Resize our host child window before handing it to the plug-in so the parent matches the requested dimensions.
-    resizePluginViewWindow(pluginViewWindow_, targetRect, true);
+    resizePluginViewWindow(parentWindow, targetRect, true);
 
     if (viewAttached_ && frameAttached_)
     {
         // If the view is already attached simply refresh the window bounds and notify the plug-in.
         Steinberg::ViewRect notifyRect = targetRect;
         view->onSize(&notifyRect);
-        ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
-        ::UpdateWindow(pluginViewWindow_);
-        ::SetFocus(pluginViewWindow_);
+        ::ShowWindow(parentWindow, SW_SHOWNORMAL);
+        ::UpdateWindow(parentWindow);
+        ::SetFocus(parentWindow);
         return true;
     }
 
     // Hand the native HWND to the plug-in so it can create its controls as children of our window.
-    if (view->attached(reinterpret_cast<void*>(pluginViewWindow_), Steinberg::kPlatformTypeHWND) != kResultOk)
+    if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
     {
         view->setFrame(nullptr);
         frameAttached_ = false;
@@ -2203,18 +2207,18 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     if (plugFrame_)
         plugFrame_->setCachedRect(notifyRect);
 
-    resizePluginViewWindow(pluginViewWindow_, notifyRect, true);
+    resizePluginViewWindow(parentWindow, notifyRect, true);
     view->onSize(&notifyRect);
 
     if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view))
     {
-        float scale = GetContentScaleForWindow(pluginViewWindow_);
+        float scale = GetContentScaleForWindow(parentWindow);
         scaleSupport->setContentScaleFactor(scale);
     }
 
-    ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
-    ::UpdateWindow(pluginViewWindow_);
-    ::SetFocus(pluginViewWindow_);
+    ::ShowWindow(parentWindow, SW_SHOWNORMAL);
+    ::UpdateWindow(parentWindow);
+    ::SetFocus(parentWindow);
 
     return true;
 }
