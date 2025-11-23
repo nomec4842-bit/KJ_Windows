@@ -18,7 +18,22 @@ set(VST3_SDK_DIR "${CMAKE_SOURCE_DIR}/external/vst3sdk")
 # Keep build products for different architectures separated to avoid mixing x86 and
 # x64 artifacts when reusing a build directory.
 if (MSVC)
-    set(_kj_output_platform "${CMAKE_VS_PLATFORM_NAME}")
+    # Prefer the generator platform when available to avoid mixing x86 and x64
+    # artifacts in the same build tree. Reusing a build directory across
+    # architectures can leave behind incompatible libraries (for example,
+    # base.lib), which later manifest as "invalid or corrupt file" linker
+    # errors on Windows.
+    if (CMAKE_GENERATOR_PLATFORM)
+        set(_kj_output_platform "${CMAKE_GENERATOR_PLATFORM}")
+    else()
+        set(_kj_output_platform "${CMAKE_VS_PLATFORM_NAME}")
+    endif()
+
+    if (KJ_MSVC_PLATFORM_CACHE AND NOT KJ_MSVC_PLATFORM_CACHE STREQUAL _kj_output_platform)
+        message(FATAL_ERROR "Build directory was previously configured for platform '${KJ_MSVC_PLATFORM_CACHE}' but is now configured for '${_kj_output_platform}'. Please use a fresh build directory per architecture to avoid stale artifacts.")
+    endif()
+
+    set(KJ_MSVC_PLATFORM_CACHE "${_kj_output_platform}" CACHE STRING "Last configured MSVC platform" FORCE)
 else()
     set(_kj_output_platform "${CMAKE_SYSTEM_PROCESSOR}")
 endif()
