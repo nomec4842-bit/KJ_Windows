@@ -70,6 +70,7 @@ public:
     bool loadState(const uint8_t* data, size_t size);
 
     void openEditor(void* nativeWindowHandle);
+    void asyncLoadPluginEditor(void* parentWindowHandle);
 
     bool isPluginLoaded() const;
     bool isPluginReady() const;
@@ -237,6 +238,9 @@ private:
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
     bool ensureViewForRequestedType();
+    bool createViewForRequestedType(const char* preferredType, Steinberg::IPtr<Steinberg::IPlugView>& outView,
+                                    std::string& usedType,
+                                    Steinberg::Vst::IEditController* controllerOverride = nullptr);
     void processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
                          const std::vector<PendingParameterChange>& changes,
                          const std::vector<Steinberg::Vst::Event>& events);
@@ -246,6 +250,7 @@ private:
     void waitForProcessingToComplete();
     void markLoadStarted();
     void markLoadFinished(bool success);
+    void setOwningTrackId(int trackId) { owningTrackId_.store(trackId, std::memory_order_release); }
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
@@ -312,11 +317,14 @@ private:
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;
+    std::atomic<bool> viewLoadInProgress_ {false};
+    mutable std::mutex viewMutex_;
 
     mutable std::mutex loadingMutex_;
     std::condition_variable loadingCv_;
     bool loadingInProgress_ = false;
     bool pluginReady_ = false;
+    std::atomic<int> owningTrackId_ {0};
 
 #ifdef _WIN32
     std::wstring pluginNameW_;

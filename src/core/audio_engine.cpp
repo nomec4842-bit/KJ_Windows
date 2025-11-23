@@ -224,7 +224,6 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
         return false;
 
     auto completion = std::make_shared<std::promise<bool>>();
-    auto result = completion->get_future();
 
     VstCommand command{};
     command.type = VstCommandType::Load;
@@ -234,14 +233,8 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
     command.completion = completion;
 
     enqueuePluginLoad(std::move(command));
-
-    // This synchronization is allowed because plugin loading is non-real-time.
-    // Plugin loading must block until initialization is complete.
-    constexpr auto kLoadTimeout = std::chrono::seconds(15);
-    if (result.wait_for(kLoadTimeout) != std::future_status::ready)
-        return false;
-
-    return result.get();
+    // Do not block the GUI thread; the caller can poll host->isPluginReady().
+    return true;
 }
 
 bool requestTrackVstUnload(int trackId)
