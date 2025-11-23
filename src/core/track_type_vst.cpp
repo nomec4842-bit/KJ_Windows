@@ -34,6 +34,8 @@ std::shared_ptr<kj::VST3Host> trackEnsureVstHost(int trackId)
                 track->vstHost = std::make_shared<kj::VST3Host>();
                 std::cout << "VST track initialized" << std::endl;
             }
+            if (track->vstHost)
+                track->vstHost->setOwningTrackId(trackId);
             track->track.vstHost = track->vstHost;
             return track->vstHost;
         }
