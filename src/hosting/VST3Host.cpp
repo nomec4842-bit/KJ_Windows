@@ -47,6 +47,13 @@ namespace {
 std::mutex gWindowClassMutex;
 bool gWindowClassesRegistered = false;
 
+std::string fuidToString(const Steinberg::FUID& id)
+{
+    Steinberg::FUID::String buffer{};
+    id.toString(buffer);
+    return std::string{buffer};
+}
+
 class AudioProcessScope
 {
 public:
@@ -669,8 +676,8 @@ bool VST3Host::load(const std::string& pluginPath)
         if (componentControllerId.isValid() && enumeratedControllerId.isValid() &&
             componentControllerId != enumeratedControllerId)
         {
-            std::cerr << "[KJ] Component reports controller CID " << componentControllerId.toString() <<
-                " but factory enumerates " << enumeratedControllerId.toString() << ".\n";
+            std::cerr << "[KJ] Component reports controller CID " << fuidToString(componentControllerId) <<
+                " but factory enumerates " << fuidToString(enumeratedControllerId) << ".\n";
         }
 
         Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
