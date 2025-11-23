@@ -66,6 +66,8 @@ public:
     void queueEvent(const Steinberg::Vst::Event& ev);
     void queueNoteEvent(const Steinberg::Vst::Event& ev);
 
+    void setOwningTrackId(int trackId) { owningTrackId_.store(trackId, std::memory_order_release); }
+
     bool saveState(std::vector<uint8_t>& outState) const;
     bool loadState(const uint8_t* data, size_t size);
 
@@ -250,7 +252,6 @@ private:
     void waitForProcessingToComplete();
     void markLoadStarted();
     void markLoadFinished(bool success);
-    void setOwningTrackId(int trackId) { owningTrackId_.store(trackId, std::memory_order_release); }
 
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
