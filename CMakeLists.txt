@@ -60,7 +60,7 @@ add_executable(KJ
 
 target_link_libraries(KJ
     PRIVATE kj_core kj_gui
-    sdk sdk_common sdk_hosting pluginterfaces base
+    sdk_common sdk_hosting pluginterfaces base
 )
 
 message(STATUS "KJ configured with VST3 SDK: ${VST3_SDK_DIR}")
