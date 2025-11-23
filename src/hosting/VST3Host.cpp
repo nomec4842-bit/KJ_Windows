@@ -651,16 +651,26 @@ bool VST3Host::load(const std::string& pluginPath)
             return finish(false);
         }
 
-        Steinberg::FUID controllerClassId;
+        TUID componentControllerTuid{};
+        const tresult componentControllerResult =
+            component->getControllerClassId(componentControllerTuid);
+        const Steinberg::FUID componentControllerId =
+            componentControllerResult == kResultOk
+                ? Steinberg::FUID::fromTUID(componentControllerTuid)
+                : Steinberg::FUID{};
+
+        Steinberg::FUID enumeratedControllerId;
         if (controllerClass)
+            enumeratedControllerId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
+
+        Steinberg::FUID controllerClassId =
+            componentControllerId.isValid() ? componentControllerId : enumeratedControllerId;
+
+        if (componentControllerId.isValid() && enumeratedControllerId.isValid() &&
+            componentControllerId != enumeratedControllerId)
         {
-            controllerClassId = Steinberg::FUID::fromTUID(controllerClass->ID().data());
-        }
-        else
-        {
-            TUID controllerTuid{};
-            if (component->getControllerClassId(controllerTuid) == kResultOk)
-                controllerClassId = Steinberg::FUID::fromTUID(controllerTuid);
+            std::cerr << "[KJ] Component reports controller CID " << componentControllerId.toString() <<
+                " but factory enumerates " << enumeratedControllerId.toString() << ".\n";
         }
 
         Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
