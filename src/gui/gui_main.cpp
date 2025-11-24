@@ -5905,7 +5905,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         auto host = trackGetVstHost(trackId);
         if (host && host->isPluginReady())
         {
-            host->openEditor(reinterpret_cast<void*>(hwnd));
+            host->showPluginUI(reinterpret_cast<void*>(hwnd));
         }
         else
         {
