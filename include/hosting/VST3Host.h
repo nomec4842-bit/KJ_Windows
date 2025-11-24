@@ -259,13 +259,6 @@ private:
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
-    struct EditorLifetime
-    {
-        Steinberg::IPtr<Steinberg::Vst::IComponent> component;
-        Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
-        Steinberg::IPtr<Steinberg::IPlugView> view;
-    };
-    std::shared_ptr<EditorLifetime> editorLifetime_;
     bool controllerInitialized_ = false;
     ComponentHandler* componentHandler_ = nullptr;
 
@@ -327,7 +320,6 @@ private:
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;
-    std::atomic<bool> viewLoadInProgress_ {false};
     mutable std::mutex viewMutex_;
 
     mutable std::mutex loadingMutex_;
