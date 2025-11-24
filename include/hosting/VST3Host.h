@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -191,6 +192,10 @@ private:
     class PlugFrame;
 #endif
 
+#ifdef _WIN32
+    friend class PlugFrame;
+#endif
+
     class ComponentHandler;
 
     class NonRealtimeScope;
@@ -207,6 +212,7 @@ private:
     void onContainerResized(int width, int height);
     void onContainerDestroyed();
     HWND ensurePluginViewHost();
+    void onIdleTimer();
     bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
     bool applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect);
     void updateWindowSizeForContent(int contentWidth, int contentHeight);
@@ -284,6 +290,7 @@ private:
     bool headerFontsCreated_ = false;
     bool frameAttached_ = false;
     bool viewAttached_ = false;
+    UINT_PTR idleTimerId_ = 0;
     bool fallbackVisible_ = false;
     int fallbackSelectedIndex_ = -1;
     bool fallbackEditing_ = false;
@@ -329,6 +336,7 @@ private:
     bool loadingInProgress_ = false;
     bool pluginReady_ = false;
     std::atomic<int> owningTrackId_ {0};
+    std::filesystem::path pluginPath_;
 
 #ifdef _WIN32
     std::wstring pluginNameW_;
