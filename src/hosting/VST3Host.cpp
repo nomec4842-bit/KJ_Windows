@@ -41,9 +41,24 @@ using namespace kj;
 #include "public.sdk/source/vst/vstcomponent.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 
+// -----------------------------------------------------------------------------
+// Dedicated VST editor window declarations
+// -----------------------------------------------------------------------------
+static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static const wchar_t* kVSTEditorClassName = L"KJ_VSTEDITOR";
+
+struct VSTEditorState {
+    kj::VST3Host* host = nullptr;
+    Steinberg::IPlugView* view = nullptr;
+    HWND parent = nullptr;
+    bool attached = false;
+};
+
 using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
+
+#define pluginView_ view_.get()
 
 namespace {
 
@@ -1776,130 +1791,57 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
     std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
 #endif
 }
-void VST3Host::showPluginUI(void* parentHWND)
+
+// -----------------------------------------------------------------------------
+// Creates the dedicated plugin editor window
+// -----------------------------------------------------------------------------
+HWND VST3Host::createEditorWindow(HWND parent)
 {
-#ifdef _WIN32
-    (void)parentHWND;
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc   = VSTEditorWndProc;
+    wc.hInstance     = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kVSTEditorClassName;
 
-    if (!isPluginReady())
-    {
-        std::cerr << "[KJ] Cannot show plug-in UI because the plug-in did not finish loading.\n";
-        return;
-    }
-    if (!component_ || !controller_)
-    {
-        std::cerr << "[KJ] Cannot show GUI before plugin is fully loaded.\n";
-        return;
-    }
+    RegisterClassW(&wc);
 
-    if (!ensureViewForRequestedType())
-    {
-        std::cerr << "[KJ] Plug-in has no usable editor view.\n";
-        return;
-    }
+    HWND hwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW,
+        kVSTEditorClassName,
+        L"Plugin Editor",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        800, 600,
+        parent,
+        nullptr,
+        wc.hInstance,
+        this
+    );
 
-    Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
+    return hwnd;
+}
+void VST3Host::showPluginUI(void* parentWindowPtr)
+{
+    if (!editController_ || !component_ || !pluginView_)
     {
-        std::lock_guard<std::mutex> lock(viewMutex_);
-        viewCopy = view_;
-    }
-
-    if (!viewCopy)
-    {
-        std::cerr << "[KJ] Failed to acquire plug-in view for editor attachment.\n";
-        return;
-    }
-
-    if (viewCopy->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
-    {
-        std::cerr << "[KJ] Plug-in view does not support HWND embedding.\n";
+        std::cout << "[VST3Host] Editor cannot be shown: missing controller/view." << std::endl;
         return;
     }
 
-    if (!ensureEditorWindowClass())
+    if (!pluginView_->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND))
     {
-        std::cerr << "[KJ] Failed to register VST editor window class.\n";
+        std::cout << "[VST3Host] Plugin does not support HWND platform." << std::endl;
         return;
     }
 
-    if (editorWindow_ && ::IsWindow(editorWindow_))
-        ::DestroyWindow(editorWindow_);
+    HWND parentHwnd = reinterpret_cast<HWND>(parentWindowPtr);
 
-    cleanupEditorWindowResources();
-
-    Steinberg::ViewRect rect {};
-    if (viewCopy->getSize(&rect) != kResultTrue)
+    if (!editorWindow_)
     {
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = 640;
-        rect.bottom = 480;
+        editorWindow_ = createEditorWindow(parentHwnd);
     }
 
-    const int width = std::max<int>(1, rect.getWidth());
-    const int height = std::max<int>(1, rect.getHeight());
-
-    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    DWORD exStyle = WS_EX_TOOLWINDOW;
-
-    RECT desired {0, 0, width, height};
-    ::AdjustWindowRectEx(&desired, style, FALSE, exStyle);
-
-    std::wstring title = pluginNameW_.empty() ? std::wstring(L"VST3 Plug-in") : pluginNameW_;
-
-    HINSTANCE instance = ::GetModuleHandleW(nullptr);
-    HWND hwnd = ::CreateWindowExW(exStyle, kEditorWindowClassName, title.c_str(), style, CW_USEDEFAULT,
-                                  CW_USEDEFAULT, desired.right - desired.left, desired.bottom - desired.top, nullptr,
-                                  nullptr, instance, this);
-
-    if (!hwnd)
-    {
-        std::cerr << "[KJ] Failed to create editor window for plug-in GUI.\n";
-        return;
-    }
-
-    editorWindow_ = hwnd;
-    editorView_ = viewCopy;
-
-    if (!plugFrame_)
-        plugFrame_ = new PlugFrame(*this);
-
-    plugFrame_->setHostWindow(hwnd);
-    plugFrame_->setActiveView(viewCopy);
-    plugFrame_->setCachedRect(rect);
-
-    if (viewCopy->setFrame(plugFrame_) != kResultOk)
-    {
-        std::cerr << "[KJ] Failed to provide host frame to plug-in view.\n";
-        ::DestroyWindow(hwnd);
-        return;
-    }
-    frameAttached_ = true;
-
-    if (viewCopy->attached(reinterpret_cast<void*>(hwnd), Steinberg::kPlatformTypeHWND) != kResultOk)
-    {
-        std::cerr << "[KJ] Failed to attach plug-in editor view to HWND.\n";
-        ::DestroyWindow(hwnd);
-        return;
-    }
-
-    viewAttached_ = true;
-
-    Steinberg::ViewRect notifyRect = rect;
-    if (viewCopy->getSize(&notifyRect) != kResultTrue)
-        notifyRect = rect;
-
-    plugFrame_->setCachedRect(notifyRect);
-    viewCopy->onSize(&notifyRect);
-    storeCurrentViewRect(notifyRect);
-
-    ::ShowWindow(hwnd, SW_SHOWNORMAL);
-    ::UpdateWindow(hwnd);
-    ::SetForegroundWindow(hwnd);
-#else
-    (void)parentHWND;
-    std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
-#endif
+    ShowWindow(editorWindow_, SW_SHOW);
+    SetForegroundWindow(editorWindow_);
 }
 
 #ifdef _WIN32
@@ -3424,3 +3366,56 @@ void VST3Host::destroyPluginUI()
 #endif // _WIN32
 
 } // namespace kj
+
+// -----------------------------------------------------------------------------
+// Dedicated VST Editor Window WndProc
+// -----------------------------------------------------------------------------
+static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static VSTEditorState state;
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        auto cs = reinterpret_cast<LPCREATESTRUCT>(lParam);
+        state.host = reinterpret_cast<kj::VST3Host*>(cs->lpCreateParams);
+
+        if (!state.host)
+            return -1;
+
+        state.view = state.host->pluginView_;
+        state.parent = hwnd;
+
+        if (state.view) {
+            Steinberg::ViewRect rect = {0, 0, 800, 600};
+            state.view->attached(state.parent, Steinberg::kPlatformTypeHWND);
+            state.view->onSize(&rect);
+            state.attached = true;
+        }
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (state.view && state.attached) {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            Steinberg::ViewRect r{rc.left, rc.top, rc.right, rc.bottom};
+            state.view->onSize(&r);
+        }
+        return 0;
+
+    case WM_CLOSE:
+        if (state.view && state.attached) {
+            state.view->removed();
+            state.attached = false;
+        }
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        return 0;
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
