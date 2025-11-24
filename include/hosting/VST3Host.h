@@ -37,6 +37,10 @@
 
 namespace kj {
 
+#ifdef _WIN32
+class PlugFrame;
+#endif
+
 constexpr size_t VST3_STRING128_SIZE = 128;
 using String128 = Steinberg::Vst::TChar[VST3_STRING128_SIZE];
 
@@ -188,8 +192,6 @@ private:
         Steinberg::Vst::ParameterInfo info {};
         Steinberg::Vst::ParamValue normalizedValue = 0.0;
     };
-
-    class PlugFrame;
 #endif
 
 #ifdef _WIN32
