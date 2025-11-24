@@ -62,6 +62,7 @@ add_subdirectory(src/gui)
 add_executable(KJ
     src/main.cpp
     src/hosting/VST3Host.cpp
+    src/hosting/VST3PlugFrame.cpp
 
     # Force-include full Steinberg hosting stack
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module.cpp
