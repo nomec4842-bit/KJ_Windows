@@ -268,6 +268,8 @@ constexpr UINT kFallbackRefreshMessage = WM_APP + 101;
 constexpr UINT kShowVstEditorMessage = WM_APP + 40;
 constexpr UINT_PTR kIdleTimerId = 3001;
 constexpr UINT kIdleTimerIntervalMs = 15;
+constexpr UINT_PTR kViewRepaintTimerId = 1;
+constexpr UINT kViewRepaintIntervalMs = 16;
 
 std::wstring Utf8ToWide(const std::string& value)
 {
@@ -477,6 +479,19 @@ VST3Host::~VST3Host()
 {
     unload();
 }
+
+#ifdef _WIN32
+void VST3Host::setPlugFrame(PlugFrame* frame)
+{
+    if (plugFrame_ == frame)
+        return;
+
+    if (plugFrame_)
+        plugFrame_->release();
+
+    plugFrame_ = frame;
+}
+#endif
 
 void VST3Host::suspendProcessing()
 {
@@ -2152,6 +2167,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         return false;
 
     viewAttached_ = false;
+    frameAttached_ = false;
 
     // Ensure the plug-in understands how to embed itself into a native HWND container.
     if (view->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
@@ -2174,21 +2190,15 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
 
     plugFrame_->setCachedRect(targetRect);
 
-    if (!frameAttached_)
+    if (view->setFrame(plugFrame_) != kResultOk)
     {
-        if (view->setFrame(plugFrame_) != kResultOk)
-        {
-            plugFrame_->setActiveView(nullptr);
-            plugFrame_->setHostWindow(nullptr);
-            plugFrame_->clearCachedRect();
-            return false;
-        }
-        frameAttached_ = true;
+        plugFrame_->setActiveView(nullptr);
+        plugFrame_->setHostWindow(nullptr);
+        plugFrame_->clearCachedRect();
+        return false;
     }
-    else
-    {
-        view->setFrame(plugFrame_);
-    }
+
+    frameAttached_ = true;
 
     resizePluginViewWindow(parentWindow, targetRect, true);
 
@@ -2766,11 +2776,34 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
     // Forward the relevant input and focus messages to the plug-in view so it can react to user gestures.
     switch (msg)
     {
+    case WM_CREATE:
+        ::SetTimer(hwnd, kViewRepaintTimerId, kViewRepaintIntervalMs, nullptr);
+        return 0;
+    case WM_TIMER:
+        if (wParam == kViewRepaintTimerId)
+        {
+            ::InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_MOUSEWHEEL:
         if (host && host->view_ && host->viewAttached_)
         {
             float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / static_cast<float>(WHEEL_DELTA);
             host->view_->onWheel(delta);
+            return 0;
+        }
+        break;
+    case WM_SIZE:
+        if (host && host->view_ && host->viewAttached_)
+        {
+            Steinberg::ViewRect resizeRect {};
+            resizeRect.left = 0;
+            resizeRect.top = 0;
+            resizeRect.right = static_cast<Steinberg::int32>(LOWORD(lParam));
+            resizeRect.bottom = static_cast<Steinberg::int32>(HIWORD(lParam));
+            host->storeCurrentViewRect(resizeRect);
+            host->view_->onSize(&resizeRect);
             return 0;
         }
         break;
@@ -2799,6 +2832,9 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
         break;
     case WM_ERASEBKGND:
         return 1;
+    case WM_DESTROY:
+        ::KillTimer(hwnd, kViewRepaintTimerId);
+        break;
     default:
         break;
     }
