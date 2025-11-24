@@ -23,10 +23,10 @@ public:
     void clearCachedRect();
 
     // IPlugFrame
-    tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override;
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override;
     Steinberg::uint32 PLUGIN_API addRef() override;
     Steinberg::uint32 PLUGIN_API release() override;
-    tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
+    Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
 
 private:
     std::atomic<Steinberg::uint32> refCount_ {1};
