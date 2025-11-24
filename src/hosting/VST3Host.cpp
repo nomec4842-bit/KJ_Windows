@@ -767,10 +767,6 @@ bool VST3Host::load(const std::string& pluginPath)
         componentHandler_ = componentHandler;
         inputParameterChanges_.setMaxParameters(controller_->getParameterCount());
 
-        // Request the plug-in's editor view immediately so we know if a native GUI is available.
-        if (!ensureViewForRequestedType())
-            std::cerr << "[KJ] Plug-in does not provide a usable editor view; fallback UI will be used." << std::endl;
-
         parameterChangeQueue_.clear();
         eventQueue_.clear();
         processParameterChanges_.clear();
@@ -1523,32 +1519,6 @@ bool VST3Host::ShowPluginEditor()
             return true;
         }
 
-        if (!ensureViewForRequestedType())
-        {
-            std::cerr << "[KJ] Plug-in did not provide a usable editor view for stand-alone display.\n";
-            return false;
-        }
-
-        Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
-        {
-            std::lock_guard<std::mutex> viewLock(viewMutex_);
-            viewCopy = view_;
-            viewAttached_ = false;
-            frameAttached_ = false;
-        }
-
-        if (!viewCopy)
-        {
-            std::cerr << "[KJ] Plug-in did not provide a usable editor view for stand-alone display.\n";
-            return false;
-        }
-
-        if (viewCopy->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
-        {
-            std::cerr << "[KJ] Plug-in editor does not support HWND platform windows." << std::endl;
-            return false;
-        }
-
         std::promise<bool> startPromise;
         auto startFuture = startPromise.get_future();
         std::wstring windowTitle = pluginNameW_.empty() ? std::wstring(L"VST3 Plug-in") : pluginNameW_;
@@ -1556,8 +1526,37 @@ bool VST3Host::ShowPluginEditor()
         standaloneEditorThreadShouldExit_.store(false);
         standaloneEditorThreadRunning_.store(true);
 
-        standaloneEditorThread_ = std::thread([this, promise = std::move(startPromise), viewCopy, windowTitle]() mutable {
-            Steinberg::IPtr<Steinberg::IPlugView> localView = viewCopy;
+        standaloneEditorThread_ = std::thread([this, promise = std::move(startPromise), windowTitle]() mutable {
+            if (!ensureViewForRequestedType())
+            {
+                promise.set_value(false);
+                standaloneEditorThreadRunning_.store(false);
+                return;
+            }
+
+            Steinberg::IPtr<Steinberg::IPlugView> localView;
+            {
+                std::lock_guard<std::mutex> viewLock(viewMutex_);
+                localView = view_;
+                viewAttached_ = false;
+                frameAttached_ = false;
+            }
+
+            if (!localView)
+            {
+                promise.set_value(false);
+                standaloneEditorThreadRunning_.store(false);
+                return;
+            }
+
+            if (localView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+            {
+                std::cerr << "[KJ] Plug-in editor does not support HWND platform windows." << std::endl;
+                promise.set_value(false);
+                standaloneEditorThreadRunning_.store(false);
+                return;
+            }
+
             HWND hwnd = nullptr;
             bool attached = false;
             bool promiseSatisfied = false;
@@ -1727,13 +1726,6 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
     HWND parentWindow = reinterpret_cast<HWND>(parentWindowHandle);
     if (parentWindow)
         lastParentWindow_ = parentWindow;
-
-    bool ensured = ensureViewForRequestedType();
-    if (!ensured)
-    {
-        std::cerr << "[KJ] Plug-in has no usable editor view. Showing fallback controls." << std::endl;
-        return;
-    }
 
     int trackId = owningTrackId_.load(std::memory_order_acquire);
     if (parentWindow && trackId > 0)
