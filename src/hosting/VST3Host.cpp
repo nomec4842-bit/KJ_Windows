@@ -102,6 +102,36 @@ private:
     std::filesystem::path original_;
     bool changed_ = false;
 };
+
+std::filesystem::path ResolvePluginResourceDirectory(const std::filesystem::path& pluginPath)
+{
+    std::error_code ec;
+
+    // Start from the binary path and walk up toward the bundle root.
+    std::filesystem::path basePath = pluginPath;
+    if (std::filesystem::is_regular_file(basePath, ec))
+        basePath = basePath.parent_path();
+
+    // Prefer the Contents/Resources directory when present (typical .vst3 layout).
+    std::filesystem::path contentsPath = basePath;
+    if (contentsPath.filename() != L"Contents")
+    {
+        auto candidate = basePath / "Contents";
+        if (std::filesystem::is_directory(candidate, ec))
+            contentsPath = candidate;
+    }
+
+    auto resourcePath = contentsPath / "Resources";
+    if (std::filesystem::is_directory(resourcePath, ec))
+        return resourcePath;
+
+    // Fall back to a Resources folder adjacent to the binary, or the binary's directory.
+    auto siblingResourcePath = basePath / "Resources";
+    if (std::filesystem::is_directory(siblingResourcePath, ec))
+        return siblingResourcePath;
+
+    return basePath;
+}
 #endif
 
 class AudioProcessScope
@@ -1132,7 +1162,7 @@ bool VST3Host::createViewForRequestedType(const char* preferredType,
     usedType = preferredType && *preferredType ? preferredType : fallbackType;
 
 #ifdef _WIN32
-    ScopedCurrentDirectory resourceDirectory(pluginPath_);
+    ScopedCurrentDirectory resourceDirectory(ResolvePluginResourceDirectory(pluginPath_));
 #endif
 
     Steinberg::IPtr<Steinberg::IPlugView> newView = controllerRef->createView(usedType.c_str());
@@ -1982,28 +2012,74 @@ void VST3Host::onOpenEditorMessage(HWND hwnd)
         return;
     }
 
-    if (!AttachView(viewCopy, viewHostWindow))
+    Steinberg::ViewRect initialRect {};
+    if (viewCopy->getSize(&initialRect) != kResultTrue)
     {
-        std::cerr << "[KJ] Failed to embed VST3 editor view. Showing fallback controls.\n";
-        viewCopy->setFrame(nullptr);
+        initialRect.left = 0;
+        initialRect.top = 0;
+        initialRect.right = 800;
+        initialRect.bottom = 600;
+    }
+
+    if (!plugFrame_)
+        plugFrame_ = new PlugFrame(*this);
+
+    plugFrame_->setHostWindow(viewHostWindow);
+    plugFrame_->setActiveView(viewCopy);
+    plugFrame_->setCachedRect(initialRect);
+
+    viewAttached_ = false;
+    frameAttached_ = false;
+
+    auto failAttach = [&]() {
+        if (frameAttached_ && viewCopy)
+            viewCopy->setFrame(nullptr);
         frameAttached_ = false;
-        {
-            std::lock_guard<std::mutex> lock(viewMutex_);
-            view_ = nullptr;
-            currentViewType_.clear();
-        }
         viewAttached_ = false;
-        clearCurrentViewRect();
+        plugFrame_->setActiveView(nullptr);
+        plugFrame_->setHostWindow(nullptr);
+        plugFrame_->clearCachedRect();
+    };
+
+    if (viewCopy->setFrame(plugFrame_) != kResultOk)
+    {
+        std::cerr << "[KJ] Failed to provide host frame to plug-in view.\n";
+        failAttach();
         showFallbackControls(true);
         return;
     }
 
-    Steinberg::ViewRect rect {};
-    if (viewCopy->getSize(&rect) == kResultTrue)
+    frameAttached_ = true;
+
+    resizePluginViewWindow(viewHostWindow, initialRect, true);
+
+    if (viewCopy->attached(reinterpret_cast<void*>(viewHostWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
     {
-        resizePluginViewWindow(viewHostWindow, rect, true);
-        viewCopy->onSize(&rect);
+        std::cerr << "[KJ] Failed to attach plug-in editor view to HWND.\n";
+        failAttach();
+        showFallbackControls(true);
+        return;
     }
+
+    viewAttached_ = true;
+
+    Steinberg::ViewRect notifyRect = initialRect;
+    if (viewCopy->getSize(&notifyRect) == kResultTrue)
+        plugFrame_->setCachedRect(notifyRect);
+
+    resizePluginViewWindow(viewHostWindow, notifyRect, true);
+    viewCopy->onSize(&notifyRect);
+    storeCurrentViewRect(notifyRect);
+
+    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(viewCopy))
+    {
+        float scale = GetContentScaleForWindow(viewHostWindow);
+        scaleSupport->setContentScaleFactor(scale);
+    }
+
+    ::ShowWindow(viewHostWindow, SW_SHOWNORMAL);
+    ::UpdateWindow(viewHostWindow);
+    ::SetFocus(viewHostWindow);
 
     showFallbackControls(false);
     updateHeaderTexts();
@@ -2794,6 +2870,12 @@ LRESULT CALLBACK VST3Host::PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wPa
             return 0;
         }
         break;
+    case WM_PAINT: {
+        PAINTSTRUCT ps {};
+        ::BeginPaint(hwnd, &ps);
+        ::EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_SIZE:
         if (host && host->view_ && host->viewAttached_)
         {
@@ -3100,11 +3182,28 @@ LRESULT CALLBACK VST3Host::StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM w
 
     switch (msg)
     {
+    case WM_CREATE:
+        ::SetTimer(hwnd, kViewRepaintTimerId, kViewRepaintIntervalMs, nullptr);
+        return 0;
+    case WM_TIMER:
+        if (wParam == kViewRepaintTimerId)
+        {
+            ::InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_PAINT: {
+        PAINTSTRUCT ps {};
+        ::BeginPaint(hwnd, &ps);
+        ::EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_CLOSE:
         ::DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
+        ::KillTimer(hwnd, kViewRepaintTimerId);
         if (host)
             host->standaloneEditorThreadShouldExit_.store(true);
         return 0;
