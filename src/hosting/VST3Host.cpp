@@ -1792,6 +1792,7 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
 #endif
 }
 
+#ifdef _WIN32
 // -----------------------------------------------------------------------------
 // Creates the dedicated plugin editor window
 // -----------------------------------------------------------------------------
@@ -1821,7 +1822,7 @@ HWND VST3Host::createEditorWindow(HWND parent)
 }
 void VST3Host::showPluginUI(void* parentWindowPtr)
 {
-    if (!editController_ || !component_ || !pluginView_)
+    if (!controller_ || !component_ || !pluginView_)
     {
         std::cout << "[VST3Host] Editor cannot be shown: missing controller/view." << std::endl;
         return;
@@ -1843,9 +1844,6 @@ void VST3Host::showPluginUI(void* parentWindowPtr)
     ShowWindow(editorWindow_, SW_SHOW);
     SetForegroundWindow(editorWindow_);
 }
-
-#ifdef _WIN32
-
 void VST3Host::ClosePluginEditor()
 {
     std::thread threadToJoin;
@@ -3367,6 +3365,7 @@ void VST3Host::destroyPluginUI()
 
 } // namespace kj
 
+#ifdef _WIN32
 // -----------------------------------------------------------------------------
 // Dedicated VST Editor Window WndProc
 // -----------------------------------------------------------------------------
@@ -3384,7 +3383,7 @@ static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         if (!state.host)
             return -1;
 
-        state.view = state.host->pluginView_;
+        state.view = state.host->getView();
         state.parent = hwnd;
 
         if (state.view) {
@@ -3419,3 +3418,4 @@ static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+#endif // _WIN32

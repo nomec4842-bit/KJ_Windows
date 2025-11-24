@@ -89,6 +89,7 @@ public:
 #ifdef _WIN32
     PlugFrame* getPlugFrame() const { return plugFrame_; }
     void setPlugFrame(PlugFrame* frame);
+    Steinberg::IPlugView* getView() const { return view_.get(); }
 #endif
 
 private:
@@ -281,6 +282,7 @@ private:
     ComponentHandler* componentHandler_ = nullptr;
 
 #ifdef _WIN32
+    HWND createEditorWindow(HWND parent);
     PlugFrame* plugFrame_ = nullptr;
     HWND editorWindow_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> editorView_;
