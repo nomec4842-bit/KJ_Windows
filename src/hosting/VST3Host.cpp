@@ -1669,9 +1669,6 @@ bool VST3Host::ShowPluginEditor()
                         ::DispatchMessageW(&msg);
                     }
 
-                    if (localView && frameAttached_)
-                        localView->onIdle();
-
                     if (!::IsWindow(hwnd))
                         break;
 
@@ -2139,14 +2136,6 @@ HWND VST3Host::ensurePluginViewHost()
 
 void VST3Host::onIdleTimer()
 {
-    Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
-    {
-        std::lock_guard<std::mutex> lock(viewMutex_);
-        viewCopy = view_;
-    }
-
-    if (viewCopy && viewAttached_)
-        viewCopy->onIdle();
 }
 
 bool VST3Host::applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect)
