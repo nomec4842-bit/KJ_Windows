@@ -86,6 +86,11 @@ public:
     bool waitUntilReady();
     bool waitForPluginReady();
 
+#ifdef _WIN32
+    PlugFrame* getPlugFrame() const { return plugFrame_; }
+    void setPlugFrame(PlugFrame* frame);
+#endif
+
 private:
     template <typename T>
     class SpscRingBuffer
