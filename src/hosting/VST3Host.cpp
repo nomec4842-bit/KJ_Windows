@@ -41,24 +41,9 @@ using namespace kj;
 #include "public.sdk/source/vst/vstcomponent.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 
-// -----------------------------------------------------------------------------
-// Dedicated VST editor window declarations
-// -----------------------------------------------------------------------------
-static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-static const wchar_t* kVSTEditorClassName = L"KJ_VSTEDITOR";
-
-struct VSTEditorState {
-    kj::VST3Host* host = nullptr;
-    Steinberg::IPlugView* view = nullptr;
-    HWND parent = nullptr;
-    bool attached = false;
-};
-
 using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
-
-#define pluginView_ view_.get()
 
 namespace {
 
@@ -1793,56 +1778,11 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
 }
 
 #ifdef _WIN32
-// -----------------------------------------------------------------------------
-// Creates the dedicated plugin editor window
-// -----------------------------------------------------------------------------
-HWND VST3Host::createEditorWindow(HWND parent)
+void VST3Host::showPluginUI(void* /*parentWindowPtr*/)
 {
-    WNDCLASSW wc = {0};
-    wc.lpfnWndProc   = VSTEditorWndProc;
-    wc.hInstance     = GetModuleHandleW(nullptr);
-    wc.lpszClassName = kVSTEditorClassName;
-
-    RegisterClassW(&wc);
-
-    HWND hwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW,
-        kVSTEditorClassName,
-        L"Plugin Editor",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 600,
-        parent,
-        nullptr,
-        wc.hInstance,
-        this
-    );
-
-    return hwnd;
-}
-void VST3Host::showPluginUI(void* parentWindowPtr)
-{
-    if (!controller_ || !component_ || !pluginView_)
-    {
-        std::cout << "[VST3Host] Editor cannot be shown: missing controller/view." << std::endl;
-        return;
-    }
-
-    if (!pluginView_->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND))
-    {
-        std::cout << "[VST3Host] Plugin does not support HWND platform." << std::endl;
-        return;
-    }
-
-    HWND parentHwnd = reinterpret_cast<HWND>(parentWindowPtr);
-
-    if (!editorWindow_)
-    {
-        editorWindow_ = createEditorWindow(parentHwnd);
-    }
-
-    ShowWindow(editorWindow_, SW_SHOW);
-    SetForegroundWindow(editorWindow_);
+    // The dedicated stand-alone editor window already covers the platform-specific UI needs.
+    // Reuse that implementation so this entry point simply opens (or focuses) the plug-in UI.
+    ShowPluginEditor();
 }
 void VST3Host::ClosePluginEditor()
 {
@@ -2292,7 +2232,6 @@ void VST3Host::cleanupEditorWindowResources()
     }
 
     editorView_ = nullptr;
-    editorWindow_ = nullptr;
     clearCurrentViewRect();
 }
 
@@ -3340,14 +3279,6 @@ void VST3Host::destroyPluginUI()
 {
     ClosePluginEditor();
     resetFallbackEditState();
-    if (editorWindow_ && ::IsWindow(editorWindow_))
-    {
-        ::DestroyWindow(editorWindow_);
-    }
-    else
-    {
-        cleanupEditorWindowResources();
-    }
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
     {
@@ -3364,58 +3295,3 @@ void VST3Host::destroyPluginUI()
 #endif // _WIN32
 
 } // namespace kj
-
-#ifdef _WIN32
-// -----------------------------------------------------------------------------
-// Dedicated VST Editor Window WndProc
-// -----------------------------------------------------------------------------
-static LRESULT CALLBACK VSTEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    static VSTEditorState state;
-
-    switch (msg)
-    {
-    case WM_CREATE:
-    {
-        auto cs = reinterpret_cast<LPCREATESTRUCT>(lParam);
-        state.host = reinterpret_cast<kj::VST3Host*>(cs->lpCreateParams);
-
-        if (!state.host)
-            return -1;
-
-        state.view = state.host->getView();
-        state.parent = hwnd;
-
-        if (state.view) {
-            Steinberg::ViewRect rect = {0, 0, 800, 600};
-            state.view->attached(state.parent, Steinberg::kPlatformTypeHWND);
-            state.view->onSize(&rect);
-            state.attached = true;
-        }
-        return 0;
-    }
-
-    case WM_SIZE:
-        if (state.view && state.attached) {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            Steinberg::ViewRect r{rc.left, rc.top, rc.right, rc.bottom};
-            state.view->onSize(&r);
-        }
-        return 0;
-
-    case WM_CLOSE:
-        if (state.view && state.attached) {
-            state.view->removed();
-            state.attached = false;
-        }
-        DestroyWindow(hwnd);
-        return 0;
-
-    case WM_DESTROY:
-        return 0;
-    }
-
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
-}
-#endif // _WIN32
