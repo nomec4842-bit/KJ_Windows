@@ -211,6 +211,7 @@ private:
 #define WM_KJ_OPENEDITOR (WM_USER + 0x200)
     void ClosePluginEditor();
     void destroyPluginUI();
+    bool ensureEditorWindowClass();
     bool ensureWindowClasses();
     bool ensureCommonControls();
     bool createContainerWindow(HWND parentWindow);
@@ -221,6 +222,7 @@ private:
     HWND ensurePluginViewHost();
     void onIdleTimer();
     bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
+    void cleanupEditorWindowResources();
     bool applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect);
     void updateWindowSizeForContent(int contentWidth, int contentHeight);
     void updateHeaderTexts();
@@ -244,6 +246,7 @@ private:
     char16_t translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
     int16_t queryKeyModifiers() const;
     void onOpenEditorMessage(HWND hwnd);
+    static LRESULT CALLBACK PluginEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -279,6 +282,8 @@ private:
 
 #ifdef _WIN32
     PlugFrame* plugFrame_ = nullptr;
+    HWND editorWindow_ = nullptr;
+    Steinberg::IPtr<Steinberg::IPlugView> editorView_;
     HWND containerWindow_ = nullptr;
     HWND headerWindow_ = nullptr;
     HWND headerTitleStatic_ = nullptr;
