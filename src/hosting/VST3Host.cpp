@@ -1749,11 +1749,6 @@ void VST3Host::showPluginUI(void* parentHWND)
         return;
     }
 
-    if (!ensureViewForRequestedType())
-    {
-        std::cerr << "[KJ] Plug-in has no usable editor view. Showing fallback controls.\n";
-    }
-
     HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
     if (parentWindow)
     {
@@ -1768,45 +1763,12 @@ void VST3Host::showPluginUI(void* parentHWND)
         lastParentWindow_ = nullptr;
     }
 
+    const bool hadExistingContainer = containerWindow_ && ::IsWindow(containerWindow_);
+
     if (!createContainerWindow(parentWindow))
     {
         std::cerr << "[KJ] Failed to create container window for plug-in GUI.\n";
         return;
-    }
-
-    Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
-    {
-        std::lock_guard<std::mutex> lock(viewMutex_);
-        viewCopy = view_;
-    }
-
-    if (viewCopy)
-    {
-        HWND viewHostWindow = ensurePluginViewHost();
-
-        if (!viewHostWindow || !::IsWindow(viewHostWindow) || !AttachView(viewCopy, viewHostWindow))
-        {
-            std::cerr << "[KJ] Failed to embed VST3 editor view. Showing fallback controls.\n";
-            if (viewCopy)
-            {
-                viewCopy->setFrame(nullptr);
-                frameAttached_ = false;
-            }
-            if (plugFrame_)
-            {
-                plugFrame_->setActiveView(nullptr);
-                plugFrame_->setHostWindow(nullptr);
-                plugFrame_->release();
-                plugFrame_ = nullptr;
-            }
-            {
-                std::lock_guard<std::mutex> lock(viewMutex_);
-                view_ = nullptr;
-                currentViewType_.clear();
-            }
-            viewAttached_ = false;
-            clearCurrentViewRect();
-        }
     }
 
     refreshFallbackParameters();
@@ -1815,6 +1777,8 @@ void VST3Host::showPluginUI(void* parentHWND)
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
     {
+        if (hadExistingContainer)
+            ::PostMessageW(containerWindow_, WM_KJ_OPENEDITOR, 0, 0);
         ::ShowWindow(containerWindow_, SW_SHOWNORMAL);
         ::SetWindowPos(containerWindow_, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
         ::UpdateWindow(containerWindow_);
@@ -1948,6 +1912,9 @@ bool VST3Host::createContainerWindow(HWND parentWindow)
                                          CW_USEDEFAULT, desired.right - desired.left, desired.bottom - desired.top,
                                          parentWindow, nullptr, instance, this);
 
+    if (containerWindow_)
+        ::PostMessageW(containerWindow_, WM_KJ_OPENEDITOR, 0, 0);
+
     return containerWindow_ != nullptr;
 }
 
@@ -1955,6 +1922,84 @@ void VST3Host::closeContainerWindow()
 {
     if (containerWindow_ && ::IsWindow(containerWindow_))
         ::ShowWindow(containerWindow_, SW_HIDE);
+}
+
+void VST3Host::onOpenEditorMessage(HWND hwnd)
+{
+    if (!containerWindow_)
+        containerWindow_ = hwnd;
+
+    if (!isPluginReady())
+    {
+        std::cerr << "[KJ] Ignoring editor open request because the plug-in is not ready.\n";
+        return;
+    }
+
+    if (!controller_)
+    {
+        std::cerr << "[KJ] Cannot open plug-in editor without a controller.\n";
+        return;
+    }
+
+    if (!ensureViewForRequestedType())
+    {
+        std::cerr << "[KJ] Plug-in has no usable editor view. Showing fallback controls.\n";
+        showFallbackControls(true);
+        return;
+    }
+
+    Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
+    {
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        viewCopy = view_;
+    }
+
+    if (!viewCopy)
+    {
+        std::cerr << "[KJ] Failed to acquire plug-in view for editor attachment.\n";
+        showFallbackControls(true);
+        return;
+    }
+
+    if (viewCopy->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+    {
+        std::cerr << "[KJ] Plug-in view does not support HWND embedding.\n";
+        showFallbackControls(true);
+        return;
+    }
+
+    HWND viewHostWindow = ensurePluginViewHost();
+    if (!viewHostWindow || !::IsWindow(viewHostWindow))
+    {
+        std::cerr << "[KJ] Plug-in view host window is unavailable.\n";
+        return;
+    }
+
+    if (!AttachView(viewCopy, viewHostWindow))
+    {
+        std::cerr << "[KJ] Failed to embed VST3 editor view. Showing fallback controls.\n";
+        viewCopy->setFrame(nullptr);
+        frameAttached_ = false;
+        {
+            std::lock_guard<std::mutex> lock(viewMutex_);
+            view_ = nullptr;
+            currentViewType_.clear();
+        }
+        viewAttached_ = false;
+        clearCurrentViewRect();
+        showFallbackControls(true);
+        return;
+    }
+
+    Steinberg::ViewRect rect {};
+    if (viewCopy->getSize(&rect) == kResultTrue)
+    {
+        resizePluginViewWindow(viewHostWindow, rect, true);
+        viewCopy->onSize(&rect);
+    }
+
+    showFallbackControls(false);
+    updateHeaderTexts();
 }
 
 void VST3Host::onContainerCreated(HWND hwnd)
@@ -2693,6 +2738,10 @@ LRESULT CALLBACK VST3Host::ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, 
     case WM_CREATE:
         if (host)
             host->onContainerCreated(hwnd);
+        return 0;
+    case WM_KJ_OPENEDITOR:
+        if (host)
+            host->onOpenEditorMessage(hwnd);
         return 0;
     case WM_SIZE:
         if (host)

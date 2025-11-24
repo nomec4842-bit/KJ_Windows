@@ -6643,7 +6643,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 return 0;
             }
 
-            activeVstHost->openEditor(reinterpret_cast<void*>(hwnd));
+            PostMessageW(hwnd, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(activeTrackId), 0);
             return 0;
         }
 

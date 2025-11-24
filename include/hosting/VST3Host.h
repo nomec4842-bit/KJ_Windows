@@ -196,6 +196,7 @@ private:
     class NonRealtimeScope;
 
 #ifdef _WIN32
+#define WM_KJ_OPENEDITOR (WM_USER + 0x200)
     void ClosePluginEditor();
     void destroyPluginUI();
     bool ensureWindowClasses();
@@ -229,6 +230,7 @@ private:
     bool handleKeyUp(WPARAM wParam, LPARAM lParam);
     char16_t translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
     int16_t queryKeyModifiers() const;
+    void onOpenEditorMessage(HWND hwnd);
     static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
