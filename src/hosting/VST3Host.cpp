@@ -712,6 +712,11 @@ bool VST3Host::load(const std::string& pluginPath)
             std::cerr << "[KJ] Controller initialization failed.\n";
             return finish(false);
         }
+        controllerInitialized_ = true;
+        editorLifetime_ = std::make_shared<EditorLifetime>();
+        editorLifetime_->component = component;
+        editorLifetime_->controller = controller;
+        editorLifetime_->view = nullptr;
 
         auto componentHandler = new ComponentHandler(*this);
         controller->setComponentHandler(static_cast<Steinberg::Vst::IComponentHandler*>(componentHandler));
@@ -1120,6 +1125,9 @@ void VST3Host::onComponentRequestOpenEditor(const char* viewType)
 
 bool VST3Host::ensureViewForRequestedType()
 {
+    if (!controllerInitialized_ || !controller_)
+        return false;
+
     // Ask the controller for its native editor view using the requested type (defaulting to kEditor).
     const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
                                                            : requestedViewType_.c_str();
@@ -1151,6 +1159,9 @@ bool VST3Host::createViewForRequestedType(const char* preferredType,
                                           std::string& usedType,
                                           Steinberg::Vst::IEditController* controllerOverride)
 {
+    if (!controllerOverride && !controllerInitialized_)
+        return false;
+
     Steinberg::IPtr<Steinberg::Vst::IEditController> controllerRef = controllerOverride ? controllerOverride : controller_;
     if (!controllerRef)
         return false;
@@ -1405,6 +1416,14 @@ void VST3Host::unloadLocked()
     viewLoadInProgress_.store(false, std::memory_order_release);
     view_ = nullptr;
     currentViewType_.clear();
+    if (editorLifetime_)
+    {
+        editorLifetime_->view = nullptr;
+        editorLifetime_->controller = nullptr;
+        editorLifetime_->component = nullptr;
+    }
+    editorLifetime_.reset();
+    controllerInitialized_ = false;
 
     if (controller_)
         controller_->terminate();
@@ -1440,6 +1459,7 @@ void VST3Host::unloadLocked()
 
 #ifdef _WIN32
     lastParentWindow_ = nullptr;
+    viewHostWindow_ = nullptr;
 #endif
 
     parameterChangeQueue_.clear();
@@ -1732,20 +1752,27 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
     if (parentWindow)
         lastParentWindow_ = parentWindow;
 
-    Steinberg::IPtr<Steinberg::Vst::IEditController> controllerCopy = controller_;
+    auto editorLifetime = editorLifetime_;
+    if (!editorLifetime || !editorLifetime->controller)
+    {
+        viewLoadInProgress_.store(false, std::memory_order_release);
+        return;
+    }
+
     std::string preferredType = requestedViewType_;
     int trackId = owningTrackId_.load(std::memory_order_acquire);
 
-    std::thread([this, controllerCopy, preferredType, parentWindow, trackId]() {
+    std::thread([this, editorLifetime, preferredType, parentWindow, trackId]() {
         Steinberg::IPtr<Steinberg::IPlugView> newView;
         std::string usedType;
         const char* preferred = preferredType.empty() ? Steinberg::Vst::ViewType::kEditor : preferredType.c_str();
 
-        bool success = createViewForRequestedType(preferred, newView, usedType, controllerCopy);
+        bool success = createViewForRequestedType(preferred, newView, usedType, editorLifetime->controller);
         if (success)
         {
             std::lock_guard<std::mutex> lock(viewMutex_);
             view_ = newView;
+            editorLifetime->view = newView;
             currentViewType_ = usedType;
             viewAttached_ = false;
             frameAttached_ = false;
@@ -1831,6 +1858,8 @@ void VST3Host::showPluginUI(void* parentHWND)
                 std::lock_guard<std::mutex> lock(viewMutex_);
                 view_ = nullptr;
                 currentViewType_.clear();
+                if (editorLifetime_)
+                    editorLifetime_->view = nullptr;
             }
             viewAttached_ = false;
             clearCurrentViewRect();
@@ -2031,8 +2060,8 @@ void VST3Host::onContainerResized(int width, int height)
     if (contentWindow_ && ::IsWindow(contentWindow_))
         ::MoveWindow(contentWindow_, 0, kHeaderHeight, width, contentHeight, TRUE);
 
-    if (pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
-        ::MoveWindow(pluginViewWindow_, 0, 0, width, contentHeight, TRUE);
+    if (viewHostWindow_ && ::IsWindow(viewHostWindow_))
+        ::MoveWindow(viewHostWindow_, 0, 0, width, contentHeight, TRUE);
 
     if (fallbackWindow_ && ::IsWindow(fallbackWindow_))
         ::MoveWindow(fallbackWindow_, 0, 0, width, contentHeight, TRUE);
@@ -2060,7 +2089,7 @@ void VST3Host::onContainerDestroyed()
     headerFallbackButton_ = nullptr;
     headerCloseButton_ = nullptr;
     contentWindow_ = nullptr;
-    pluginViewWindow_ = nullptr;
+    viewHostWindow_ = nullptr;
     fallbackWindow_ = nullptr;
     fallbackListView_ = nullptr;
     fallbackSlider_ = nullptr;
@@ -2092,29 +2121,35 @@ HWND VST3Host::ensurePluginViewHost()
     if (!contentWindow_ || !::IsWindow(contentWindow_))
         return nullptr;
 
+    if (viewHostWindow_ && !::IsWindow(viewHostWindow_))
+        viewHostWindow_ = nullptr;
+
     // Lazily create a dedicated child HWND that will host the plug-in's native view.
-    if (!pluginViewWindow_ || !::IsWindow(pluginViewWindow_))
+    if (!viewHostWindow_)
     {
         HINSTANCE instance = ::GetModuleHandleW(nullptr);
-        pluginViewWindow_ =
+        viewHostWindow_ =
             ::CreateWindowExW(WS_EX_NOPARENTNOTIFY, kPluginViewWindowClassName, L"",
                               WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE,
                               0, 0, 0, 0, contentWindow_, nullptr, instance, this);
     }
 
-    if (pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
+    if (viewHostWindow_ && ::IsWindow(viewHostWindow_))
     {
-        ::ShowWindow(pluginViewWindow_, SW_SHOWNORMAL);
+        ::ShowWindow(viewHostWindow_, SW_SHOWNORMAL);
         if (plugFrame_)
-            plugFrame_->setHostWindow(pluginViewWindow_);
+            plugFrame_->setHostWindow(viewHostWindow_);
     }
 
-    return pluginViewWindow_;
+    return viewHostWindow_;
 }
 
-bool VST3Host::applyViewRect(const Steinberg::ViewRect& rect)
+bool VST3Host::applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect)
 {
-    return resizePluginViewWindow(pluginViewWindow_, rect, true);
+    if (!hostWindow || !::IsWindow(hostWindow))
+        return false;
+
+    return resizePluginViewWindow(hostWindow, rect, true);
 }
 
 bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
@@ -2122,7 +2157,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     if (!view || !parentWindow || !::IsWindow(parentWindow))
         return false;
 
-    pluginViewWindow_ = parentWindow;
+    const bool wasAttached = viewAttached_ && frameAttached_;
 
     // Ensure the plug-in understands how to embed itself into a native HWND container.
     if (view->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
@@ -2134,24 +2169,7 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     plugFrame_->setHostWindow(parentWindow);
     plugFrame_->setActiveView(view);
 
-    if (!frameAttached_)
-    {
-        // Provide the plug-in with our IPlugFrame implementation so it can send resize requests back.
-        plugFrame_->addRef();
-        if (view->setFrame(plugFrame_) != kResultOk)
-        {
-            plugFrame_->release();
-            plugFrame_ = nullptr;
-            return false;
-        }
-        frameAttached_ = true;
-    }
-    else
-    {
-        view->setFrame(plugFrame_);
-    }
-
-    // Request the plug-in's preferred rectangle after the frame is set so that sizing reflects the active frame callbacks.
+    // Request the plug-in's preferred rectangle before attachment so the host window is sized for the incoming view.
     Steinberg::ViewRect targetRect {};
     if (view->getSize(&targetRect) != kResultTrue)
     {
@@ -2167,7 +2185,43 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
     // Resize our host child window before handing it to the plug-in so the parent matches the requested dimensions.
     resizePluginViewWindow(parentWindow, targetRect, true);
 
-    if (viewAttached_ && frameAttached_)
+    // Hand the native HWND to the plug-in so it can create its controls as children of our window.
+    if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
+    {
+        if (plugFrame_)
+        {
+            plugFrame_->setActiveView(nullptr);
+            plugFrame_->setHostWindow(nullptr);
+            plugFrame_->clearCachedRect();
+        }
+        return false;
+    }
+
+    viewAttached_ = true;
+
+    if (!frameAttached_)
+    {
+        // Provide the plug-in with our IPlugFrame implementation so it can send resize requests back.
+        plugFrame_->addRef();
+        if (view->setFrame(plugFrame_) != kResultOk)
+        {
+            view->removed();
+            viewAttached_ = false;
+            plugFrame_->setActiveView(nullptr);
+            plugFrame_->setHostWindow(nullptr);
+            plugFrame_->clearCachedRect();
+            plugFrame_->release();
+            plugFrame_ = nullptr;
+            return false;
+        }
+        frameAttached_ = true;
+    }
+    else
+    {
+        view->setFrame(plugFrame_);
+    }
+
+    if (wasAttached && frameAttached_)
     {
         // If the view is already attached simply refresh the window bounds and notify the plug-in.
         Steinberg::ViewRect notifyRect = targetRect;
@@ -2177,24 +2231,6 @@ bool VST3Host::AttachView(Steinberg::IPlugView* view, HWND parentWindow)
         ::SetFocus(parentWindow);
         return true;
     }
-
-    // Hand the native HWND to the plug-in so it can create its controls as children of our window.
-    if (view->attached(reinterpret_cast<void*>(parentWindow), Steinberg::kPlatformTypeHWND) != kResultOk)
-    {
-        view->setFrame(nullptr);
-        frameAttached_ = false;
-        if (plugFrame_)
-        {
-            plugFrame_->setActiveView(nullptr);
-            plugFrame_->setHostWindow(nullptr);
-            plugFrame_->clearCachedRect();
-            plugFrame_->release();
-            plugFrame_ = nullptr;
-        }
-        return false;
-    }
-
-    viewAttached_ = true;
 
     Steinberg::ViewRect notifyRect {};
     if (view->getSize(&notifyRect) != kResultTrue)
@@ -2341,7 +2377,7 @@ void VST3Host::handleHeaderCommand(UINT commandId)
 void VST3Host::showFallbackControls(bool show)
 {
     ensureFallbackWindow();
-    ensurePluginViewHost();
+    HWND hostWindow = ensurePluginViewHost();
 
     bool shouldShowFallback = show || !view_;
     if (shouldShowFallback != fallbackVisible_)
@@ -2352,8 +2388,8 @@ void VST3Host::showFallbackControls(bool show)
     if (fallbackWindow_ && ::IsWindow(fallbackWindow_))
         ::ShowWindow(fallbackWindow_, fallbackVisible_ ? SW_SHOW : SW_HIDE);
 
-    if (pluginViewWindow_ && ::IsWindow(pluginViewWindow_))
-        ::ShowWindow(pluginViewWindow_, (!fallbackVisible_ && view_) ? SW_SHOW : SW_HIDE);
+    if (hostWindow && ::IsWindow(hostWindow))
+        ::ShowWindow(hostWindow, (!fallbackVisible_ && view_) ? SW_SHOW : SW_HIDE);
 
     if (fallbackVisible_)
     {
@@ -2366,7 +2402,7 @@ void VST3Host::showFallbackControls(bool show)
     {
         ViewRect rect {};
         if (view_->getSize(&rect) == kResultTrue)
-            applyViewRect(rect);
+            applyViewRect(hostWindow, rect);
     }
     else if (fallbackVisible_)
     {

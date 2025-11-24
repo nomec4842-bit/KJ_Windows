@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -206,7 +207,7 @@ private:
     void onContainerDestroyed();
     HWND ensurePluginViewHost();
     bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
-    bool applyViewRect(const Steinberg::ViewRect& rect);
+    bool applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect);
     void updateWindowSizeForContent(int contentWidth, int contentHeight);
     void updateHeaderTexts();
     void handleHeaderCommand(UINT commandId);
@@ -258,6 +259,14 @@ private:
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
     Steinberg::IPtr<Steinberg::Vst::IEditController> controller_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> view_;
+    struct EditorLifetime
+    {
+        Steinberg::IPtr<Steinberg::Vst::IComponent> component;
+        Steinberg::IPtr<Steinberg::Vst::IEditController> controller;
+        Steinberg::IPtr<Steinberg::IPlugView> view;
+    };
+    std::shared_ptr<EditorLifetime> editorLifetime_;
+    bool controllerInitialized_ = false;
     ComponentHandler* componentHandler_ = nullptr;
 
 #ifdef _WIN32
@@ -270,7 +279,7 @@ private:
     HWND headerFallbackButton_ = nullptr;
     HWND headerCloseButton_ = nullptr;
     HWND contentWindow_ = nullptr;
-    HWND pluginViewWindow_ = nullptr;
+    HWND viewHostWindow_ = nullptr;
     HWND fallbackWindow_ = nullptr;
     HWND fallbackListView_ = nullptr;
     HWND fallbackSlider_ = nullptr;
