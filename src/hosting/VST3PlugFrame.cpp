@@ -34,10 +34,10 @@ void PlugFrame::clearCachedRect()
     hasCachedRect_ = false;
 }
 
-tresult PLUGIN_API PlugFrame::queryInterface(const Steinberg::TUID iid, void** obj)
+Steinberg::tresult PLUGIN_API PlugFrame::queryInterface(const Steinberg::TUID iid, void** obj)
 {
     if (!obj)
-        return kInvalidArgument;
+        return Steinberg::kInvalidArgument;
 
     *obj = nullptr;
 
@@ -46,10 +46,10 @@ tresult PLUGIN_API PlugFrame::queryInterface(const Steinberg::TUID iid, void** o
     {
         *obj = static_cast<Steinberg::IPlugFrame*>(this);
         addRef();
-        return kResultOk;
+        return Steinberg::kResultOk;
     }
 
-    return kNoInterface;
+    return Steinberg::kNoInterface;
 }
 
 Steinberg::uint32 PLUGIN_API PlugFrame::addRef()
@@ -65,10 +65,10 @@ Steinberg::uint32 PLUGIN_API PlugFrame::release()
     return newCount;
 }
 
-tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize)
+Steinberg::tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize)
 {
     if (!newSize)
-        return kInvalidArgument;
+        return Steinberg::kInvalidArgument;
 
     if (view && view != activeView_)
         activeView_ = view;
@@ -79,7 +79,7 @@ tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, Steinberg::
                              cachedRect_.bottom != requestedRect.bottom;
 
     if (!sizeChanged)
-        return kResultOk;
+        return Steinberg::kResultOk;
 
     Steinberg::IPlugView* targetView = activeView_;
     const bool resized = host_.resizePluginViewWindow(hostWindow_, requestedRect, true);
@@ -91,7 +91,7 @@ tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, Steinberg::
 
     cachedRect_ = requestedRect;
     hasCachedRect_ = true;
-    return kResultOk;
+    return Steinberg::kResultOk;
 }
 
 } // namespace kj
