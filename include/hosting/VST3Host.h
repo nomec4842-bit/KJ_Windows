@@ -282,9 +282,7 @@ private:
     ComponentHandler* componentHandler_ = nullptr;
 
 #ifdef _WIN32
-    HWND createEditorWindow(HWND parent);
     PlugFrame* plugFrame_ = nullptr;
-    HWND editorWindow_ = nullptr;
     Steinberg::IPtr<Steinberg::IPlugView> editorView_;
     HWND containerWindow_ = nullptr;
     HWND headerWindow_ = nullptr;
