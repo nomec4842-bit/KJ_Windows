@@ -286,6 +286,7 @@ namespace {
 constexpr wchar_t kContainerWindowClassName[] = L"KJ_VST3_CONTAINER";
 constexpr wchar_t kHeaderWindowClassName[] = L"KJ_VST3_HEADER";
 constexpr wchar_t kFallbackWindowClassName[] = L"KJ_VST3_FALLBACK";
+constexpr wchar_t kEditorWindowClassName[] = L"KJVSTEditorWindow";
 constexpr wchar_t kStandaloneEditorWindowClassName[] = L"KJ_VST3_STANDALONE_EDITOR";
 constexpr wchar_t kPluginViewWindowClassName[] = L"KJ_VST3_PLUGIN_VIEW_HOST";
 constexpr int kHeaderHeight = 56;
@@ -1778,6 +1779,8 @@ void VST3Host::asyncLoadPluginEditor(void* parentWindowHandle)
 void VST3Host::showPluginUI(void* parentHWND)
 {
 #ifdef _WIN32
+    (void)parentHWND;
+
     if (!isPluginReady())
     {
         std::cerr << "[KJ] Cannot show plug-in UI because the plug-in did not finish loading.\n";
@@ -1789,39 +1792,110 @@ void VST3Host::showPluginUI(void* parentHWND)
         return;
     }
 
-    HWND parentWindow = reinterpret_cast<HWND>(parentHWND);
-    if (parentWindow)
+    if (!ensureViewForRequestedType())
     {
-        lastParentWindow_ = parentWindow;
-    }
-    else if (lastParentWindow_ && ::IsWindow(lastParentWindow_))
-    {
-        parentWindow = lastParentWindow_;
-    }
-    else
-    {
-        lastParentWindow_ = nullptr;
-    }
-
-    if (!createContainerWindow(parentWindow))
-    {
-        std::cerr << "[KJ] Failed to create container window for plug-in GUI.\n";
+        std::cerr << "[KJ] Plug-in has no usable editor view.\n";
         return;
     }
 
-    refreshFallbackParameters();
-    showFallbackControls(fallbackVisible_);
-    updateHeaderTexts();
-
-    if (containerWindow_ && ::IsWindow(containerWindow_))
+    Steinberg::IPtr<Steinberg::IPlugView> viewCopy;
     {
-        ::PostMessageW(containerWindow_, WM_KJ_OPENEDITOR, 0, 0);
-        ::ShowWindow(containerWindow_, SW_SHOWNORMAL);
-        ::SetWindowPos(containerWindow_, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-        ::UpdateWindow(containerWindow_);
-        ::SetForegroundWindow(containerWindow_);
+        std::lock_guard<std::mutex> lock(viewMutex_);
+        viewCopy = view_;
     }
-    std::cout << "[KJ] Plugin GUI displayed.\n";
+
+    if (!viewCopy)
+    {
+        std::cerr << "[KJ] Failed to acquire plug-in view for editor attachment.\n";
+        return;
+    }
+
+    if (viewCopy->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+    {
+        std::cerr << "[KJ] Plug-in view does not support HWND embedding.\n";
+        return;
+    }
+
+    if (!ensureEditorWindowClass())
+    {
+        std::cerr << "[KJ] Failed to register VST editor window class.\n";
+        return;
+    }
+
+    if (editorWindow_ && ::IsWindow(editorWindow_))
+        ::DestroyWindow(editorWindow_);
+
+    cleanupEditorWindowResources();
+
+    Steinberg::ViewRect rect {};
+    if (viewCopy->getSize(&rect) != kResultTrue)
+    {
+        rect.left = 0;
+        rect.top = 0;
+        rect.right = 640;
+        rect.bottom = 480;
+    }
+
+    const int width = std::max<int>(1, rect.getWidth());
+    const int height = std::max<int>(1, rect.getHeight());
+
+    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    DWORD exStyle = WS_EX_TOOLWINDOW;
+
+    RECT desired {0, 0, width, height};
+    ::AdjustWindowRectEx(&desired, style, FALSE, exStyle);
+
+    std::wstring title = pluginNameW_.empty() ? std::wstring(L"VST3 Plug-in") : pluginNameW_;
+
+    HINSTANCE instance = ::GetModuleHandleW(nullptr);
+    HWND hwnd = ::CreateWindowExW(exStyle, kEditorWindowClassName, title.c_str(), style, CW_USEDEFAULT,
+                                  CW_USEDEFAULT, desired.right - desired.left, desired.bottom - desired.top, nullptr,
+                                  nullptr, instance, this);
+
+    if (!hwnd)
+    {
+        std::cerr << "[KJ] Failed to create editor window for plug-in GUI.\n";
+        return;
+    }
+
+    editorWindow_ = hwnd;
+    editorView_ = viewCopy;
+
+    if (!plugFrame_)
+        plugFrame_ = new PlugFrame(*this);
+
+    plugFrame_->setHostWindow(hwnd);
+    plugFrame_->setActiveView(viewCopy);
+    plugFrame_->setCachedRect(rect);
+
+    if (viewCopy->setFrame(plugFrame_) != kResultOk)
+    {
+        std::cerr << "[KJ] Failed to provide host frame to plug-in view.\n";
+        ::DestroyWindow(hwnd);
+        return;
+    }
+    frameAttached_ = true;
+
+    if (viewCopy->attached(reinterpret_cast<void*>(hwnd), Steinberg::kPlatformTypeHWND) != kResultOk)
+    {
+        std::cerr << "[KJ] Failed to attach plug-in editor view to HWND.\n";
+        ::DestroyWindow(hwnd);
+        return;
+    }
+
+    viewAttached_ = true;
+
+    Steinberg::ViewRect notifyRect = rect;
+    if (viewCopy->getSize(&notifyRect) != kResultTrue)
+        notifyRect = rect;
+
+    plugFrame_->setCachedRect(notifyRect);
+    viewCopy->onSize(&notifyRect);
+    storeCurrentViewRect(notifyRect);
+
+    ::ShowWindow(hwnd, SW_SHOWNORMAL);
+    ::UpdateWindow(hwnd);
+    ::SetForegroundWindow(hwnd);
 #else
     (void)parentHWND;
     std::cerr << "[KJ] Plugin UI is only supported on Windows.\\n";
@@ -1849,6 +1923,31 @@ void VST3Host::ClosePluginEditor()
 
     if (threadToJoin.joinable())
         threadToJoin.join();
+}
+
+bool VST3Host::ensureEditorWindowClass()
+{
+    static std::once_flag classFlag;
+    static ATOM editorClassAtom = 0;
+
+    std::call_once(classFlag, []() {
+        WNDCLASSEXW wc {};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.style = CS_DBLCLKS;
+        wc.lpfnWndProc = &VST3Host::PluginEditorWndProc;
+        wc.cbClsExtra = 0;
+        wc.cbWndExtra = 0;
+        wc.hInstance = ::GetModuleHandleW(nullptr);
+        wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = kEditorWindowClassName;
+        wc.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+        wc.hIconSm = wc.hIcon;
+
+        editorClassAtom = ::RegisterClassExW(&wc);
+    });
+
+    return editorClassAtom != 0;
 }
 
 bool VST3Host::ensureWindowClasses()
@@ -2227,6 +2326,34 @@ HWND VST3Host::ensurePluginViewHost()
 
 void VST3Host::onIdleTimer()
 {
+}
+
+void VST3Host::cleanupEditorWindowResources()
+{
+    if (editorView_ && viewAttached_)
+    {
+        editorView_->removed();
+        viewAttached_ = false;
+    }
+
+    if (editorView_ && frameAttached_)
+    {
+        editorView_->setFrame(nullptr);
+        frameAttached_ = false;
+    }
+
+    if (plugFrame_)
+    {
+        plugFrame_->setActiveView(nullptr);
+        plugFrame_->setHostWindow(nullptr);
+        plugFrame_->clearCachedRect();
+        plugFrame_->release();
+        plugFrame_ = nullptr;
+    }
+
+    editorView_ = nullptr;
+    editorWindow_ = nullptr;
+    clearCurrentViewRect();
 }
 
 bool VST3Host::applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect)
@@ -2788,6 +2915,60 @@ bool VST3Host::handleKeyUp(WPARAM wParam, LPARAM lParam)
     return view_->onKeyUp(character, keyCode, modifiers) == kResultTrue;
 }
 
+LRESULT CALLBACK VST3Host::PluginEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NCCREATE)
+    {
+        auto* create = reinterpret_cast<LPCREATESTRUCTW>(lParam);
+        if (create && create->lpCreateParams)
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+
+    auto* host = reinterpret_cast<VST3Host*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg)
+    {
+    case WM_CREATE:
+        ::SetTimer(hwnd, 1, 16, nullptr);
+        return 0;
+    case WM_TIMER:
+        if (wParam == 1)
+        {
+            ::InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_PAINT: {
+        PAINTSTRUCT ps {};
+        ::BeginPaint(hwnd, &ps);
+        ::EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_SIZE:
+        if (host && host->editorView_)
+        {
+            Steinberg::ViewRect rect {};
+            rect.left = 0;
+            rect.top = 0;
+            rect.right = static_cast<Steinberg::int32>(LOWORD(lParam));
+            rect.bottom = static_cast<Steinberg::int32>(HIWORD(lParam));
+            if (host->plugFrame_)
+                host->plugFrame_->setCachedRect(rect);
+            host->editorView_->onSize(&rect);
+        }
+        return 0;
+    case WM_DESTROY:
+        ::KillTimer(hwnd, 1);
+        if (host)
+            host->cleanupEditorWindowResources();
+        return 0;
+    default:
+        break;
+    }
+
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 LRESULT CALLBACK VST3Host::ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_NCCREATE)
@@ -3219,33 +3400,14 @@ void VST3Host::destroyPluginUI()
 {
     ClosePluginEditor();
     resetFallbackEditState();
-
-    if (view_ && viewAttached_)
+    if (editorWindow_ && ::IsWindow(editorWindow_))
     {
-        // Notify the plug-in that its view is about to disappear from our parent window.
-        view_->removed();
-        viewAttached_ = false;
+        ::DestroyWindow(editorWindow_);
     }
-
-    if (view_ && frameAttached_)
+    else
     {
-        // Break the connection between the plug-in view and our IPlugFrame implementation.
-        view_->setFrame(nullptr);
-        frameAttached_ = false;
+        cleanupEditorWindowResources();
     }
-
-    if (plugFrame_)
-    {
-        // Release the cached child window handle and cached size information before destroying the HWND.
-        plugFrame_->setActiveView(nullptr);
-        plugFrame_->setHostWindow(nullptr);
-        plugFrame_->clearCachedRect();
-        plugFrame_->release();
-        plugFrame_ = nullptr;
-    }
-
-    // Reset the cached rectangle so that future editor openings start from the plug-in defaults.
-    clearCurrentViewRect();
 
     if (containerWindow_ && ::IsWindow(containerWindow_))
     {
