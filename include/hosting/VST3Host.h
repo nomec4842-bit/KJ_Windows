@@ -87,6 +87,8 @@ public:
     bool waitUntilReady();
     bool waitForPluginReady();
 
+    void setGuiAttachReady(bool state);
+
     std::mutex& vst3Mutex() { return vst3Mutex_; }
 
 #ifdef _WIN32
@@ -236,6 +238,8 @@ private:
     friend class VSTGuiThread;
 #endif
 
+    friend void waitForGuiAttachReady(VST3Host* host);
+
     void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value, bool notifyController = true);
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onRestartComponent(Steinberg::int32 flags);
@@ -277,6 +281,7 @@ private:
     mutable std::mutex processMutex_;
     std::atomic<bool> processingSuspended_ {false};
     std::atomic<uint32_t> activeProcessCount_ {0};
+    std::atomic<bool> guiAttachReady_ {false};
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
     SpscRingBuffer<PendingParameterChange> parameterChangeQueue_ {512};

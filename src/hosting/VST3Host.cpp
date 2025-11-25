@@ -1032,6 +1032,7 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
         return false;
 
     processingActive_ = true;
+    guiAttachReady_.store(true, std::memory_order_release);
     return true;
 }
 
@@ -1589,6 +1590,11 @@ bool VST3Host::isPluginLoading() const
 bool VST3Host::waitUntilReady()
 {
     return waitForPluginReady();
+}
+
+void VST3Host::setGuiAttachReady(bool state)
+{
+    guiAttachReady_.store(state, std::memory_order_release);
 }
 
 #ifdef _WIN32
