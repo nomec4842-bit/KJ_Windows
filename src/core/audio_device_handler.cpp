@@ -3,7 +3,7 @@
 #include <cstring>
 #include <functional>
 
-class VST3Host;
+#include "hosting/VST3Host.h"
 
 std::atomic<bool> AudioDeviceHandler::streamStarted_{false};
 std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
