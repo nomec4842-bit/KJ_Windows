@@ -1080,6 +1080,55 @@ void VST3Host::onRestartComponent(int32 flags)
         return;
 }
 
+#ifdef _WIN32
+
+void VST3Host::resetFallbackEditState()
+{
+    fallbackVisible_ = false;
+    fallbackSelectedIndex_ = -1;
+}
+
+void VST3Host::refreshFallbackParameters()
+{
+    fallbackParameters_.clear();
+
+    if (!controller_)
+        return;
+
+    const int32 parameterCount = controller_->getParameterCount();
+    fallbackParameters_.reserve(static_cast<size_t>(parameterCount));
+
+    for (int32 i = 0; i < parameterCount; ++i)
+    {
+        FallbackParameter param;
+        if (controller_->getParameterInfo(i, param.info) == kResultOk)
+        {
+            param.normalizedValue = controller_->getParamNormalized(param.info.id);
+            fallbackParameters_.push_back(param);
+        }
+    }
+}
+
+void VST3Host::updateHeaderTexts()
+{
+    // Placeholder for updating any cached UI header text; currently handled elsewhere.
+}
+
+void VST3Host::destroyPluginUI()
+{
+    if (editorWindow_)
+    {
+        editorWindow_->close();
+        editorWindow_.reset();
+    }
+
+    view_ = nullptr;
+    currentViewType_.clear();
+    resetFallbackEditState();
+}
+
+#endif // _WIN32
+
 void VST3Host::onComponentRequestOpenEditor(const char* viewType)
 {
     const char* requested = (viewType && *viewType) ? viewType : Steinberg::Vst::ViewType::kEditor;

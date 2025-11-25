@@ -283,7 +283,14 @@ private:
     std::wstring pluginNameW_;
     std::wstring pluginVendorW_;
     std::vector<FallbackParameter> fallbackParameters_;
+    bool fallbackVisible_ = false;
+    Steinberg::int32 fallbackSelectedIndex_ = -1;
+    void resetFallbackEditState();
+    void refreshFallbackParameters();
+    void updateHeaderTexts();
+    void destroyPluginUI();
     HWND lastParentWindow_ = nullptr;
+    HWND viewHostWindow_ = nullptr;
     Steinberg::ViewRect currentViewRect_ {};
     bool hasCurrentViewRect_ = false;
 #endif
