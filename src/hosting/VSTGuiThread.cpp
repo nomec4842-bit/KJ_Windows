@@ -4,6 +4,8 @@
 
 #include <iostream>
 
+namespace kj {
+
 using namespace kj;
 
 VSTGuiThread::VSTGuiThread() = default;
@@ -122,6 +124,8 @@ void VSTGuiThread::drainTasks()
         }
     }
 }
+
+} // namespace kj
 
 #endif // _WIN32
 
