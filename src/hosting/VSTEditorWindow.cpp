@@ -9,6 +9,8 @@
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
 
+namespace kj {
+
 using namespace kj;
 
 namespace {
@@ -244,6 +246,8 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
 
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
+} // namespace kj
 
 #endif // _WIN32
 
