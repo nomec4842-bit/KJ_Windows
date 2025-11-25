@@ -37,7 +37,8 @@ private:
 
     void showOnGuiThread();
     void destroyOnGuiThread();
-    bool createWindowAndAttachView();
+    bool createWindow();
+    void Show();
     void detachView();
     void onResize(UINT width, UINT height);
     void focus();

@@ -72,16 +72,67 @@ void VSTEditorWindow::close()
 
 void VSTEditorWindow::showOnGuiThread()
 {
-    if (hwnd_ && ::IsWindow(hwnd_))
+    if (!hwnd_ || !::IsWindow(hwnd_))
     {
-        ::ShowWindow(hwnd_, SW_SHOWNORMAL);
-        ::UpdateWindow(hwnd_);
+        if (!createWindow())
+        {
+            std::cerr << "[VST] Failed to create VST3 editor window." << std::endl;
+            return;
+        }
+    }
+
+    Show();
+}
+
+void VSTEditorWindow::Show()
+{
+    if (!hwnd_ || !::IsWindow(hwnd_))
+        return;
+
+    ::ShowWindow(hwnd_, SW_SHOWNORMAL);
+    ::UpdateWindow(hwnd_);
+
+    if (!view_ || attached_)
+    {
         focus();
         return;
     }
 
-    if (!createWindowAndAttachView())
-        std::cerr << "[VST] Failed to create VST3 editor window." << std::endl;
+    auto host = host_.lock();
+    if (!host)
+        return;
+
+    plugFrame_->setActiveView(view_);
+    plugFrame_->setCachedRect(lastRect_);
+
+    if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
+    {
+        detachView();
+        return;
+    }
+
+    // Wait until VST3Host is ready for GUI attach
+    waitForGuiAttachReady(host.get());
+
+    if (!::IsWindowVisible(hwnd_))
+        return;
+
+    if (view_->attached(reinterpret_cast<void*>(hwnd_), platformType_.c_str()) != Steinberg::kResultOk)
+    {
+        detachView();
+        return;
+    }
+
+    attached_ = true;
+    view_->onSize(&lastRect_);
+    host->storeCurrentViewRect(lastRect_);
+
+    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+    {
+        scaleSupport->setContentScaleFactor(1.0f);
+    }
+
+    focus();
 }
 
 void VSTEditorWindow::destroyOnGuiThread()
@@ -94,7 +145,7 @@ void VSTEditorWindow::destroyOnGuiThread()
     }
 }
 
-bool VSTEditorWindow::createWindowAndAttachView()
+bool VSTEditorWindow::createWindow()
 {
     auto host = host_.lock();
     if (!host)
@@ -151,36 +202,8 @@ bool VSTEditorWindow::createWindowAndAttachView()
     plugFrame_->setActiveView(view_);
     plugFrame_->setCachedRect(initialRect);
 
-    if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
-    {
-        detachView();
-        return false;
-    }
-
     lastRect_ = initialRect;
-    // Wait until VST3Host is ready for GUI attach
-    waitForGuiAttachReady(host.get());
 
-    if (view_->attached(reinterpret_cast<void*>(hwnd_), platformType_.c_str()) != Steinberg::kResultOk)
-    {
-        detachView();
-        return false;
-    }
-
-    PostMessage(hwnd_, WM_NULL, 0, 0);
-
-    attached_ = true;
-    view_->onSize(&lastRect_);
-    host->storeCurrentViewRect(lastRect_);
-
-    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
-    {
-        scaleSupport->setContentScaleFactor(1.0f);
-    }
-
-    ::ShowWindow(hwnd_, SW_SHOWNORMAL);
-    ::UpdateWindow(hwnd_);
-    focus();
     return true;
 }
 
