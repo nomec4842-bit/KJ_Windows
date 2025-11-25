@@ -916,7 +916,14 @@ bool VST3Host::load(const std::string& pluginPath)
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
 {
-    const int forcedChannels = 2;
+    auto logArrangement = [](const char* prefix, Steinberg::Vst::BusDirection direction, Steinberg::int32 index,
+                             Steinberg::Vst::SpeakerArrangement arrangement) {
+        const bool withNames = true;
+        const auto* label = direction == Steinberg::Vst::kInput ? "input" : "output";
+        std::cerr << prefix << " " << label << " bus " << index << " layout: "
+                  << Steinberg::Vst::SpeakerArr::getSpeakerArrangementString(arrangement, withNames) << "\n";
+    };
+
     NonRealtimeScope scope(*this);
     if (!processor_)
         return false;
@@ -940,14 +947,66 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
         return false;
 
     // --- Speaker arrangements ---
-    inputArrangement_  = SpeakerArr::kStereo;
-    outputArrangement_ = SpeakerArr::kStereo;
+    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(std::max<Steinberg::int32>(1, inputBusCount),
+                                                                      SpeakerArr::kEmpty);
+    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(std::max<Steinberg::int32>(1, outputBusCount),
+                                                                       SpeakerArr::kEmpty);
 
-    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(std::max<Steinberg::int32>(1, inputBusCount),  SpeakerArr::kStereo);
-    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(std::max<Steinberg::int32>(1, outputBusCount), SpeakerArr::kStereo);
+    auto resolveBusArrangement = [&](Steinberg::Vst::BusDirection direction, Steinberg::int32 index,
+                                     Steinberg::Vst::SpeakerArrangement& arrangement) {
+        arrangement = SpeakerArr::kEmpty;
 
-    inputArrangements[0]  = Steinberg::Vst::SpeakerArr::kStereo;
-    outputArrangements[0] = Steinberg::Vst::SpeakerArr::kStereo;
+        Steinberg::Vst::BusInfo info {};
+        const bool hasInfo = component_->getBusInfo(Steinberg::Vst::kAudio, direction, index, info) == kResultOk;
+        const auto declaredChannels = hasInfo ? info.channelCount : 0;
+
+        const auto result = processor_->getBusArrangement(direction, index, arrangement);
+        if (result != kResultOk && result != kNotImplemented)
+        {
+            std::cerr << "[KJ] Failed to query bus arrangement for "
+                      << (direction == Steinberg::Vst::kInput ? "input" : "output") << " bus " << index
+                      << ": result=" << result << "\n";
+        }
+        else if (result == kNotImplemented)
+        {
+            std::cerr << "[KJ] Plug-in does not report bus arrangement for "
+                      << (direction == Steinberg::Vst::kInput ? "input" : "output") << " bus " << index << ".\n";
+        }
+
+        if (arrangement == SpeakerArr::kEmpty)
+        {
+            if (declaredChannels == 1)
+                arrangement = SpeakerArr::kMono;
+            else if (declaredChannels == 2)
+                arrangement = SpeakerArr::kStereo;
+        }
+
+        if (arrangement == SpeakerArr::kEmpty && declaredChannels > 0)
+        {
+            std::cerr << "[KJ] Bus layout for "
+                      << (direction == Steinberg::Vst::kInput ? "input" : "output") << " bus " << index
+                      << " is empty despite " << declaredChannels << " channels declared.\n";
+        }
+    };
+
+    for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
+        resolveBusArrangement(Steinberg::Vst::kInput, i, inputArrangements[static_cast<size_t>(i)]);
+    for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
+        resolveBusArrangement(Steinberg::Vst::kOutput, i, outputArrangements[static_cast<size_t>(i)]);
+
+    if (mainInputBusIndex_ >= 0)
+        inputArrangement_ = inputArrangements[static_cast<size_t>(mainInputBusIndex_)];
+    if (mainOutputBusIndex_ >= 0)
+        outputArrangement_ = outputArrangements[static_cast<size_t>(mainOutputBusIndex_)];
+
+    const auto inputChannelCount = std::max<Steinberg::int32>(0, SpeakerArr::getChannelCount(inputArrangement_));
+    const auto outputChannelCount = std::max<Steinberg::int32>(1, SpeakerArr::getChannelCount(outputArrangement_));
+
+    if (outputChannelCount <= 0)
+    {
+        std::cerr << "[KJ] Main output bus has no channels; cannot prepare plug-in processing.\n";
+        return false;
+    }
 
     // ————————————————
     // STEP 1: setActive(true)
@@ -978,10 +1037,6 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     // ————————————————————————————————
     // STEP 3: setBusArrangements AFTER bus activation
     // ————————————————————————————————
-    inputArrangement_  = SpeakerArr::kStereo;
-    outputArrangement_ = SpeakerArr::kStereo;
-    for (int i = 0; i < inputBusCount;  ++i) inputArrangements[i]  = SpeakerArr::kStereo;
-    for (int i = 0; i < outputBusCount; ++i) outputArrangements[i] = SpeakerArr::kStereo;
     {
         std::lock_guard<std::mutex> lock(vst3Mutex());
         const auto arrangementResult = processor_->setBusArrangements(
@@ -993,8 +1048,23 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
 
         if (arrangementResult != kResultOk &&
             arrangementResult != kResultTrue &&
+            arrangementResult != kResultFalse &&
             arrangementResult != kNotImplemented)
+        {
+            logArrangement("[KJ] Rejected", Steinberg::Vst::kInput, mainInputBusIndex_, inputArrangement_);
+            logArrangement("[KJ] Rejected", Steinberg::Vst::kOutput, mainOutputBusIndex_, outputArrangement_);
             return false;
+        }
+
+        if (arrangementResult == kResultFalse)
+        {
+            logArrangement("[KJ] Plug-in adjusted", Steinberg::Vst::kInput, mainInputBusIndex_, inputArrangement_);
+            logArrangement("[KJ] Plug-in adjusted", Steinberg::Vst::kOutput, mainOutputBusIndex_, outputArrangement_);
+        }
+        else if (arrangementResult == kNotImplemented)
+        {
+            std::cerr << "[KJ] Plug-in did not implement setBusArrangements; proceeding with declared layouts.\n";
+        }
     }
 
     // ————————————————————————————————
@@ -1005,19 +1075,19 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
-    SetProcessSetupChannelCount(setup, forcedChannels);
+    SetProcessSetupChannelCount(setup, outputChannelCount);
 
     std::lock_guard<std::mutex> setupLock(vst3Mutex());
     auto result = processor_->setupProcessing(setup);
     if (result != kResultOk)
         return false;
 
-    internalIn_.assign(static_cast<size_t>(forcedChannels),
+    internalIn_.assign(static_cast<size_t>(inputChannelCount),
                        std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-    internalOut_.assign(static_cast<size_t>(forcedChannels),
+    internalOut_.assign(static_cast<size_t>(outputChannelCount),
                         std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-    inputChannelPointers_.assign(static_cast<size_t>(forcedChannels), nullptr);
-    outputChannelPointers_.assign(static_cast<size_t>(forcedChannels), nullptr);
+    inputChannelPointers_.assign(static_cast<size_t>(inputChannelCount), nullptr);
+    outputChannelPointers_.assign(static_cast<size_t>(outputChannelCount), nullptr);
 
     // Sync controller state after setupProcessing (required for Surge XT)
     if (!controllerStateData_.empty())
@@ -1337,12 +1407,13 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
                                const std::vector<PendingParameterChange>& changes,
                                const std::vector<Steinberg::Vst::Event>& events)
 {
-    const int forcedChannels = 2;
+    const int inputChannels = std::max<Steinberg::int32>(0, SpeakerArr::getChannelCount(inputArrangement_));
+    const int outputChannels = std::max<Steinberg::int32>(1, SpeakerArr::getChannelCount(outputArrangement_));
 
     if (outputs)
     {
         const auto samplesToClear = static_cast<size_t>(std::max(0, numSamples));
-        for (int ch = 0; ch < forcedChannels; ++ch)
+        for (int ch = 0; ch < outputChannels && ch < numOutputChannels; ++ch)
         {
             if (outputs[ch])
                 std::fill(outputs[ch], outputs[ch] + samplesToClear, 0.0f);
@@ -1351,6 +1422,13 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
 
     if (!processor_ || !processingActive_ || !outputs || numSamples <= 0)
         return;
+
+    if (numOutputChannels < outputChannels)
+    {
+        std::cerr << "[KJ] Provided output channels (" << numOutputChannels
+                  << ") do not satisfy bus layout requiring " << outputChannels << " channels.\n";
+        return;
+    }
 
     inputParameterChanges_.clearQueue();
     for (const auto& change : changes)
@@ -1370,31 +1448,41 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
         inputEventList_.addEvent(ev);
     }
 
-    float* stereoInputs[2] {};
+    std::vector<float*> inputPointers(static_cast<size_t>(std::max(1, inputChannels)), nullptr);
     if (!inputs)
     {
-        for (int ch = 0; ch < forcedChannels && ch < static_cast<int>(internalIn_.size()); ++ch)
-            stereoInputs[ch] = internalIn_[static_cast<size_t>(ch)].data();
+        for (int ch = 0; ch < inputChannels && ch < static_cast<int>(internalIn_.size()); ++ch)
+            inputPointers[static_cast<size_t>(ch)] = internalIn_[static_cast<size_t>(ch)].data();
+        numInputChannels = inputChannels;
+        inputs = inputPointers.data();
     }
     else
     {
-        for (int ch = 0; ch < forcedChannels; ++ch)
-            stereoInputs[ch] = inputs[ch];
+        for (int ch = 0; ch < inputChannels && ch < numInputChannels; ++ch)
+            inputPointers[static_cast<size_t>(ch)] = inputs[ch];
+        numInputChannels = inputChannels;
+        inputs = inputPointers.data();
+    }
+
+    std::vector<float*> outputPointers(static_cast<size_t>(outputChannels), nullptr);
+    for (int ch = 0; ch < outputChannels; ++ch)
+    {
+        outputPointers[static_cast<size_t>(ch)] = outputs[ch];
     }
 
     AudioBusBuffers inputBuses[1] {};
     AudioBusBuffers outputBuses[1] {};
 
-    inputBuses[0].numChannels = forcedChannels;
-    inputBuses[0].channelBuffers32 = stereoInputs;
-    outputBuses[0].numChannels = forcedChannels;
-    outputBuses[0].channelBuffers32 = outputs;
+    inputBuses[0].numChannels = inputChannels;
+    inputBuses[0].channelBuffers32 = inputChannels > 0 ? inputPointers.data() : nullptr;
+    outputBuses[0].numChannels = outputChannels;
+    outputBuses[0].channelBuffers32 = outputPointers.data();
 
     ProcessData data {};
     data.processMode = kRealtime;
     data.symbolicSampleSize = kSample32;
     data.numSamples = numSamples;
-    data.numInputs = 1;
+    data.numInputs = inputChannels > 0 ? 1 : 0;
     data.numOutputs = 1;
     data.inputs = inputBuses;
     data.outputs = outputBuses;
@@ -1419,9 +1507,9 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
     if (!out || numChannels <= 0 || numSamples <= 0)
         return;
 
-    const int forcedChannels = 2;
+    const int forcedChannels = std::max<Steinberg::int32>(1, SpeakerArr::getChannelCount(outputArrangement_));
 
-    for (int ch = 0; ch < forcedChannels; ++ch)
+    for (int ch = 0; ch < forcedChannels && ch < numChannels; ++ch)
     {
         if (out[ch])
             std::fill(out[ch], out[ch] + static_cast<size_t>(numSamples), 0.0f);
@@ -1458,9 +1546,10 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
         }
 
         float** inputBuffers = nullptr;
+        const auto inputChannels = static_cast<int>(internalIn_.size());
         if (!internalIn_.empty())
         {
-            for (Steinberg::int32 ch = 0; ch < forcedChannels; ++ch)
+            for (Steinberg::int32 ch = 0; ch < std::min<Steinberg::int32>(forcedChannels, inputChannels); ++ch)
             {
                 auto& buffer = internalIn_[static_cast<size_t>(ch)];
                 const auto toClear = std::min<size_t>(buffer.size(), static_cast<size_t>(chunkSize));
@@ -1473,7 +1562,7 @@ void VST3Host::renderAudio(float** out, int numChannels, int numSamples)
         const auto& chunkChanges = automationApplied ? kEmptyChanges : processParameterChanges_;
         const auto& chunkEvents = automationApplied ? kEmptyEvents : processEvents_;
 
-        processInternal(inputBuffers, forcedChannels, outputChannelPointers_.data(), forcedChannels, chunkSize,
+        processInternal(inputBuffers, inputChannels, outputChannelPointers_.data(), forcedChannels, chunkSize,
                         chunkChanges, chunkEvents);
         automationApplied = true;
 
