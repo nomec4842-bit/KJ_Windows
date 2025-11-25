@@ -66,6 +66,15 @@ add_library(kj_hosting STATIC
     src/hosting/VSTEditorWindow.cpp
 )
 
+if (WIN32)
+    # Ensure the Windows-specific hosting sources are compiled with the
+    # expected platform macro.  Some toolchains (for example, clang-cl) do
+    # not automatically provide _WIN32, which leaves the guarded
+    # implementations in VSTGuiThread.cpp and VSTEditorWindow.cpp empty and
+    # results in unresolved externals when linking KJ.exe.
+    target_compile_definitions(kj_hosting PRIVATE _WIN32)
+endif()
+
 target_link_libraries(kj_hosting
     PUBLIC kj_core kj_gui
     sdk_common sdk_hosting pluginterfaces base
