@@ -324,4 +324,6 @@ private:
     bool hasCurrentViewRect_ = false;
 #endif
 };
+
+uint32_t GetExpectedOutputChannels(VST3Host* host);
 } // namespace kj

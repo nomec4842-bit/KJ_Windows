@@ -44,7 +44,13 @@ using namespace kj;
 #include "public.sdk/source/vst/vstcomponent.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 
-extern "C" uint32_t VST3Host_GetExpectedOutputChannels(kj::VST3Host* host)
+using namespace VST3::Hosting;
+using namespace Steinberg;
+using namespace Steinberg::Vst;
+
+namespace kj {
+
+uint32_t GetExpectedOutputChannels(VST3Host* host)
 {
     if (!host)
         return 0;
@@ -52,9 +58,7 @@ extern "C" uint32_t VST3Host_GetExpectedOutputChannels(kj::VST3Host* host)
     return Steinberg::Vst::SpeakerArr::getChannelCount(host->outputArrangement_);
 }
 
-using namespace VST3::Hosting;
-using namespace Steinberg;
-using namespace Steinberg::Vst;
+} // namespace kj
 
 namespace {
 
