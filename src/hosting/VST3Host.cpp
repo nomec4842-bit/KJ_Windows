@@ -435,6 +435,47 @@ float GetContentScaleForWindow(HWND hwnd)
 
 namespace kj {
 
+tresult PLUGIN_API VST3Host::HostApplication::queryInterface(const TUID _iid, void** obj)
+{
+    if (!obj)
+        return kInvalidArgument;
+
+    *obj = nullptr;
+    if (std::memcmp(_iid, Steinberg::Vst::IHostApplication::iid, sizeof(TUID)) == 0)
+        *obj = static_cast<Steinberg::Vst::IHostApplication*>(this);
+    else if (std::memcmp(_iid, Steinberg::FUnknown::iid, sizeof(TUID)) == 0)
+        *obj = static_cast<Steinberg::FUnknown*>(static_cast<Steinberg::Vst::IHostApplication*>(this));
+
+    if (*obj)
+    {
+        addRef();
+        return kResultOk;
+    }
+
+    return kNoInterface;
+}
+
+uint32 PLUGIN_API VST3Host::HostApplication::addRef()
+{
+    return ++refCount_;
+}
+
+uint32 PLUGIN_API VST3Host::HostApplication::release()
+{
+    return --refCount_;
+}
+
+tresult PLUGIN_API VST3Host::HostApplication::createInstance(Steinberg::TUID cid, Steinberg::TUID iid, void** obj)
+{
+    (void)cid;
+    (void)iid;
+
+    if (obj)
+        *obj = nullptr;
+
+    return kNoInterface;
+}
+
 class VST3Host::ComponentHandler : public Steinberg::Vst::IComponentHandler, public Steinberg::Vst::IComponentHandler2
 {
 public:
@@ -692,8 +733,7 @@ bool VST3Host::load(const std::string& pluginPath)
 
         Steinberg::IPtr<Steinberg::Vst::IComponent> component = Steinberg::owned(rawComponent);
 
-        Steinberg::FObject hostContext;
-        if (component->initialize(&hostContext) != kResultOk)
+        if (component->initialize(&hostApplication_) != kResultOk)
         {
             std::cerr << "[KJ] Component initialization failed.\n";
             return finish(false);
@@ -747,7 +787,7 @@ bool VST3Host::load(const std::string& pluginPath)
             return finish(false);
         }
 
-        if (controller->initialize(&hostContext) != kResultOk)
+        if (controller->initialize(&hostApplication_) != kResultOk)
         {
             std::cerr << "[KJ] Controller initialization failed.\n";
             return finish(false);
