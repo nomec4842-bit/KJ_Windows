@@ -976,7 +976,6 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     Steinberg::Vst::ProcessSetup setup {};
     setup.processMode        = Steinberg::Vst::kRealtime;
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
-    setup.numChannels        = forcedChannels;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
 
