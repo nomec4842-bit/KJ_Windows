@@ -97,7 +97,8 @@ public:
 
 #ifdef _WIN32
     std::wstring getPluginDisplayName() const;
-    bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect);
+    bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect,
+                               std::string& platformType);
     bool resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect);
     void storeCurrentViewRect(const Steinberg::ViewRect& rect);
     void clearCurrentViewRect();
@@ -249,7 +250,7 @@ private:
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
     bool createViewForRequestedType(const char* preferredType, Steinberg::IPtr<Steinberg::IPlugView>& outView,
-                                    std::string& usedType,
+                                    std::string& usedType, std::string& platformType,
                                     Steinberg::Vst::IEditController* controllerOverride = nullptr);
     void processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
                          const std::vector<PendingParameterChange>& changes,
@@ -303,6 +304,7 @@ private:
 
     std::string requestedViewType_ {Steinberg::Vst::ViewType::kEditor};
     std::string currentViewType_;
+    std::string currentPlatformType_;
     mutable std::mutex viewMutex_;
 
     mutable std::mutex loadingMutex_;
@@ -320,6 +322,7 @@ private:
     Steinberg::int32 fallbackSelectedIndex_ = -1;
     void resetFallbackEditState();
     void refreshFallbackParameters();
+    void showGenericEditorFallback();
     void updateHeaderTexts();
     void destroyPluginUI();
     HWND lastParentWindow_ = nullptr;

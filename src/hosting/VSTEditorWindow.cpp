@@ -108,9 +108,17 @@ bool VSTEditorWindow::createWindowAndAttachView()
 
     Steinberg::IPtr<Steinberg::IPlugView> view;
     Steinberg::ViewRect initialRect {};
-    if (!host->createEditorViewOnGui(view, initialRect))
+    std::string platformType;
+    if (!host->createEditorViewOnGui(view, initialRect, platformType))
     {
         std::cerr << "[VST] Plug-in did not provide a usable view." << std::endl;
+        return false;
+    }
+
+    platformType_ = platformType;
+    if (platformType_.empty())
+    {
+        std::cerr << "[VST] Plug-in view does not expose any supported platform types." << std::endl;
         return false;
     }
 
@@ -153,7 +161,7 @@ bool VSTEditorWindow::createWindowAndAttachView()
     // Wait until VST3Host is ready for GUI attach
     waitForGuiAttachReady(host.get());
 
-    if (view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) != Steinberg::kResultOk)
+    if (view_->attached(reinterpret_cast<void*>(hwnd_), platformType_.c_str()) != Steinberg::kResultOk)
     {
         detachView();
         return false;
@@ -200,6 +208,7 @@ void VSTEditorWindow::detachView()
 
     plugFrame_ = nullptr;
     view_ = nullptr;
+    platformType_.clear();
 }
 
 void VSTEditorWindow::onResize(UINT width, UINT height)
