@@ -87,6 +87,8 @@ public:
     bool waitUntilReady();
     bool waitForPluginReady();
 
+    std::mutex& vst3Mutex() { return vst3Mutex_; }
+
 #ifdef _WIN32
     std::wstring getPluginDisplayName() const;
     bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect);
@@ -271,6 +273,7 @@ private:
     Steinberg::int32 mainOutputBusIndex_ = -1;
     Steinberg::Vst::SpeakerArrangement inputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
     Steinberg::Vst::SpeakerArrangement outputArrangement_ = Steinberg::Vst::SpeakerArr::kEmpty;
+    mutable std::mutex vst3Mutex_;
     mutable std::mutex processMutex_;
     std::atomic<bool> processingSuspended_ {false};
     std::atomic<uint32_t> activeProcessCount_ {0};

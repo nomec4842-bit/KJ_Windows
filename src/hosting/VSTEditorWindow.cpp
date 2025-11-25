@@ -128,14 +128,21 @@ bool VSTEditorWindow::createWindowAndAttachView()
     plugFrame_->setActiveView(view_);
     plugFrame_->setCachedRect(initialRect);
 
-    if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
     {
-        detachView();
-        return false;
+        std::lock_guard<std::mutex> lock(host->vst3Mutex());
+        if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
+        {
+            detachView();
+            return false;
+        }
     }
 
     lastRect_ = initialRect;
-    const bool attached = view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) == Steinberg::kResultOk;
+    bool attached = false;
+    {
+        std::lock_guard<std::mutex> lock(host->vst3Mutex());
+        attached = view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) == Steinberg::kResultOk;
+    }
     if (!attached)
     {
         detachView();
@@ -143,11 +150,17 @@ bool VSTEditorWindow::createWindowAndAttachView()
     }
 
     attached_ = true;
-    view_->onSize(&lastRect_);
+    {
+        std::lock_guard<std::mutex> lock(host->vst3Mutex());
+        view_->onSize(&lastRect_);
+    }
     host->storeCurrentViewRect(lastRect_);
 
     if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+    {
+        std::lock_guard<std::mutex> lock(host->vst3Mutex());
         scaleSupport->setContentScaleFactor(1.0f);
+    }
 
     ::ShowWindow(hwnd_, SW_SHOWNORMAL);
     ::UpdateWindow(hwnd_);
@@ -159,13 +172,29 @@ void VSTEditorWindow::detachView()
 {
     if (view_ && attached_)
     {
-        view_->removed();
+        if (auto host = host_.lock())
+        {
+            std::lock_guard<std::mutex> lock(host->vst3Mutex());
+            view_->removed();
+        }
+        else
+        {
+            view_->removed();
+        }
         attached_ = false;
     }
 
     if (view_ && plugFrame_)
     {
-        view_->setFrame(nullptr);
+        if (auto host = host_.lock())
+        {
+            std::lock_guard<std::mutex> lock(host->vst3Mutex());
+            view_->setFrame(nullptr);
+        }
+        else
+        {
+            view_->setFrame(nullptr);
+        }
         plugFrame_->setActiveView(nullptr);
         plugFrame_->setHostWindow(nullptr);
     }
@@ -185,7 +214,17 @@ void VSTEditorWindow::onResize(UINT width, UINT height)
         plugFrame_->setCachedRect(lastRect_);
 
     if (view_ && attached_)
-        view_->onSize(&lastRect_);
+    {
+        if (auto host = host_.lock())
+        {
+            std::lock_guard<std::mutex> lock(host->vst3Mutex());
+            view_->onSize(&lastRect_);
+        }
+        else
+        {
+            view_->onSize(&lastRect_);
+        }
+    }
 
     if (auto host = host_.lock())
         host->storeCurrentViewRect(lastRect_);
@@ -218,11 +257,31 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         return 0;
     case WM_SETFOCUS:
         if (window && window->view_)
-            window->view_->onFocus(static_cast<Steinberg::TBool>(true));
+        {
+            if (auto host = window->host_.lock())
+            {
+                std::lock_guard<std::mutex> lock(host->vst3Mutex());
+                window->view_->onFocus(static_cast<Steinberg::TBool>(true));
+            }
+            else
+            {
+                window->view_->onFocus(static_cast<Steinberg::TBool>(true));
+            }
+        }
         return 0;
     case WM_KILLFOCUS:
         if (window && window->view_)
-            window->view_->onFocus(static_cast<Steinberg::TBool>(false));
+        {
+            if (auto host = window->host_.lock())
+            {
+                std::lock_guard<std::mutex> lock(host->vst3Mutex());
+                window->view_->onFocus(static_cast<Steinberg::TBool>(false));
+            }
+            else
+            {
+                window->view_->onFocus(static_cast<Steinberg::TBool>(false));
+            }
+        }
         return 0;
     case WM_DESTROY:
         if (window)
@@ -237,7 +296,15 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         switch (msg)
         {
         case WM_MOUSEWHEEL:
-            window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+            if (auto host = window->host_.lock())
+            {
+                std::lock_guard<std::mutex> lock(host->vst3Mutex());
+                window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+            }
+            else
+            {
+                window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+            }
             return 0;
         default:
             break;

@@ -86,6 +86,7 @@ Steinberg::tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, 
     if (resized && targetView)
     {
         Steinberg::ViewRect notifyRect = requestedRect;
+        std::lock_guard<std::mutex> lock(host_.vst3Mutex());
         targetView->onSize(&notifyRect);
     }
 
