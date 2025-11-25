@@ -1416,14 +1416,119 @@ void VST3Host::process(float** outputs, int numChannels, int numSamples)
 
 void VST3Host::process(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples)
 {
+    const int inputChannels = std::max<Steinberg::int32>(0, SpeakerArr::getChannelCount(inputArrangement_));
+    const int outputChannels = std::max<Steinberg::int32>(1, SpeakerArr::getChannelCount(outputArrangement_));
+
+    if (outputs && numSamples > 0)
+    {
+        const auto samplesToClear = static_cast<size_t>(numSamples);
+        for (int ch = 0; ch < outputChannels && ch < numOutputChannels; ++ch)
+        {
+            if (outputs[ch])
+                std::fill(outputs[ch], outputs[ch] + samplesToClear, 0.0f);
+        }
+    }
+
     AudioProcessScope processScope(processingSuspended_, activeProcessCount_);
-    if (!processScope.engaged())
+    if (!processScope.engaged() || !processor_ || !processingActive_ || !outputs || numSamples <= 0)
         return;
+
     parameterChangeQueue_.popAll(processParameterChanges_);
     eventQueue_.popAll(processEvents_);
 
-    processInternal(inputs, numInputChannels, outputs, numOutputChannels, numSamples, processParameterChanges_,
-                    processEvents_);
+    inputParameterChanges_.clearQueue();
+    for (const auto& change : processParameterChanges_)
+    {
+        if (change.id == kNoParamId)
+            continue;
+
+        int32 index = 0;
+        if (auto* queue = inputParameterChanges_.addParameterData(change.id, index))
+            queue->addPoint(0, change.value, index);
+    }
+
+    inputEventList_.clear();
+    for (const auto& ev : processEvents_)
+        inputEventList_.addEvent(ev);
+
+    const auto sampleCount = static_cast<size_t>(numSamples);
+
+    if (static_cast<Steinberg::int32>(outputChannelPointers_.size()) < outputChannels ||
+        static_cast<Steinberg::int32>(internalOut_.size()) < outputChannels)
+    {
+        return;
+    }
+
+    for (int ch = 0; ch < outputChannels; ++ch)
+    {
+        auto& buffer = internalOut_[static_cast<size_t>(ch)];
+        if (sampleCount > buffer.size())
+            return;
+
+        std::fill(buffer.begin(), buffer.begin() + sampleCount, 0.0f);
+        outputChannelPointers_[static_cast<size_t>(ch)] = buffer.data();
+    }
+
+    float** inputBuffers = nullptr;
+    if (inputChannels > 0 && static_cast<Steinberg::int32>(inputChannelPointers_.size()) >= inputChannels)
+    {
+        for (int ch = 0; ch < inputChannels; ++ch)
+        {
+            float* source = nullptr;
+            if (inputs && ch < numInputChannels && inputs[ch])
+            {
+                source = inputs[ch];
+            }
+            else if (static_cast<size_t>(ch) < internalIn_.size())
+            {
+                auto& buffer = internalIn_[static_cast<size_t>(ch)];
+                if (sampleCount > buffer.size())
+                    return;
+
+                std::fill(buffer.begin(), buffer.begin() + sampleCount, 0.0f);
+                source = buffer.data();
+            }
+            inputChannelPointers_[static_cast<size_t>(ch)] = source;
+        }
+
+        inputBuffers = inputChannelPointers_.data();
+    }
+
+    AudioBusBuffers inputBus {};
+    inputBus.numChannels = inputChannels;
+    inputBus.channelBuffers32 = inputBuffers;
+
+    AudioBusBuffers outputBus {};
+    outputBus.numChannels = outputChannels;
+    outputBus.channelBuffers32 = outputChannelPointers_.data();
+
+    ProcessData data {};
+    data.processContext = &processContext_;
+    data.inputParameterChanges = inputParameterChanges_.getParameterCount() > 0 ? &inputParameterChanges_ : nullptr;
+    data.outputParameterChanges = nullptr;
+    data.inputEvents = inputEventList_.getEventCount() > 0 ? &inputEventList_ : nullptr;
+    data.outputEvents = nullptr;
+    data.inputs = inputChannels > 0 ? &inputBus : nullptr;
+    data.outputs = &outputBus;
+    data.numSamples = numSamples;
+    data.symbolicSampleSize = kSample32;
+
+    processor_->process(data);
+
+    for (int ch = 0; ch < outputChannels && ch < numOutputChannels; ++ch)
+    {
+        if (!outputs[ch])
+            continue;
+
+        const float* source = outputChannelPointers_[static_cast<size_t>(ch)];
+        if (source)
+        {
+            std::memcpy(outputs[ch], source, sampleCount * sizeof(float));
+        }
+    }
+
+    inputParameterChanges_.clearQueue();
+    inputEventList_.clear();
 }
 
 void VST3Host::processInternal(float** inputs, int numInputChannels, float** outputs, int numOutputChannels, int numSamples,
