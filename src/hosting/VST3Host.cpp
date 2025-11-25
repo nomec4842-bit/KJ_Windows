@@ -465,6 +465,16 @@ uint32 PLUGIN_API VST3Host::HostApplication::release()
     return --refCount_;
 }
 
+tresult PLUGIN_API VST3Host::HostApplication::getName(String128 name)
+{
+    if (!name)
+        return kInvalidArgument;
+
+    Steinberg::UString hostName(name, VST3_STRING128_SIZE);
+    hostName.fromAscii("KJ Host");
+    return kResultOk;
+}
+
 tresult PLUGIN_API VST3Host::HostApplication::createInstance(Steinberg::TUID cid, Steinberg::TUID iid, void** obj)
 {
     (void)cid;

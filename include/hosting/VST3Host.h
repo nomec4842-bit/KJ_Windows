@@ -207,6 +207,7 @@ private:
         Steinberg::uint32 PLUGIN_API release() override;
 
         // IHostApplication
+        Steinberg::tresult PLUGIN_API getName(String128 name) override;
         Steinberg::tresult PLUGIN_API createInstance(Steinberg::TUID cid, Steinberg::TUID iid, void** obj) override;
 
     private:
