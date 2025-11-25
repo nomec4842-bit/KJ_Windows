@@ -16,6 +16,7 @@ using namespace kj;
 #include "hosting/VSTGuiThread.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -1307,6 +1308,17 @@ void VST3Host::refreshFallbackParameters()
     }
 }
 
+void VST3Host::showGenericEditorFallback()
+{
+    std::cout << "[KJ] Showing generic parameter editor because no native view is available." << std::endl;
+    refreshFallbackParameters();
+    fallbackVisible_ = true;
+    fallbackSelectedIndex_ = -1;
+    currentPlatformType_.clear();
+    currentViewType_.clear();
+    view_ = nullptr;
+}
+
 void VST3Host::updateHeaderTexts()
 {
     // Placeholder for updating any cached UI header text; currently handled elsewhere.
@@ -1322,6 +1334,7 @@ void VST3Host::destroyPluginUI()
 
     view_ = nullptr;
     currentViewType_.clear();
+    currentPlatformType_.clear();
     resetFallbackEditState();
 }
 
@@ -1345,12 +1358,13 @@ void VST3Host::onComponentRequestOpenEditor(const char* viewType)
 
 bool VST3Host::createViewForRequestedType(const char* preferredType,
                                           Steinberg::IPtr<Steinberg::IPlugView>& outView,
-                                          std::string& usedType,
+                                          std::string& usedType, std::string& platformType,
                                           Steinberg::Vst::IEditController* controllerOverride)
 {
     if (!controllerOverride && !controllerInitialized_)
         return false;
 
+    platformType.clear();
     Steinberg::IPtr<Steinberg::Vst::IEditController> controllerRef = controllerOverride ? controllerOverride : controller_;
     if (!controllerRef)
         return false;
@@ -1374,10 +1388,19 @@ bool VST3Host::createViewForRequestedType(const char* preferredType,
         return false;
 
 #ifdef _WIN32
-    if (newView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+    const std::array<const char*, 1> supportedPlatforms {Steinberg::kPlatformTypeHWND};
+    for (const auto* candidate : supportedPlatforms)
     {
-        // Without HWND support we cannot host the native UI inside our Windows container.
-        std::cerr << "[KJ] Plug-in editor does not support HWND platform windows." << std::endl;
+        if (newView->isPlatformTypeSupported(candidate) == kResultTrue)
+        {
+            platformType = candidate;
+            break;
+        }
+    }
+
+    if (platformType.empty())
+    {
+        std::cerr << "[KJ] Plug-in editor does not support a compatible platform window." << std::endl;
         return false;
     }
 #endif
@@ -1627,6 +1650,7 @@ void VST3Host::unloadLocked()
 
     view_ = nullptr;
     currentViewType_.clear();
+    currentPlatformType_.clear();
     controllerInitialized_ = false;
 
     if (controller_)
@@ -1707,20 +1731,28 @@ std::wstring VST3Host::getPluginDisplayName() const
     return std::wstring(L"VST3 Plug-in");
 }
 
-bool VST3Host::createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect)
+bool VST3Host::createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect,
+                                     std::string& platformType)
 {
     if (!controller_ || !controllerInitialized_)
         return false;
 
+    platformType.clear();
     const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
                                                            : requestedViewType_.c_str();
 
     std::string usedType;
-    if (!createViewForRequestedType(preferredType, outView, usedType))
+    if (!createViewForRequestedType(preferredType, outView, usedType, platformType))
+    {
+        showGenericEditorFallback();
         return false;
+    }
 
-    if (!outView || outView->isPlatformTypeSupported(Steinberg::kPlatformTypeHWND) != kResultTrue)
+    if (!outView || platformType.empty())
+    {
+        showGenericEditorFallback();
         return false;
+    }
 
     if (outView->getSize(&rect) != kResultTrue)
     {
@@ -1731,6 +1763,8 @@ bool VST3Host::createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outV
     }
 
     currentViewType_ = usedType;
+    currentPlatformType_ = platformType;
+    fallbackVisible_ = false;
     return true;
 }
 

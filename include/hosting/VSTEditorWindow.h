@@ -50,6 +50,7 @@ private:
 
     Steinberg::IPtr<Steinberg::IPlugView> view_;
     Steinberg::IPtr<PlugFrame> plugFrame_;
+    std::string platformType_;
     Steinberg::ViewRect lastRect_ {};
 
     HWND hwnd_ = nullptr;
