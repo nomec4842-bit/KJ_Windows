@@ -1,0 +1,249 @@
+#ifdef _WIN32
+
+#include "hosting/VSTEditorWindow.h"
+
+#include <algorithm>
+#include <iostream>
+#include <string>
+
+#include "hosting/VST3Host.h"
+#include "hosting/VSTGuiThread.h"
+
+using namespace kj;
+
+namespace {
+RECT computeWindowRect(const Steinberg::ViewRect& rect, DWORD style, DWORD exStyle)
+{
+    RECT desired {rect.left, rect.top, rect.right, rect.bottom};
+    ::AdjustWindowRectEx(&desired, style, FALSE, exStyle);
+    return desired;
+}
+}
+
+std::shared_ptr<VSTEditorWindow> VSTEditorWindow::create(const std::shared_ptr<VST3Host>& host)
+{
+    return std::shared_ptr<VSTEditorWindow>(new VSTEditorWindow(host));
+}
+
+VSTEditorWindow::VSTEditorWindow(const std::shared_ptr<VST3Host>& host) : host_(host)
+{
+    if (host)
+        title_ = host->getPluginDisplayName();
+}
+
+void VSTEditorWindow::show()
+{
+    auto self = shared_from_this();
+    auto task = [self]() { self->showOnGuiThread(); };
+    auto& gui = VSTGuiThread::instance();
+    if (gui.isGuiThread())
+        task();
+    else
+        gui.post(task);
+}
+
+void VSTEditorWindow::close()
+{
+    auto self = shared_from_this();
+    auto task = [self]() { self->destroyOnGuiThread(); };
+    auto& gui = VSTGuiThread::instance();
+    if (gui.isGuiThread())
+        task();
+    else
+        gui.post(task);
+}
+
+void VSTEditorWindow::showOnGuiThread()
+{
+    if (hwnd_ && ::IsWindow(hwnd_))
+    {
+        ::ShowWindow(hwnd_, SW_SHOWNORMAL);
+        ::UpdateWindow(hwnd_);
+        focus();
+        return;
+    }
+
+    if (!createWindowAndAttachView())
+        std::cerr << "[VST] Failed to create VST3 editor window." << std::endl;
+}
+
+void VSTEditorWindow::destroyOnGuiThread()
+{
+    detachView();
+    if (hwnd_ && ::IsWindow(hwnd_))
+    {
+        ::DestroyWindow(hwnd_);
+        hwnd_ = nullptr;
+    }
+}
+
+bool VSTEditorWindow::createWindowAndAttachView()
+{
+    auto host = host_.lock();
+    if (!host)
+        return false;
+
+    if (!host->waitForPluginReady())
+    {
+        std::cerr << "[VST] Plug-in not ready; editor cannot be created." << std::endl;
+        return false;
+    }
+
+    Steinberg::IPtr<Steinberg::IPlugView> view;
+    Steinberg::ViewRect initialRect {};
+    if (!host->createEditorViewOnGui(view, initialRect))
+    {
+        std::cerr << "[VST] Plug-in did not provide a usable view." << std::endl;
+        return false;
+    }
+
+    static std::once_flag classFlag;
+    std::call_once(classFlag, []() {
+        WNDCLASSEXW wc {};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.style = CS_DBLCLKS;
+        wc.lpfnWndProc = &VSTEditorWindow::WndProc;
+        wc.hInstance = ::GetModuleHandleW(nullptr);
+        wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = kWindowClass;
+        ::RegisterClassExW(&wc);
+    });
+
+    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    DWORD exStyle = WS_EX_APPWINDOW;
+    RECT desired = computeWindowRect(initialRect, style, exStyle);
+
+    hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT,
+                              desired.right - desired.left, desired.bottom - desired.top, nullptr, nullptr,
+                              ::GetModuleHandleW(nullptr), this);
+    if (!hwnd_)
+        return false;
+
+    view_ = view;
+    plugFrame_ = Steinberg::IPtr<PlugFrame>(new PlugFrame(*host));
+    plugFrame_->setHostWindow(hwnd_);
+    plugFrame_->setActiveView(view_);
+    plugFrame_->setCachedRect(initialRect);
+
+    if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
+    {
+        detachView();
+        return false;
+    }
+
+    lastRect_ = initialRect;
+    const bool attached = view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) == Steinberg::kResultOk;
+    if (!attached)
+    {
+        detachView();
+        return false;
+    }
+
+    attached_ = true;
+    view_->onSize(&lastRect_);
+    host->storeCurrentViewRect(lastRect_);
+
+    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
+        scaleSupport->setContentScaleFactor(1.0f);
+
+    ::ShowWindow(hwnd_, SW_SHOWNORMAL);
+    ::UpdateWindow(hwnd_);
+    focus();
+    return true;
+}
+
+void VSTEditorWindow::detachView()
+{
+    if (view_ && attached_)
+    {
+        view_->removed();
+        attached_ = false;
+    }
+
+    if (view_ && plugFrame_)
+    {
+        view_->setFrame(nullptr);
+        plugFrame_->setActiveView(nullptr);
+        plugFrame_->setHostWindow(nullptr);
+    }
+
+    plugFrame_ = nullptr;
+    view_ = nullptr;
+}
+
+void VSTEditorWindow::onResize(UINT width, UINT height)
+{
+    lastRect_.left = 0;
+    lastRect_.top = 0;
+    lastRect_.right = static_cast<Steinberg::int32>(width);
+    lastRect_.bottom = static_cast<Steinberg::int32>(height);
+
+    if (plugFrame_)
+        plugFrame_->setCachedRect(lastRect_);
+
+    if (view_ && attached_)
+        view_->onSize(&lastRect_);
+
+    if (auto host = host_.lock())
+        host->storeCurrentViewRect(lastRect_);
+}
+
+void VSTEditorWindow::focus()
+{
+    if (hwnd_ && ::IsWindow(hwnd_))
+    {
+        ::SetForegroundWindow(hwnd_);
+        ::SetFocus(hwnd_);
+    }
+}
+
+LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NCCREATE)
+    {
+        auto* create = reinterpret_cast<LPCREATESTRUCTW>(lParam);
+        if (create && create->lpCreateParams)
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+
+    auto* window = reinterpret_cast<VSTEditorWindow*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (window)
+            window->onResize(LOWORD(lParam), HIWORD(lParam));
+        return 0;
+    case WM_SETFOCUS:
+        if (window && window->view_)
+            window->view_->onFocus(static_cast<Steinberg::TBool>(true));
+        return 0;
+    case WM_KILLFOCUS:
+        if (window && window->view_)
+            window->view_->onFocus(static_cast<Steinberg::TBool>(false));
+        return 0;
+    case WM_DESTROY:
+        if (window)
+            window->detachView();
+        return 0;
+    default:
+        break;
+    }
+
+    if (window && window->view_)
+    {
+        switch (msg)
+        {
+        case WM_MOUSEWHEEL:
+            window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+            return 0;
+        default:
+            break;
+        }
+    }
+
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+#endif // _WIN32
+
