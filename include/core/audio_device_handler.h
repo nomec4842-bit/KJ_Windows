@@ -41,7 +41,9 @@ struct WAVEFORMATEX {
 #include <thread>
 #include <vector>
 
+namespace kj {
 class VST3Host;
+}
 
 class AudioDeviceHandler {
 public:
@@ -77,7 +79,7 @@ public:
     AudioStreamCallback streamCallback() const;
     void* streamCallbackContext() const;
     void notifyCallbackExecuted();
-    void setVSTHost(VST3Host* host);
+    void setVSTHost(kj::VST3Host* host);
     static void resetCallbackMonitor();
     static bool streamStartedSuccessfully();
     static bool callbackHasFired();
@@ -120,7 +122,7 @@ private:
     AudioStreamCallback callback_ = nullptr;
     void* callbackContext_ = nullptr;
 
-    VST3Host* vstHost_ = nullptr;
+    kj::VST3Host* vstHost_ = nullptr;
     std::vector<std::vector<float>> tempChannelBuffers_;
 
     static std::atomic<bool> streamStarted_;
