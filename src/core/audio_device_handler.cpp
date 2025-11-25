@@ -6,8 +6,6 @@
 
 #include "hosting/VST3Host.h"
 
-extern uint32_t VST3Host_GetExpectedOutputChannels(kj::VST3Host* host);
-
 std::atomic<bool> AudioDeviceHandler::streamStarted_{false};
 std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
 
@@ -677,7 +675,7 @@ bool AudioDeviceHandler::start() {
         // Determine channel count based on VST3 bus arrangement
         uint32_t channels = ringBufferChannels_;
         if (vstHost_) {
-            uint32_t expected = kj::GetExpectedOutputChannels(vstHost_);
+            uint32_t expected = vstHost_ ? vstHost_->getOutputChannelCount() : channels;
             if (expected > 0)
                 channels = expected;
         }

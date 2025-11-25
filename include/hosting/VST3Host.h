@@ -60,6 +60,10 @@ public:
     void process(float** outputs, int numChannels, int numSamples);
     void renderAudio(float** out, int numChannels, int numSamples);
 
+    uint32_t getOutputChannelCount() const {
+        return Steinberg::Vst::SpeakerArr::getChannelCount(outputArrangement_);
+    }
+
     struct HostTransportState {
         double samplePosition = 0.0;
         double tempo = 120.0;
@@ -325,5 +329,4 @@ private:
 #endif
 };
 
-uint32_t GetExpectedOutputChannels(VST3Host* host);
 } // namespace kj
