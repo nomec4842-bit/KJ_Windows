@@ -48,18 +48,6 @@ using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
-namespace kj {
-
-uint32_t GetExpectedOutputChannels(VST3Host* host)
-{
-    if (!host)
-        return 0;
-
-    return Steinberg::Vst::SpeakerArr::getChannelCount(host->outputArrangement_);
-}
-
-} // namespace kj
-
 namespace {
 
 std::mutex gWindowClassMutex;
