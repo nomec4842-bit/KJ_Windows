@@ -6687,6 +6687,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (requestTrackVstLoad(activeTrackId, pluginPath))
             {
                 std::cout << "[GUI] Enqueued VST3 plug-in load: " << pluginPath.string() << std::endl;
+
+                auto host = trackGetVstHost(activeTrackId);
+                if (host)
+                {
+                    std::thread([host = std::move(host), trackId = activeTrackId, parent = hwnd]() {
+                        if (host->waitUntilReady())
+                        {
+                            PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
+                        }
+                        else
+                        {
+                            std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
+                        }
+                    }).detach();
+                }
+                else
+                {
+                    std::cerr << "[GUI] VST3 host was not available after enqueueing load." << std::endl;
+                }
             }
             else
             {
