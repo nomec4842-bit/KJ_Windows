@@ -3,6 +3,8 @@
 #include <cstring>
 #include <functional>
 
+class VST3Host;
+
 std::atomic<bool> AudioDeviceHandler::streamStarted_{false};
 std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
 
@@ -98,6 +100,10 @@ AudioDeviceHandler::AudioDeviceHandler() = default;
 
 AudioDeviceHandler::~AudioDeviceHandler() {
     shutdown();
+}
+
+void AudioDeviceHandler::setVSTHost(VST3Host* host) {
+    vstHost_ = host;
 }
 
 void AudioDeviceHandler::registerStreamCallback(AudioStreamCallback callback, void* userData) {
@@ -636,16 +642,40 @@ bool AudioDeviceHandler::start() {
             if (FAILED(renderClient_->GetBuffer(framesToWrite, &data)))
                 continue;
 
-            // --- Call the host's registered audio callback ---
-            if (processingCallback) {
-                processingCallback(reinterpret_cast<float*>(data),
-                                   framesToWrite,
-                                   channelCount);
-                notifyCallbackExecuted();
-            } else {
-                // Silence fallback
-                memset(data, 0, framesToWrite * channelCount * sizeof(float));
+            float* interleavedOut = reinterpret_cast<float*>(data);
+            const uint32_t channels = mixFormat_->nChannels;
+
+            // If no plugin host attached yet, output silence.
+            if (!vstHost_) {
+                memset(interleavedOut, 0, framesToWrite * channels * sizeof(float));
+                continue;
             }
+
+            // -----------------------
+            // 1. Deinterleave input
+            // -----------------------
+            tempChannelBuffers_.resize(channels);
+            for (uint32_t c = 0; c < channels; ++c)
+                tempChannelBuffers_[c].resize(framesToWrite);
+
+            for (uint32_t f = 0; f < framesToWrite; ++f)
+                for (uint32_t c = 0; c < channels; ++c)
+                    tempChannelBuffers_[c][f] = interleavedOut[f * channels + c];
+
+            // -----------------------
+            // 2. Plugin processing
+            // -----------------------
+            vstHost_->process(tempChannelBuffers_, framesToWrite);
+
+            // -----------------------
+            // 3. Re-interleave output
+            // -----------------------
+            for (uint32_t f = 0; f < framesToWrite; ++f)
+                for (uint32_t c = 0; c < channels; ++c)
+                    interleavedOut[f * channels + c] =
+                        tempChannelBuffers_[c][f];
+
+            notifyCallbackExecuted();
 
             renderClient_->ReleaseBuffer(framesToWrite, 0);
         }
