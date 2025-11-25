@@ -97,6 +97,10 @@ private:
     void resetStateLocked();
     bool runInitialization(const std::wstring& deviceId);
 
+    bool pushAudioBlock(const float* interleavedBlock);
+    bool popAudioBlock(float* interleavedBlock);
+    void initializeRingBuffer(UINT32 framesPerBuffer, UINT32 channels);
+
     IMMDeviceEnumerator* enumerator_ = nullptr;
     IMMDevice* device_ = nullptr;
     IAudioClient* client_ = nullptr;
@@ -123,6 +127,17 @@ private:
     kj::VST3Host* vstHost_ = nullptr;
     std::vector<std::vector<float>> tempChannelBuffers_;
     std::vector<float*> tempChannelPointers_;
+
+    // Lock-free single-producer single-consumer ring buffer for audio blocks
+    std::vector<float> ringBuffer_;
+    uint32_t framesPerBlock_ = 0;
+    uint32_t ringBufferChannels_ = 0;
+    size_t ringBufferCapacityBlocks_ = 0;
+    std::atomic<size_t> ringBufferReadIndex_{0};
+    std::atomic<size_t> ringBufferWriteIndex_{0};
+
+    std::thread dspThread_{};
+    std::atomic<bool> dspRunning_{false};
 
     static std::atomic<bool> streamStarted_;
     static std::atomic<bool> callbackInvoked_;
