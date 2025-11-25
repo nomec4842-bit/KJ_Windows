@@ -27,6 +27,7 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "pluginterfaces/vst/ivsthostapplication.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 #include "base/source/fobject.h"
@@ -195,6 +196,23 @@ private:
         Steinberg::Vst::ParamValue value {0.0};
     };
 
+    class HostApplication : public Steinberg::Vst::IHostApplication
+    {
+    public:
+        HostApplication() = default;
+
+        // IUnknown
+        Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID _iid, void** obj) override;
+        Steinberg::uint32 PLUGIN_API addRef() override;
+        Steinberg::uint32 PLUGIN_API release() override;
+
+        // IHostApplication
+        Steinberg::tresult PLUGIN_API createInstance(Steinberg::TUID cid, Steinberg::TUID iid, void** obj) override;
+
+    private:
+        std::atomic<Steinberg::uint32> refCount_ {1};
+    };
+
 #ifdef _WIN32
     struct FallbackParameter {
         Steinberg::Vst::ParameterInfo info {};
@@ -232,6 +250,7 @@ private:
     void markLoadStarted();
     void markLoadFinished(bool success);
 
+    HostApplication hostApplication_ {};
     VST3::Hosting::Module::Ptr module_;
     Steinberg::IPtr<Steinberg::Vst::IComponent> component_ = nullptr;
     Steinberg::IPtr<Steinberg::Vst::IAudioProcessor> processor_;
