@@ -974,23 +974,23 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
 
-    if (processor_->setupProcessing(setup) != kResultOk)
+    auto result = processor_->setupProcessing(setup);
+    if (result != kResultOk)
         return false;
 
-    // ————————————————————————————————
-    // STEP 5: sync controller state
-    // ————————————————————————————————
+    // Sync controller state after setupProcessing (required for Surge XT)
+    if (!controllerStateData_.empty())
     {
-        VectorIBStream controllerState(controllerStateData_.data(), controllerStateData_.size());
-        controller_->setComponentState(&controllerState); // ignore failures — optional
+        VectorIBStream controllerState(
+            controllerStateData_.data(),
+            controllerStateData_.size()
+        );
+        controller_->setComponentState(&controllerState); // ignore errors
     }
 
     // ————————————————————————————————
     // FINAL: start processing
     // ————————————————————————————————
-    if (processor_->setProcessing(true) != kResultOk)
-        return false;
-
     // Store result values
     preparedSampleRate_   = sampleRate;
     preparedMaxBlockSize_ = blockSize;
@@ -1001,6 +1001,9 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     processContext_.timeSigNumerator   = 4;
     processContext_.timeSigDenominator = 4;
     processContext_.state |= Steinberg::Vst::ProcessContext::kTempoValid;
+
+    if (processor_->setProcessing(true) != kResultOk)
+        return false;
 
     processingActive_ = true;
     return true;
