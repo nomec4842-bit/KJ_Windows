@@ -992,11 +992,11 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     // ————————————————————————————————
     Steinberg::Vst::ProcessSetup setup {};
     setup.processMode        = Steinberg::Vst::kRealtime;
-    setup.numInputs  = forcedChannels;
-    setup.numOutputs = forcedChannels;
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
+    setup.numInputs  = 2;
+    setup.numOutputs = 2;
 
     std::lock_guard<std::mutex> setupLock(vst3Mutex());
     auto result = processor_->setupProcessing(setup);
@@ -1009,13 +1009,12 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     (void)maxInputChannels;
     (void)maxOutputChannels;
 
-    const int forcedChannelCount = forcedChannels;
-    internalIn_.assign(static_cast<size_t>(forcedChannelCount),
+    internalIn_.assign(static_cast<size_t>(forcedChannels),
                        std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-    internalOut_.assign(static_cast<size_t>(forcedChannelCount),
+    internalOut_.assign(static_cast<size_t>(forcedChannels),
                         std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-    inputChannelPointers_.assign(static_cast<size_t>(forcedChannelCount), nullptr);
-    outputChannelPointers_.assign(static_cast<size_t>(forcedChannelCount), nullptr);
+    inputChannelPointers_.assign(static_cast<size_t>(forcedChannels), nullptr);
+    outputChannelPointers_.assign(static_cast<size_t>(forcedChannels), nullptr);
 
     // Sync controller state after setupProcessing (required for Surge XT)
     if (!controllerStateData_.empty())
