@@ -834,7 +834,10 @@ bool VST3Host::load(const std::string& pluginPath)
             if (component->getState(&stateWriter) == kResultOk && !componentState.empty())
             {
                 VectorIBStream stateReader(componentState.data(), componentState.size());
-                controller->setComponentState(&stateReader);
+                {
+                    std::lock_guard<std::mutex> lock(vst3Mutex());
+                    controller->setComponentState(&stateReader);
+                }
             }
         }
 
@@ -943,24 +946,34 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     // ————————————————
     // STEP 1: setActive(true)
     // ————————————————
-    if (component_->setActive(true) != kResultOk)
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
+        if (component_->setActive(true) != kResultOk)
+            return false;
+    }
 
     // ————————————————————————————————
     // STEP 2: activate ALL input and output buses
     // ————————————————————————————————
     for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
+    {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
         if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, true) != kResultOk)
             return false;
+    }
 
     for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
+    {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
         if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, true) != kResultOk)
             return false;
+    }
 
     // ————————————————————————————————
     // STEP 3: setBusArrangements AFTER bus activation
     // ————————————————————————————————
     {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
         const auto arrangementResult = processor_->setBusArrangements(
             inputArrangements.empty()  ? nullptr : inputArrangements.data(),
             inputBusCount,
@@ -983,6 +996,7 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
 
+    std::lock_guard<std::mutex> setupLock(vst3Mutex());
     auto result = processor_->setupProcessing(setup);
     if (result != kResultOk)
         return false;
@@ -994,7 +1008,10 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
             controllerStateData_.data(),
             static_cast<Steinberg::uint32>(controllerStateData_.size())
         );
-        controller_->setComponentState(&controllerState); // ignore errors
+        {
+            std::lock_guard<std::mutex> lock(vst3Mutex());
+            controller_->setComponentState(&controllerState); // ignore errors
+        }
     }
 
     // ————————————————————————————————
@@ -1031,7 +1048,10 @@ void VST3Host::queueParameterChange(ParamID paramId, ParamValue value, bool noti
         if (hostEditing)
             hostEditing->beginEditFromHost(paramId);
 
-        controller_->setParamNormalized(paramId, clamped);
+        {
+            std::lock_guard<std::mutex> lock(vst3Mutex());
+            controller_->setParamNormalized(paramId, clamped);
+        }
 
         if (hostEditing)
             hostEditing->endEditFromHost(paramId);
@@ -1364,7 +1384,10 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
     if (inputEventList_.getEventCount() > 0)
         data.inputEvents = &inputEventList_;
 
-    processor_->process(data);
+    {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
+        processor_->process(data);
+    }
 
     inputParameterChanges_.clearQueue();
     inputEventList_.clear();
@@ -1482,11 +1505,17 @@ void VST3Host::unloadLocked()
         std::vector<Steinberg::Vst::SpeakerArrangement> emptyInputs(static_cast<size_t>(inputBusCount), SpeakerArr::kEmpty);
         std::vector<Steinberg::Vst::SpeakerArrangement> emptyOutputs(static_cast<size_t>(outputBusCount), SpeakerArr::kEmpty);
 
-        processor_->setBusArrangements(emptyInputs.empty() ? nullptr : emptyInputs.data(), inputBusCount,
-                                       emptyOutputs.empty() ? nullptr : emptyOutputs.data(), outputBusCount);
+        {
+            std::lock_guard<std::mutex> lock(vst3Mutex());
+            processor_->setBusArrangements(emptyInputs.empty() ? nullptr : emptyInputs.data(), inputBusCount,
+                                           emptyOutputs.empty() ? nullptr : emptyOutputs.data(), outputBusCount);
+        }
     }
     if (component_)
+    {
+        std::lock_guard<std::mutex> lock(vst3Mutex());
         component_->setActive(false);
+    }
 
     processingActive_ = false;
 
