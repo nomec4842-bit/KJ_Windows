@@ -1384,10 +1384,7 @@ void VST3Host::processInternal(float** inputs, int numInputChannels, float** out
     if (inputEventList_.getEventCount() > 0)
         data.inputEvents = &inputEventList_;
 
-    {
-        std::lock_guard<std::mutex> lock(vst3Mutex());
-        processor_->process(data);
-    }
+    processor_->process(data);
 
     inputParameterChanges_.clearQueue();
     inputEventList_.clear();
