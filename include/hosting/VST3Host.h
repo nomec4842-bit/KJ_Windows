@@ -44,7 +44,7 @@ class PlugFrame;
 constexpr size_t VST3_STRING128_SIZE = 128;
 using String128 = Steinberg::Vst::TChar[VST3_STRING128_SIZE];
 
-class VST3Host {
+class VST3Host : public std::enable_shared_from_this<VST3Host> {
 public:
     VST3Host() = default;
     ~VST3Host();
@@ -87,9 +87,11 @@ public:
     bool waitForPluginReady();
 
 #ifdef _WIN32
-    PlugFrame* getPlugFrame() const { return plugFrame_; }
-    void setPlugFrame(PlugFrame* frame);
-    Steinberg::IPlugView* getView() const { return view_.get(); }
+    std::wstring getPluginDisplayName() const;
+    bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect);
+    bool resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect);
+    void storeCurrentViewRect(const Steinberg::ViewRect& rect);
+    void clearCurrentViewRect();
 #endif
 
 private:
@@ -209,57 +211,14 @@ private:
     class NonRealtimeScope;
 
 #ifdef _WIN32
-#define WM_KJ_OPENEDITOR (WM_USER + 0x200)
-    void ClosePluginEditor();
-    void destroyPluginUI();
-    bool ensureEditorWindowClass();
-    bool ensureWindowClasses();
-    bool ensureCommonControls();
-    bool createContainerWindow(HWND parentWindow);
-    void closeContainerWindow();
-    void onContainerCreated(HWND hwnd);
-    void onContainerResized(int width, int height);
-    void onContainerDestroyed();
-    HWND ensurePluginViewHost();
-    void onIdleTimer();
-    bool AttachView(Steinberg::IPlugView* view, HWND parentWindow);
-    void cleanupEditorWindowResources();
-    bool applyViewRect(HWND hostWindow, const Steinberg::ViewRect& rect);
-    void updateWindowSizeForContent(int contentWidth, int contentHeight);
-    void updateHeaderTexts();
-    void handleHeaderCommand(UINT commandId);
-    void showFallbackControls(bool show);
-    void ensureFallbackWindow();
-    void refreshFallbackParameters();
-    void onFallbackParameterSelected(int index);
-    void updateFallbackSlider(bool resetSelection);
-    void applyFallbackSliderChange(bool finalChange);
-    void updateFallbackValueLabel();
-    void resetFallbackEditState();
-    std::wstring getFallbackDisplayString(const FallbackParameter& param) const;
-    std::wstring getParameterName(const FallbackParameter& param) const;
-    void syncFallbackParameterValue(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
-    bool resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect, bool adjustContainer);
-    void storeCurrentViewRect(const Steinberg::ViewRect& rect);
-    void clearCurrentViewRect();
-    bool handleKeyDown(WPARAM wParam, LPARAM lParam);
-    bool handleKeyUp(WPARAM wParam, LPARAM lParam);
-    char16_t translateVirtualKey(WPARAM wParam, LPARAM lParam) const;
-    int16_t queryKeyModifiers() const;
-    void onOpenEditorMessage(HWND hwnd);
-    static LRESULT CALLBACK PluginEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK ContainerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK FallbackWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK PluginViewHostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK StandaloneEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    friend class VSTEditorWindow;
+    friend class VSTGuiThread;
 #endif
 
     void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value, bool notifyController = true);
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);
     void onRestartComponent(Steinberg::int32 flags);
     void onComponentRequestOpenEditor(const char* viewType);
-    bool ensureViewForRequestedType();
     bool createViewForRequestedType(const char* preferredType, Steinberg::IPtr<Steinberg::IPlugView>& outView,
                                     std::string& usedType,
                                     Steinberg::Vst::IEditController* controllerOverride = nullptr);
@@ -282,37 +241,7 @@ private:
     ComponentHandler* componentHandler_ = nullptr;
 
 #ifdef _WIN32
-    PlugFrame* plugFrame_ = nullptr;
-    Steinberg::IPtr<Steinberg::IPlugView> editorView_;
-    HWND containerWindow_ = nullptr;
-    HWND headerWindow_ = nullptr;
-    HWND headerTitleStatic_ = nullptr;
-    HWND headerVendorStatic_ = nullptr;
-    HWND headerStatusStatic_ = nullptr;
-    HWND headerFallbackButton_ = nullptr;
-    HWND headerCloseButton_ = nullptr;
-    HWND contentWindow_ = nullptr;
-    HWND viewHostWindow_ = nullptr;
-    HWND fallbackWindow_ = nullptr;
-    HWND fallbackListView_ = nullptr;
-    HWND fallbackSlider_ = nullptr;
-    HWND fallbackValueStatic_ = nullptr;
-    HFONT headerTitleFont_ = nullptr;
-    HFONT headerTextFont_ = nullptr;
-    bool headerFontsCreated_ = false;
-    bool frameAttached_ = false;
-    bool viewAttached_ = false;
-    UINT_PTR idleTimerId_ = 0;
-    bool fallbackVisible_ = false;
-    int fallbackSelectedIndex_ = -1;
-    bool fallbackEditing_ = false;
-    Steinberg::Vst::ParamID fallbackEditingParamId_ = 0;
-    std::atomic<bool> standaloneEditorThreadRunning_ {false};
-    std::atomic<bool> standaloneEditorThreadShouldExit_ {false};
-    std::thread standaloneEditorThread_;
-    Steinberg::IPtr<Steinberg::IPlugView> standaloneEditorView_;
-    HWND standaloneEditorWindow_ = nullptr;
-    mutable std::mutex standaloneEditorMutex_;
+    std::shared_ptr<VSTEditorWindow> editorWindow_;
 #endif
 
     double preparedSampleRate_ = 0.0;

@@ -82,7 +82,7 @@ Steinberg::tresult PLUGIN_API PlugFrame::resizeView(Steinberg::IPlugView* view, 
         return Steinberg::kResultOk;
 
     Steinberg::IPlugView* targetView = activeView_;
-    const bool resized = host_.resizePluginViewWindow(hostWindow_, requestedRect, true);
+    const bool resized = host_.resizePluginViewWindow(hostWindow_, requestedRect);
     if (resized && targetView)
     {
         Steinberg::ViewRect notifyRect = requestedRect;
