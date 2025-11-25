@@ -968,6 +968,10 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     // ————————————————————————————————
     // STEP 3: setBusArrangements AFTER bus activation
     // ————————————————————————————————
+    inputArrangement_  = SpeakerArr::kStereo;
+    outputArrangement_ = SpeakerArr::kStereo;
+    for (int i = 0; i < inputBusCount;  ++i) inputArrangements[i]  = SpeakerArr::kStereo;
+    for (int i = 0; i < outputBusCount; ++i) outputArrangements[i] = SpeakerArr::kStereo;
     {
         std::lock_guard<std::mutex> lock(vst3Mutex());
         const auto arrangementResult = processor_->setBusArrangements(
