@@ -3,8 +3,10 @@
 #include "hosting/VSTEditorWindow.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
@@ -12,6 +14,19 @@
 namespace kj {
 
 using namespace kj;
+
+static void waitForGuiAttachReady(kj::VST3Host* host)
+{
+    // Wait up to 2 seconds for DSP thread + host to finish initializing
+    using namespace std::chrono_literals;
+    const auto timeout = std::chrono::steady_clock::now() + 2s;
+
+    while (!host->guiAttachReady_.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() > timeout)
+            break;
+        std::this_thread::sleep_for(10ms);
+    }
+}
 
 namespace {
 RECT computeWindowRect(const Steinberg::ViewRect& rect, DWORD style, DWORD exStyle)
@@ -135,22 +150,19 @@ bool VSTEditorWindow::createWindowAndAttachView()
     }
 
     lastRect_ = initialRect;
-    bool attached = false;
-    {
-        std::lock_guard<std::mutex> lock(host->vst3Mutex());
-        attached = view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) == Steinberg::kResultOk;
-    }
-    if (!attached)
+    // Wait until VST3Host is ready for GUI attach
+    waitForGuiAttachReady(host.get());
+
+    if (view_->attached(reinterpret_cast<void*>(hwnd_), Steinberg::kPlatformTypeHWND) != Steinberg::kResultOk)
     {
         detachView();
         return false;
     }
 
+    PostMessage(hwnd_, WM_NULL, 0, 0);
+
     attached_ = true;
-    {
-        std::lock_guard<std::mutex> lock(host->vst3Mutex());
-        view_->onSize(&lastRect_);
-    }
+    view_->onSize(&lastRect_);
     host->storeCurrentViewRect(lastRect_);
 
     if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
@@ -168,15 +180,7 @@ void VSTEditorWindow::detachView()
 {
     if (view_ && attached_)
     {
-        if (auto host = host_.lock())
-        {
-            std::lock_guard<std::mutex> lock(host->vst3Mutex());
-            view_->removed();
-        }
-        else
-        {
-            view_->removed();
-        }
+        view_->removed();
         attached_ = false;
     }
 
@@ -210,15 +214,7 @@ void VSTEditorWindow::onResize(UINT width, UINT height)
 
     if (view_ && attached_)
     {
-        if (auto host = host_.lock())
-        {
-            std::lock_guard<std::mutex> lock(host->vst3Mutex());
-            view_->onSize(&lastRect_);
-        }
-        else
-        {
-            view_->onSize(&lastRect_);
-        }
+        view_->onSize(&lastRect_);
     }
 
     if (auto host = host_.lock())
