@@ -102,7 +102,7 @@ AudioDeviceHandler::~AudioDeviceHandler() {
     shutdown();
 }
 
-void AudioDeviceHandler::setVSTHost(VST3Host* host) {
+void AudioDeviceHandler::setVSTHost(kj::VST3Host* host) {
     vstHost_ = host;
 }
 
