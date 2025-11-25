@@ -282,6 +282,7 @@ private:
     SpscRingBuffer<Steinberg::Vst::Event> eventQueue_ {512};
     std::vector<Steinberg::Vst::Event> processEvents_;
     Steinberg::Vst::ProcessContext processContext_ {};
+    std::vector<uint8_t> controllerStateData_;
 
     std::vector<std::vector<float>> internalIn_;
     std::vector<std::vector<float>> internalOut_;

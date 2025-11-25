@@ -894,6 +894,15 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     preparedSampleRate_ = 0.0;
     preparedMaxBlockSize_ = 0;
 
+    // Local helper for mapping bus channel count to arrangement
+    const auto chooseArrangement = [](const Steinberg::Vst::BusInfo& info) {
+        if (info.channelCount >= 2)
+            return SpeakerArr::kStereo;
+        if (info.channelCount == 1)
+            return SpeakerArr::kMono;
+        return SpeakerArr::kEmpty;
+    };
+
     // --- Count buses ---
     const Steinberg::int32 inputBusCount  = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput)  : 0;
     const Steinberg::int32 outputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput) : 0;
@@ -983,7 +992,7 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     {
         VectorIBStream controllerState(
             controllerStateData_.data(),
-            controllerStateData_.size()
+            static_cast<Steinberg::uint32>(controllerStateData_.size())
         );
         controller_->setComponentState(&controllerState); // ignore errors
     }
