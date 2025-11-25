@@ -957,6 +957,24 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     if (canProcess32 != kResultOk && canProcess32 != kResultTrue && canProcess32 != kNotImplemented)
         return false;
 
+    if (component_)
+    {
+        if (component_->setActive(true) != kResultOk)
+            return false;
+
+        for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
+        {
+            if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, true) != kResultOk)
+                return false;
+        }
+
+        for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
+        {
+            if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, true) != kResultOk)
+                return false;
+        }
+    }
+
     const auto arrangementResult = processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(),
                                                                   inputBusCount,
                                                                   outputArrangements.empty() ? nullptr : outputArrangements.data(),
@@ -973,15 +991,6 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     auto result = processor_->setupProcessing(setup);
     if (result != kResultOk)
         return false;
-
-    if (component_)
-    {
-        component_->setActive(true);
-
-        if (mainInputBusIndex_ >= 0)
-            component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, mainInputBusIndex_, true);
-        component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, mainOutputBusIndex_, true);
-    }
 
     processor_->setProcessing(true);
 
