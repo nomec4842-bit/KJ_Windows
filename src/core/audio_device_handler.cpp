@@ -1,5 +1,8 @@
 #include "core/audio_device_handler.h"
 
+#include <cstring>
+#include <functional>
+
 std::atomic<bool> AudioDeviceHandler::streamStarted_{false};
 std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
 
@@ -13,7 +16,7 @@ std::atomic<bool> AudioDeviceHandler::callbackInvoked_{false};
 #include <sstream>
 
 namespace {
-constexpr DWORD kStreamFlags = 0;
+constexpr DWORD kStreamFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 constexpr REFERENCE_TIME kBufferDuration = 10000000; // 1 second
 
 bool isFloatFormat(const WAVEFORMATEX* format) {
@@ -85,6 +88,12 @@ void logInfo(const std::wstring& message) {
 }
 }
 
+namespace {
+std::atomic<bool> running_{false};
+std::thread renderThread_{};
+HANDLE samplesReadyEvent_ = nullptr;
+}
+
 AudioDeviceHandler::AudioDeviceHandler() = default;
 
 AudioDeviceHandler::~AudioDeviceHandler() {
@@ -154,6 +163,10 @@ void AudioDeviceHandler::resetComObjectsLocked() {
 
 void AudioDeviceHandler::resetStateLocked() {
     resetComObjectsLocked();
+    if (samplesReadyEvent_) {
+        CloseHandle(samplesReadyEvent_);
+        samplesReadyEvent_ = nullptr;
+    }
     mixFormat_.reset();
     bufferFrameCount_ = 0;
     initialized_ = false;
@@ -216,7 +229,7 @@ bool AudioDeviceHandler::initialize(const std::wstring& deviceId) {
     }
     initThread_ = std::move(worker);
     logInfo(L"Started audio device initialization thread");
-    return false;
+    return initSuccess_;
 }
 
 bool AudioDeviceHandler::isInitializing() const {
@@ -435,6 +448,20 @@ bool AudioDeviceHandler::runInitialization(const std::wstring& deviceId) {
             break;
         }
 
+        if (!samplesReadyEvent_) {
+            samplesReadyEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+            if (!samplesReadyEvent_) {
+                logInfo(L"Failed to create samples ready event");
+                break;
+            }
+        }
+
+        hr = client->SetEventHandle(samplesReadyEvent_);
+        if (FAILED(hr)) {
+            logFailure(L"IAudioClient::SetEventHandle", hr);
+            break;
+        }
+
         hr = client->GetBufferSize(&bufferFrameCount);
         if (FAILED(hr)) {
             logFailure(L"IAudioClient::GetBufferSize", hr);
@@ -533,9 +560,19 @@ void AudioDeviceHandler::shutdown() {
 }
 
 bool AudioDeviceHandler::start() {
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    if (initThreadActive_ && !initCompleted_) {
-        logInfo(L"Audio client start requested while initialization is still running");
+    std::unique_lock<std::mutex> lock(stateMutex_);
+    if (initThreadActive_) {
+        lock.unlock();
+        if (initThread_.joinable()) {
+            initThread_.join();
+        }
+        lock.lock();
+
+        initThreadActive_ = false;
+        initCompleted_ = false;
+    }
+
+    if (!initSuccess_) {
         return false;
     }
     if (!initialized_ || !client_) {
@@ -546,6 +583,14 @@ bool AudioDeviceHandler::start() {
         logInfo(L"Audio client start aborted because the output format has no channels");
         return false;
     }
+
+    if (renderThread_.joinable()) {
+        running_.store(false);
+        lock.unlock();
+        renderThread_.join();
+        lock.lock();
+    }
+
     HRESULT hr = client_->Start();
     if (FAILED(hr)) {
         logFailure(L"IAudioClient::Start", hr);
@@ -553,11 +598,66 @@ bool AudioDeviceHandler::start() {
     }
     logInfo(L"Audio client started successfully");
     streamStarted_.store(true, std::memory_order_release);
+
+    const UINT32 bufferFrameCount = bufferFrameCount_;
+    const WORD channelCount = mixFormat_ ? mixFormat_->nChannels : 0;
+    auto callbackContext = callbackContext_;
+    auto streamCallback = callback_;
+    WAVEFORMATEX* format = mixFormat_.get();
+    std::function<void(float*, uint32_t, uint32_t)> processingCallback;
+    if (streamCallback) {
+        processingCallback = [streamCallback, callbackContext, format](float* interleaved, uint32_t frames,
+                                                                      uint32_t /*channels*/) {
+            streamCallback(reinterpret_cast<BYTE*>(interleaved), frames, format, callbackContext);
+        };
+    }
+
+    running_.store(true);
+    renderThread_ = std::thread([this, bufferFrameCount, channelCount, processingCallback]() mutable {
+        HANDLE hEvent = samplesReadyEvent_;
+        const UINT32 bufferFrameCountLocal = bufferFrameCount;
+
+        while (running_.load()) {
+
+            // Wait for WASAPI to request more data
+            DWORD waitResult = WaitForSingleObject(hEvent, 200);
+            if (waitResult != WAIT_OBJECT_0)
+                continue;
+
+            UINT32 padding = 0;
+            if (FAILED(client_->GetCurrentPadding(&padding)))
+                continue;
+
+            UINT32 framesToWrite = bufferFrameCountLocal - padding;
+            if (framesToWrite == 0)
+                continue;
+
+            BYTE* data = nullptr;
+            if (FAILED(renderClient_->GetBuffer(framesToWrite, &data)))
+                continue;
+
+            // --- Call the host's registered audio callback ---
+            if (processingCallback) {
+                processingCallback(reinterpret_cast<float*>(data),
+                                   framesToWrite,
+                                   channelCount);
+                notifyCallbackExecuted();
+            } else {
+                // Silence fallback
+                memset(data, 0, framesToWrite * channelCount * sizeof(float));
+            }
+
+            renderClient_->ReleaseBuffer(framesToWrite, 0);
+        }
+    });
     return true;
 }
 
 void AudioDeviceHandler::stop() {
     std::lock_guard<std::mutex> lock(stateMutex_);
+    running_.store(false);
+    if (renderThread_.joinable())
+        renderThread_.join();
     if (client_) {
         HRESULT hr = client_->Stop();
         if (FAILED(hr)) {
