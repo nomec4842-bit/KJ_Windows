@@ -889,6 +889,7 @@ bool VST3Host::load(const std::string& pluginPath)
 
 bool VST3Host::prepare(double sampleRate, int blockSize)
 {
+    const int forcedChannels = 2;
     NonRealtimeScope scope(*this);
     if (!processor_)
         return false;
@@ -898,12 +899,8 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     preparedMaxBlockSize_ = 0;
 
     // Local helper for mapping bus channel count to arrangement
-    const auto chooseArrangement = [](const Steinberg::Vst::BusInfo& info) {
-        if (info.channelCount >= 2)
-            return SpeakerArr::kStereo;
-        if (info.channelCount == 1)
-            return SpeakerArr::kMono;
-        return SpeakerArr::kEmpty;
+    [[maybe_unused]] const auto chooseArrangement = [](const Steinberg::Vst::BusInfo& info) {
+        return SpeakerArr::kStereo;
     };
 
     // --- Count buses ---
@@ -931,16 +928,15 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
         return false;
 
     // --- Speaker arrangements ---
-    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(inputBusCount,  SpeakerArr::kEmpty);
-    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(outputBusCount, SpeakerArr::kEmpty);
+    inputArrangement_  = SpeakerArr::kStereo;
+    outputArrangement_ = SpeakerArr::kStereo;
+
+    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(inputBusCount,  SpeakerArr::kStereo);
+    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(outputBusCount, SpeakerArr::kStereo);
 
     if (mainInputBusIndex_ >= 0)
-    {
-        inputArrangement_ = chooseArrangement(inputBusInfos[static_cast<size_t>(mainInputBusIndex_)]);
         inputArrangements[static_cast<size_t>(mainInputBusIndex_)] = inputArrangement_;
-    }
 
-    outputArrangement_ = chooseArrangement(outputBusInfos[static_cast<size_t>(mainOutputBusIndex_)]);
     outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
 
     // ————————————————
@@ -992,6 +988,8 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     // ————————————————————————————————
     Steinberg::Vst::ProcessSetup setup {};
     setup.processMode        = Steinberg::Vst::kRealtime;
+    setup.numInputs  = forcedChannels;
+    setup.numOutputs = forcedChannels;
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
@@ -1000,6 +998,20 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     auto result = processor_->setupProcessing(setup);
     if (result != kResultOk)
         return false;
+
+    const Steinberg::int32 maxInputChannels = 2;
+    const Steinberg::int32 maxOutputChannels = 2;
+
+    (void)maxInputChannels;
+    (void)maxOutputChannels;
+
+    const int forcedChannelCount = forcedChannels;
+    internalIn_.assign(static_cast<size_t>(forcedChannelCount),
+                       std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
+    internalOut_.assign(static_cast<size_t>(forcedChannelCount),
+                        std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
+    inputChannelPointers_.assign(static_cast<size_t>(forcedChannelCount), nullptr);
+    outputChannelPointers_.assign(static_cast<size_t>(forcedChannelCount), nullptr);
 
     // Sync controller state after setupProcessing (required for Surge XT)
     if (!controllerStateData_.empty())
