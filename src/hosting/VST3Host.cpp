@@ -995,8 +995,6 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
-    setup.numInputs  = 2;
-    setup.numOutputs = 2;
 
     std::lock_guard<std::mutex> setupLock(vst3Mutex());
     auto result = processor_->setupProcessing(setup);
