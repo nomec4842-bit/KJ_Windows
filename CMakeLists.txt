@@ -59,12 +59,20 @@ add_subdirectory(external/vst3sdk)
 add_subdirectory(src/core)
 add_subdirectory(src/gui)
 
-add_executable(KJ
-    src/main.cpp
+add_library(kj_hosting STATIC
     src/hosting/VST3Host.cpp
     src/hosting/VST3PlugFrame.cpp
     src/hosting/VSTGuiThread.cpp
     src/hosting/VSTEditorWindow.cpp
+)
+
+target_link_libraries(kj_hosting
+    PUBLIC kj_core kj_gui
+    sdk_common sdk_hosting pluginterfaces base
+)
+
+add_executable(KJ
+    src/main.cpp
 
     # Force-include full Steinberg hosting stack
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module.cpp
@@ -77,8 +85,7 @@ add_executable(KJ
 )
 
 target_link_libraries(KJ
-    PRIVATE kj_core kj_gui
-    sdk_common sdk_hosting pluginterfaces base
+    PRIVATE kj_hosting
 )
 
 message(STATUS "KJ configured with VST3 SDK: ${VST3_SDK_DIR}")
