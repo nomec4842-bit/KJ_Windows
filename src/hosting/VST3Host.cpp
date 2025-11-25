@@ -465,7 +465,7 @@ uint32 PLUGIN_API VST3Host::HostApplication::release()
     return --refCount_;
 }
 
-tresult PLUGIN_API VST3Host::HostApplication::getName(String128 name)
+tresult PLUGIN_API VST3Host::HostApplication::getName(Steinberg::Vst::String128 name)
 {
     if (!name)
         return kInvalidArgument;
