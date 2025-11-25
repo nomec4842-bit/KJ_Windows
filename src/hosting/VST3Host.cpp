@@ -28,6 +28,8 @@ using namespace kj;
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #include <chrono>
 #include <cstdint>
@@ -325,6 +327,31 @@ bool IsInvalidNormalizedValue(Steinberg::Vst::ParamValue value)
 bool IsInvalidPlainValue(Steinberg::Vst::ParamValue value)
 {
     return std::isnan(value);
+}
+
+template <typename ProcessSetupType, typename = void>
+struct HasNumChannels : std::false_type
+{
+};
+
+template <typename ProcessSetupType>
+struct HasNumChannels<ProcessSetupType, std::void_t<decltype(std::declval<ProcessSetupType>().numChannels)>>
+    : std::true_type
+{
+};
+
+template <typename ProcessSetupType>
+void SetProcessSetupChannelCount(ProcessSetupType& setup, Steinberg::int32 channels)
+{
+    if constexpr (HasNumChannels<ProcessSetupType>::value)
+    {
+        setup.numChannels = channels;
+    }
+    else
+    {
+        (void)setup;
+        (void)channels;
+    }
 }
 
 } // namespace
@@ -978,6 +1005,7 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate         = sampleRate;
+    SetProcessSetupChannelCount(setup, forcedChannels);
 
     std::lock_guard<std::mutex> setupLock(vst3Mutex());
     auto result = processor_->setupProcessing(setup);
