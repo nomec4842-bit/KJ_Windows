@@ -19,6 +19,7 @@ using namespace kj;
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cctype>
 #include <filesystem>
 #include <future>
 #include <mutex>
@@ -135,6 +136,51 @@ std::filesystem::path ResolvePluginResourceDirectory(const std::filesystem::path
     return basePath;
 }
 #endif
+
+std::filesystem::path resolveVST3BundlePath(const std::filesystem::path& input)
+{
+    std::error_code ec;
+
+    if (!input.has_extension() || input.extension() != ".vst3")
+        return input;
+
+    if (std::filesystem::is_regular_file(input, ec))
+        return input;
+
+    if (!std::filesystem::is_directory(input, ec))
+        return input;
+
+    const auto binaryRoot = input / "Contents" / "x86_64-win";
+    if (!std::filesystem::is_directory(binaryRoot, ec))
+        return input;
+
+    auto findWithExtension = [&](const std::string& extension) -> std::filesystem::path {
+        std::filesystem::directory_iterator it{binaryRoot, ec};
+        if (ec)
+            return {};
+
+        for (const auto& entry : it)
+        {
+            if (!entry.is_regular_file(ec))
+                continue;
+
+            auto ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == extension)
+                return entry.path();
+        }
+
+        return {};
+    };
+
+    if (auto vst3 = findWithExtension(".vst3"); !vst3.empty())
+        return vst3;
+
+    if (auto dll = findWithExtension(".dll"); !dll.empty())
+        return dll;
+
+    return input;
+}
 
 class AudioProcessScope
 {
@@ -592,7 +638,11 @@ bool VST3Host::load(const std::string& pluginPath)
         resetFallbackEditState();
 #endif
 
-        auto module = Module::create(pluginPath, error);
+        auto resolvedPath = resolveVST3BundlePath(std::filesystem::u8path(pluginPath));
+        auto resolvedPathStr = resolvedPath.u8string();
+        std::cout << "[VST3] Resolved bundle path: " << resolvedPathStr << std::endl;
+
+        auto module = Module::create(resolvedPathStr, error);
         if (!module)
         {
             std::cerr << "Failed to load plugin: " << error << std::endl;
@@ -621,12 +671,12 @@ bool VST3Host::load(const std::string& pluginPath)
 
         if (!componentClass)
         {
-            std::cerr << "No valid audio effect found in " << pluginPath << std::endl;
+            std::cerr << "No valid audio effect found in " << resolvedPathStr << std::endl;
             return finish(false);
         }
 
 #ifdef _WIN32
-        pluginPath_ = std::filesystem::u8path(pluginPath);
+        pluginPath_ = resolvedPath;
         pluginNameW_ = Utf8ToWide(componentClass->name());
         pluginVendorW_ = Utf8ToWide(componentClass->vendor());
 #endif
