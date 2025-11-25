@@ -128,13 +128,10 @@ bool VSTEditorWindow::createWindowAndAttachView()
     plugFrame_->setActiveView(view_);
     plugFrame_->setCachedRect(initialRect);
 
+    if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
     {
-        std::lock_guard<std::mutex> lock(host->vst3Mutex());
-        if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
-        {
-            detachView();
-            return false;
-        }
+        detachView();
+        return false;
     }
 
     lastRect_ = initialRect;
@@ -158,7 +155,6 @@ bool VSTEditorWindow::createWindowAndAttachView()
 
     if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
     {
-        std::lock_guard<std::mutex> lock(host->vst3Mutex());
         scaleSupport->setContentScaleFactor(1.0f);
     }
 
@@ -188,7 +184,6 @@ void VSTEditorWindow::detachView()
     {
         if (auto host = host_.lock())
         {
-            std::lock_guard<std::mutex> lock(host->vst3Mutex());
             view_->setFrame(nullptr);
         }
         else
@@ -260,7 +255,6 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         {
             if (auto host = window->host_.lock())
             {
-                std::lock_guard<std::mutex> lock(host->vst3Mutex());
                 window->view_->onFocus(static_cast<Steinberg::TBool>(true));
             }
             else
@@ -274,7 +268,6 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         {
             if (auto host = window->host_.lock())
             {
-                std::lock_guard<std::mutex> lock(host->vst3Mutex());
                 window->view_->onFocus(static_cast<Steinberg::TBool>(false));
             }
             else
@@ -298,7 +291,6 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         case WM_MOUSEWHEEL:
             if (auto host = window->host_.lock())
             {
-                std::lock_guard<std::mutex> lock(host->vst3Mutex());
                 window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
             }
             else
