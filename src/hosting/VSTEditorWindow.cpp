@@ -24,7 +24,7 @@ RECT computeWindowRect(const Steinberg::ViewRect& rect, DWORD style, DWORD exSty
 
 std::shared_ptr<VSTEditorWindow> VSTEditorWindow::create(const std::shared_ptr<VST3Host>& host)
 {
-    return std::shared_ptr<VSTEditorWindow>(new VSTEditorWindow(host));
+    return std::shared_ptr<VSTEditorWindow>(new VSTEditorWindow(host), Deleter{});
 }
 
 VSTEditorWindow::VSTEditorWindow(const std::shared_ptr<VST3Host>& host) : host_(host)
