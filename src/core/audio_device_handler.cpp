@@ -1,5 +1,6 @@
 #include "core/audio_device_handler.h"
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 
@@ -98,6 +99,7 @@ HANDLE samplesReadyEvent_ = nullptr;
 
 namespace {
 constexpr size_t kRingBufferCapacityBlocks = 8;
+static const UINT32 engineBlockSize = 256;
 }
 
 AudioDeviceHandler::AudioDeviceHandler() = default;
@@ -665,11 +667,11 @@ bool AudioDeviceHandler::start() {
     const UINT32 bufferFrameCount = bufferFrameCount_;
     const WORD channelCount = mixFormat_ ? mixFormat_->nChannels : 0;
 
-    initializeRingBuffer(bufferFrameCount, channelCount);
+    initializeRingBuffer(engineBlockSize, channelCount);
 
     dspRunning_.store(true);
     dspThread_ = std::thread([this]() {
-        const uint32_t frames = framesPerBlock_;
+        const uint32_t frames = engineBlockSize;
         const uint32_t channels = ringBufferChannels_;
         std::vector<float> interleavedBlock(static_cast<size_t>(frames) * channels, 0.0f);
 
@@ -709,7 +711,7 @@ bool AudioDeviceHandler::start() {
     renderThread_ = std::thread([this, bufferFrameCount, channelCount]() mutable {
         HANDLE hEvent = samplesReadyEvent_;
         const UINT32 bufferFrameCountLocal = bufferFrameCount;
-        std::vector<float> tempBlock(static_cast<size_t>(bufferFrameCountLocal) * channelCount, 0.0f);
+        std::vector<float> tempBlock(static_cast<size_t>(engineBlockSize) * channelCount, 0.0f);
 
         while (running_.load()) {
 
@@ -733,16 +735,29 @@ bool AudioDeviceHandler::start() {
             float* interleavedOut = reinterpret_cast<float*>(data);
             const uint32_t channels = mixFormat_->nChannels;
 
+            uint32_t framesRemaining = framesToWrite;
+            size_t outputOffset = 0;
             bool blockAvailable = false;
-            if (framesToWrite <= framesPerBlock_) {
-                blockAvailable = popAudioBlock(tempBlock.data());
+
+            while (framesRemaining > 0) {
+                if (!popAudioBlock(tempBlock.data())) {
+                    std::fill(interleavedOut + outputOffset * channels,
+                              interleavedOut + (outputOffset + framesRemaining) * channels, 0.0f);
+                    break;
+                }
+
+                blockAvailable = true;
+                const uint32_t framesFromBlock = std::min(engineBlockSize, framesRemaining);
+                const size_t samplesToCopy = static_cast<size_t>(framesFromBlock) * channels;
+                std::memcpy(interleavedOut + outputOffset * channels, tempBlock.data(),
+                            samplesToCopy * sizeof(float));
+
+                framesRemaining -= framesFromBlock;
+                outputOffset += framesFromBlock;
             }
 
-            if (!blockAvailable) {
+            if (!blockAvailable && framesRemaining == framesToWrite) {
                 std::fill(interleavedOut, interleavedOut + framesToWrite * channels, 0.0f);
-            } else {
-                const size_t samplesToCopy = static_cast<size_t>(framesToWrite) * channels;
-                std::memcpy(interleavedOut, tempBlock.data(), samplesToCopy * sizeof(float));
             }
 
             notifyCallbackExecuted();
