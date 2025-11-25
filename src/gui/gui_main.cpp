@@ -5905,7 +5905,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         auto host = trackGetVstHost(trackId);
         if (host && host->isPluginReady())
         {
-            host->showPluginUI(nullptr);
+            host->showPluginUI(hwnd);
+        }
+        else if (host && host->isPluginLoading())
+        {
+            std::thread([host = std::move(host), trackId, parent = hwnd]() {
+                if (host->waitUntilReady())
+                {
+                    PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
+                }
+                else
+                {
+                    std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
+                }
+            }).detach();
         }
         else
         {
