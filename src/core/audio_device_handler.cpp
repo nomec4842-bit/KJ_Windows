@@ -677,7 +677,7 @@ bool AudioDeviceHandler::start() {
         // Determine channel count based on VST3 bus arrangement
         uint32_t channels = ringBufferChannels_;
         if (vstHost_) {
-            uint32_t expected = VST3Host_GetExpectedOutputChannels(vstHost_);
+            uint32_t expected = kj::GetExpectedOutputChannels(vstHost_);
             if (expected > 0)
                 channels = expected;
         }
