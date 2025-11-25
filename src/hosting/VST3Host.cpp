@@ -891,60 +891,38 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
         return false;
 
     processingActive_ = false;
-    mainInputBusIndex_ = -1;
-    mainOutputBusIndex_ = -1;
-    inputArrangement_ = SpeakerArr::kEmpty;
-    outputArrangement_ = SpeakerArr::kEmpty;
+    preparedSampleRate_ = 0.0;
+    preparedMaxBlockSize_ = 0;
 
-    const auto chooseArrangement = [](const Steinberg::Vst::BusInfo& info) {
-        if (info.channelCount >= 2)
-            return SpeakerArr::kStereo;
-        if (info.channelCount == 1)
-            return SpeakerArr::kMono;
-        return SpeakerArr::kEmpty;
-    };
-
-    const auto findMainBus = [&](Steinberg::int32 busCount, Steinberg::Vst::BusDirection direction,
-                                 std::vector<Steinberg::Vst::BusInfo>& infos) {
-        Steinberg::int32 found = -1;
-        infos.clear();
-        infos.resize(static_cast<size_t>(busCount));
-        for (Steinberg::int32 i = 0; i < busCount; ++i)
-        {
-            Steinberg::Vst::BusInfo info {};
-            if (component_->getBusInfo(Steinberg::Vst::kAudio, direction, i, info) != kResultOk)
-                continue;
-
-            infos[static_cast<size_t>(i)] = info;
-
-            if (info.busType == Steinberg::Vst::kMain)
-                return i;
-
-            if (found < 0)
-                found = i;
-        }
-        return found;
-    };
-
-    const Steinberg::int32 inputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput) : 0;
+    // --- Count buses ---
+    const Steinberg::int32 inputBusCount  = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput)  : 0;
     const Steinberg::int32 outputBusCount = component_ ? component_->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput) : 0;
 
-    std::vector<Steinberg::Vst::BusInfo> inputBusInfos;
-    std::vector<Steinberg::Vst::BusInfo> outputBusInfos;
-
-    if (component_)
-    {
-        mainInputBusIndex_ = findMainBus(inputBusCount, Steinberg::Vst::kInput, inputBusInfos);
-        mainOutputBusIndex_ = findMainBus(outputBusCount, Steinberg::Vst::kOutput, outputBusInfos);
-    }
-
-    if (mainOutputBusIndex_ < 0 || mainOutputBusIndex_ >= outputBusCount)
+    if (!component_ || !controller_ || !processor_)
         return false;
 
-    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(static_cast<size_t>(inputBusCount), SpeakerArr::kEmpty);
-    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(static_cast<size_t>(outputBusCount), SpeakerArr::kEmpty);
+    // --- Query bus info ---
+    std::vector<Steinberg::Vst::BusInfo> inputBusInfos(inputBusCount);
+    std::vector<Steinberg::Vst::BusInfo> outputBusInfos(outputBusCount);
 
-    if (mainInputBusIndex_ >= 0 && mainInputBusIndex_ < inputBusCount)
+    for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
+        component_->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, inputBusInfos[i]);
+
+    for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
+        component_->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, outputBusInfos[i]);
+
+    // --- Choose main buses ---
+    mainInputBusIndex_  = (inputBusCount  > 0) ? 0 : -1;
+    mainOutputBusIndex_ = (outputBusCount > 0) ? 0 : -1;
+
+    if (mainOutputBusIndex_ < 0)
+        return false;
+
+    // --- Speaker arrangements ---
+    std::vector<Steinberg::Vst::SpeakerArrangement> inputArrangements(inputBusCount,  SpeakerArr::kEmpty);
+    std::vector<Steinberg::Vst::SpeakerArrangement> outputArrangements(outputBusCount, SpeakerArr::kEmpty);
+
+    if (mainInputBusIndex_ >= 0)
     {
         inputArrangement_ = chooseArrangement(inputBusInfos[static_cast<size_t>(mainInputBusIndex_)]);
         inputArrangements[static_cast<size_t>(mainInputBusIndex_)] = inputArrangement_;
@@ -953,86 +931,76 @@ bool VST3Host::prepare(double sampleRate, int blockSize)
     outputArrangement_ = chooseArrangement(outputBusInfos[static_cast<size_t>(mainOutputBusIndex_)]);
     outputArrangements[static_cast<size_t>(mainOutputBusIndex_)] = outputArrangement_;
 
-    const auto canProcess32 = processor_->canProcessSampleSize(kSample32);
-    if (canProcess32 != kResultOk && canProcess32 != kResultTrue && canProcess32 != kNotImplemented)
+    // ————————————————
+    // STEP 1: setActive(true)
+    // ————————————————
+    if (component_->setActive(true) != kResultOk)
         return false;
 
-    if (component_)
-    {
-        if (component_->setActive(true) != kResultOk)
+    // ————————————————————————————————
+    // STEP 2: activate ALL input and output buses
+    // ————————————————————————————————
+    for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
+        if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, true) != kResultOk)
             return false;
 
-        for (Steinberg::int32 i = 0; i < inputBusCount; ++i)
-        {
-            if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, i, true) != kResultOk)
-                return false;
-        }
+    for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
+        if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, true) != kResultOk)
+            return false;
 
-        for (Steinberg::int32 i = 0; i < outputBusCount; ++i)
-        {
-            if (component_->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, i, true) != kResultOk)
-                return false;
-        }
+    // ————————————————————————————————
+    // STEP 3: setBusArrangements AFTER bus activation
+    // ————————————————————————————————
+    {
+        const auto arrangementResult = processor_->setBusArrangements(
+            inputArrangements.empty()  ? nullptr : inputArrangements.data(),
+            inputBusCount,
+            outputArrangements.empty() ? nullptr : outputArrangements.data(),
+            outputBusCount
+        );
+
+        if (arrangementResult != kResultOk &&
+            arrangementResult != kResultTrue &&
+            arrangementResult != kNotImplemented)
+            return false;
     }
 
-    const auto arrangementResult = processor_->setBusArrangements(inputArrangements.empty() ? nullptr : inputArrangements.data(),
-                                                                  inputBusCount,
-                                                                  outputArrangements.empty() ? nullptr : outputArrangements.data(),
-                                                                  outputBusCount);
-    if (arrangementResult != kResultOk && arrangementResult != kResultTrue && arrangementResult != kNotImplemented)
-        return false;
-
-    ProcessSetup setup {};
-    setup.processMode = kRealtime;
-    setup.symbolicSampleSize = kSample32;
+    // ————————————————————————————————
+    // STEP 4: setupProcessing AFTER arrangements
+    // ————————————————————————————————
+    Steinberg::Vst::ProcessSetup setup {};
+    setup.processMode        = Steinberg::Vst::kRealtime;
+    setup.symbolicSampleSize = Steinberg::Vst::kSample32;
     setup.maxSamplesPerBlock = blockSize;
-    setup.sampleRate = sampleRate;
+    setup.sampleRate         = sampleRate;
 
-    auto result = processor_->setupProcessing(setup);
-    if (result != kResultOk)
+    if (processor_->setupProcessing(setup) != kResultOk)
         return false;
 
-    processor_->setProcessing(true);
+    // ————————————————————————————————
+    // STEP 5: sync controller state
+    // ————————————————————————————————
+    {
+        VectorIBStream controllerState(controllerStateData_.data(), controllerStateData_.size());
+        controller_->setComponentState(&controllerState); // ignore failures — optional
+    }
 
-    preparedSampleRate_ = sampleRate;
+    // ————————————————————————————————
+    // FINAL: start processing
+    // ————————————————————————————————
+    if (processor_->setProcessing(true) != kResultOk)
+        return false;
+
+    // Store result values
+    preparedSampleRate_   = sampleRate;
     preparedMaxBlockSize_ = blockSize;
+
     processContext_ = {};
     processContext_.sampleRate = sampleRate;
-    processContext_.tempo = 120.0;
-    processContext_.timeSigNumerator = 4;
+    processContext_.tempo      = 120.0;
+    processContext_.timeSigNumerator   = 4;
     processContext_.timeSigDenominator = 4;
-    processContext_.projectTimeSamples = 0;
-    processContext_.continousTimeSamples = 0;
-    processContext_.projectTimeMusic = 0.0;
-    processContext_.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kContTimeValid |
-                             ProcessContext::kProjectTimeMusicValid;
-
-    const Steinberg::int32 maxInputChannels = SpeakerArr::getChannelCount(inputArrangement_);
-    const Steinberg::int32 maxOutputChannels = SpeakerArr::getChannelCount(outputArrangement_);
-
-    internalOut_.assign(static_cast<size_t>(maxOutputChannels), std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-    outputChannelPointers_.assign(static_cast<size_t>(maxOutputChannels), nullptr);
-
-    if (mainInputBusIndex_ >= 0 && maxInputChannels > 0)
-    {
-        internalIn_.assign(static_cast<size_t>(maxInputChannels), std::vector<float>(static_cast<size_t>(blockSize), 0.0f));
-        inputChannelPointers_.assign(static_cast<size_t>(maxInputChannels), nullptr);
-    }
-    else
-    {
-        internalIn_.clear();
-        inputChannelPointers_.clear();
-    }
-
-    const size_t parameterQueueCapacity = std::max<size_t>(static_cast<size_t>(controller_->getParameterCount()) * 4, 64);
-    parameterChangeQueue_.reset(parameterQueueCapacity);
-    processParameterChanges_.clear();
-    processParameterChanges_.reserve(parameterChangeQueue_.capacity());
-
-    const size_t eventQueueCapacity = std::max<size_t>(static_cast<size_t>(blockSize) * 4, 128);
-    eventQueue_.reset(eventQueueCapacity);
-    processEvents_.clear();
-    processEvents_.reserve(eventQueue_.capacity());
+    processContext_.state |= Steinberg::Vst::ProcessContext::kTempoValid;
 
     processingActive_ = true;
     return true;
