@@ -655,8 +655,11 @@ bool AudioDeviceHandler::start() {
             // 1. Deinterleave input
             // -----------------------
             tempChannelBuffers_.resize(channels);
-            for (uint32_t c = 0; c < channels; ++c)
+            tempChannelPointers_.resize(channels);
+            for (uint32_t c = 0; c < channels; ++c) {
                 tempChannelBuffers_[c].resize(framesToWrite);
+                tempChannelPointers_[c] = tempChannelBuffers_[c].data();
+            }
 
             for (uint32_t f = 0; f < framesToWrite; ++f)
                 for (uint32_t c = 0; c < channels; ++c)
@@ -665,7 +668,8 @@ bool AudioDeviceHandler::start() {
             // -----------------------
             // 2. Plugin processing
             // -----------------------
-            vstHost_->process(tempChannelBuffers_, framesToWrite);
+            vstHost_->process(tempChannelPointers_.data(), static_cast<int>(channels),
+                              static_cast<int>(framesToWrite));
 
             // -----------------------
             // 3. Re-interleave output
