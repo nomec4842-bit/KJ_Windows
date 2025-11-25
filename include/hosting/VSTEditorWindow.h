@@ -20,6 +20,11 @@ class VSTEditorWindow : public std::enable_shared_from_this<VSTEditorWindow>
 public:
     static std::shared_ptr<VSTEditorWindow> create(const std::shared_ptr<VST3Host>& host);
 
+    struct Deleter
+    {
+        void operator()(VSTEditorWindow* window) const { delete window; }
+    };
+
     VSTEditorWindow(const VSTEditorWindow&) = delete;
     VSTEditorWindow& operator=(const VSTEditorWindow&) = delete;
 
