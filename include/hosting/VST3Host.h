@@ -100,6 +100,7 @@ public:
     bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect,
                                std::string& platformType);
     bool resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect);
+    HWND getParentWindowForEditor() const { return lastParentWindow_; }
     void storeCurrentViewRect(const Steinberg::ViewRect& rect);
     void clearCurrentViewRect();
 #endif

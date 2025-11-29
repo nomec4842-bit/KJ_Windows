@@ -1924,14 +1924,15 @@ bool VST3Host::ShowPluginEditor()
     return true;
 }
 
-void VST3Host::showPluginUI(void* /*parentWindowHandle*/)
+void VST3Host::showPluginUI(void* parentWindowHandle)
 {
+    lastParentWindow_ = reinterpret_cast<HWND>(parentWindowHandle);
     ShowPluginEditor();
 }
 
 void VST3Host::openEditor(void* nativeWindowHandle)
 {
-    (void)nativeWindowHandle;
+    lastParentWindow_ = reinterpret_cast<HWND>(nativeWindowHandle);
     ShowPluginEditor();
 }
 
