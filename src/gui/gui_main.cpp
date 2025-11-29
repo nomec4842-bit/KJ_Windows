@@ -46,6 +46,37 @@
 HWND gMainWindow = nullptr;
 HMENU gViewMenu = nullptr;
 
+HWND gPianoRollWindow = nullptr;
+bool gPianoRollClassRegistered = false;
+int gPianoRollSelectedMenuTab = 0;
+bool gPianoRollMenuCollapsed = false;
+HWND gEffectsWindow = nullptr;
+bool gEffectsWindowClassRegistered = false;
+HWND gSidechainWindow = nullptr;
+bool gSidechainWindowClassRegistered = false;
+HWND gEqWindow = nullptr;
+bool gEqWindowClassRegistered = false;
+HWND gDelayWindow = nullptr;
+bool gDelayWindowClassRegistered = false;
+
+void updateViewMenuChecks()
+{
+    if (!gViewMenu)
+        return;
+
+    UINT pianoState = (gPianoRollWindow && IsWindow(gPianoRollWindow)) ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandTogglePianoRoll, MF_BYCOMMAND | pianoState);
+
+    UINT effectsState = (gEffectsWindow && IsWindow(gEffectsWindow)) ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleEffects, MF_BYCOMMAND | effectsState);
+
+    UINT waveformState = isWaveformWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
+
+    UINT modMatrixState = isModMatrixWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
+    CheckMenuItem(gViewMenu, kMenuCommandToggleModMatrix, MF_BYCOMMAND | modMatrixState);
+}
+
 namespace {
 
 std::wstring ToWideString(const std::string& value)
@@ -227,18 +258,6 @@ bool midiPortDropdownOpen = false;
 int midiPortDropdownTrackId = 0;
 bool midiChannelDropdownOpen = false;
 int midiChannelDropdownTrackId = 0;
-HWND gPianoRollWindow = nullptr;
-bool gPianoRollClassRegistered = false;
-int gPianoRollSelectedMenuTab = 0;
-bool gPianoRollMenuCollapsed = false;
-HWND gEffectsWindow = nullptr;
-bool gEffectsWindowClassRegistered = false;
-HWND gSidechainWindow = nullptr;
-bool gSidechainWindowClassRegistered = false;
-HWND gEqWindow = nullptr;
-bool gEqWindowClassRegistered = false;
-HWND gDelayWindow = nullptr;
-bool gDelayWindowClassRegistered = false;
 
 void notifyEffectsWindowTrackListChanged();
 void notifyEffectsWindowActiveTrackChanged(int trackId);
@@ -253,24 +272,6 @@ void notifyDelayWindowValuesChanged(int trackId);
 void openSidechainWindow(HWND parent, int trackId);
 void openEqWindow(HWND parent, int trackId);
 void openDelayWindow(HWND parent, int trackId);
-
-void updateViewMenuChecks()
-{
-    if (!gViewMenu)
-        return;
-
-    UINT pianoState = (gPianoRollWindow && IsWindow(gPianoRollWindow)) ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandTogglePianoRoll, MF_BYCOMMAND | pianoState);
-
-    UINT effectsState = (gEffectsWindow && IsWindow(gEffectsWindow)) ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleEffects, MF_BYCOMMAND | effectsState);
-
-    UINT waveformState = isWaveformWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
-
-    UINT modMatrixState = isModMatrixWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleModMatrix, MF_BYCOMMAND | modMatrixState);
-}
 
 constexpr UINT kMenuCommandLoadProject = 1001;
 constexpr UINT kMenuCommandSaveProject = 1002;
