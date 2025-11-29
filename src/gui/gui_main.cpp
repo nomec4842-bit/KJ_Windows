@@ -59,24 +59,6 @@ bool gEqWindowClassRegistered = false;
 HWND gDelayWindow = nullptr;
 bool gDelayWindowClassRegistered = false;
 
-void updateViewMenuChecks()
-{
-    if (!gViewMenu)
-        return;
-
-    UINT pianoState = (gPianoRollWindow && IsWindow(gPianoRollWindow)) ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandTogglePianoRoll, MF_BYCOMMAND | pianoState);
-
-    UINT effectsState = (gEffectsWindow && IsWindow(gEffectsWindow)) ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleEffects, MF_BYCOMMAND | effectsState);
-
-    UINT waveformState = isWaveformWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleWaveform, MF_BYCOMMAND | waveformState);
-
-    UINT modMatrixState = isModMatrixWindowOpen() ? MF_CHECKED : MF_UNCHECKED;
-    CheckMenuItem(gViewMenu, kMenuCommandToggleModMatrix, MF_BYCOMMAND | modMatrixState);
-}
-
 namespace {
 
 std::wstring ToWideString(const std::string& value)
