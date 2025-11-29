@@ -60,6 +60,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/gui)
 
 add_library(kj_hosting STATIC
+    src/hosting/VST3AsyncLoader.cpp
     src/hosting/VST3Host.cpp
     src/hosting/VST3PlugFrame.cpp
     src/hosting/VSTGuiThread.cpp

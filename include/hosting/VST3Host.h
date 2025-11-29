@@ -20,6 +20,9 @@
 #include <vector>
 #include <cstdint>
 
+#ifdef _WIN32
+#include "hosting/VST3AsyncLoader.h"
+#endif
 #include "pluginterfaces/base/fplatform.h"
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/gui/iplugview.h"
@@ -265,6 +268,11 @@ private:
     void waitForProcessingToComplete();
     void markLoadStarted();
     void markLoadFinished(bool success);
+
+#ifdef _WIN32
+    // Async loader
+    std::shared_ptr<VST3AsyncLoader> loader_;
+#endif
 
     HostApplication hostApplication_ {};
     VST3::Hosting::Module::Ptr module_;
