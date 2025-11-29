@@ -699,14 +699,16 @@ void VST3Host::waitForProcessingToComplete()
 // ------------------------------------------------------------
 void VST3Host::loadPluginAsync(const std::wstring& path)
 {
-    std::thread([self = shared_from_this(), path]() {
-        if (!self)
-            return;
+    auto self = shared_from_this();
+    if (!loader_)
+        loader_ = VST3AsyncLoader::create(self);
 
-        const auto utf8Path = WideToUtf8(path);
+    loader_->setOnLoaded([self]() {
+        if (self)
+            self->ShowPluginEditor();
+    });
 
-        self->load(utf8Path);
-    }).detach();
+    loader_->loadPlugin(path);
 }
 #endif
 
@@ -1963,32 +1965,16 @@ bool VST3Host::ShowPluginEditor()
 {
     auto self = shared_from_this();
 
-    // ------------------------------------------------------------
-    // NEW: Fully async editor creation
-    //
-    // 1. We wait for plugin load off the GUI thread
-    // 2. When loading finishes, we post to GUI thread
-    // ------------------------------------------------------------
-    std::thread([self]() {
-        if (!self)
+    VSTGuiThread::instance().post([self]() {
+        if (!self || !self->controller_)
             return;
 
-        // Wait OFF the GUI thread
-        if (!self->waitForPluginReady())
-            return;
+        if (!self->editorWindow_)
+            self->editorWindow_ = VSTEditorWindow::create(self);
 
-        // Plugin loaded. Create editor window on GUI thread.
-        VSTGuiThread::instance().post([self]() {
-            if (!self || !self->controller_)
-                return;
-
-            if (!self->editorWindow_)
-                self->editorWindow_ = VSTEditorWindow::create(self);
-
-            if (self->editorWindow_)
-                self->editorWindow_->show();
-        });
-    }).detach();
+        if (self->editorWindow_)
+            self->editorWindow_->show();
+    });
 
     return true;
 }
