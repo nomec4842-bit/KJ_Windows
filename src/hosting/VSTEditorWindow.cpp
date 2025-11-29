@@ -88,28 +88,53 @@ void VSTEditorWindow::Show()
         return;
     }
 
-    // Wait until VST3Host is ready for GUI attach
-    waitForGuiAttachReady(host.get());
+    // --------------------------------------------------------------
+    // ASYNC ATTACH PIPELINE (fixes UI deadlock + host freeze)
+    // --------------------------------------------------------------
+    auto self = shared_from_this();
+    auto attachTask = [self]() {
+        auto host2 = self->host_.lock();
+        if (!host2)
+            return;
 
-    if (!::IsWindowVisible(hwnd_))
-        return;
+        if (!self->view_ || !self->hwnd_ || !::IsWindow(self->hwnd_))
+            return;
 
-    if (view_->attached(reinterpret_cast<void*>(hwnd_), platformType_.c_str()) != Steinberg::kResultOk)
-    {
-        detachView();
-        return;
-    }
+        // Ensure window is visible before attach
+        if (!::IsWindowVisible(self->hwnd_))
+            ::ShowWindow(self->hwnd_, SW_SHOWNORMAL);
 
-    attached_ = true;
-    view_->onSize(&lastRect_);
-    host->storeCurrentViewRect(lastRect_);
+        // Perform attach on GUI thread
+        if (self->view_->attached(reinterpret_cast<void*>(self->hwnd_), self->platformType_.c_str()) == Steinberg::kResultOk)
+        {
+            self->attached_ = true;
+            self->view_->onSize(&self->lastRect_);
+            host2->storeCurrentViewRect(self->lastRect_);
 
-    if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(view_))
-    {
-        scaleSupport->setContentScaleFactor(1.0f);
-    }
+            if (auto scaleSupport = Steinberg::FUnknownPtr<Steinberg::IPlugViewContentScaleSupport>(self->view_))
+            {
+                scaleSupport->setContentScaleFactor(1.0f);
+            }
 
-    focus();
+            // Focus after successful attach
+            ::SetForegroundWindow(self->hwnd_);
+            ::SetFocus(self->hwnd_);
+        }
+        else
+        {
+            self->detachView();
+        }
+    };
+
+    // Post async task to GUI thread to keep message pump alive
+    auto& guiThread = VSTGuiThread::instance();
+    if (guiThread.isGuiThread())
+        attachTask();
+    else
+        guiThread.post(attachTask);
+
+    // Do NOT block GUI thread anymore.
+    // focus() removed – now done inside async attach
 }
 
 void VSTEditorWindow::destroyOnGuiThread()
