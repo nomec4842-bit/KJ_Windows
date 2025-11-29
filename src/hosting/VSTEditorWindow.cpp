@@ -14,22 +14,6 @@
 namespace kj {
 
 using namespace kj;
-namespace {
-
-static void waitForGuiAttachReady(kj::VST3Host* host)
-{
-    // Wait up to 2 seconds for DSP thread + host to finish initializing
-    using namespace std::chrono_literals;
-    const auto timeout = std::chrono::steady_clock::now() + 2s;
-
-    while (!host->guiAttachReady_.load(std::memory_order_acquire)) {
-        if (std::chrono::steady_clock::now() > timeout)
-            break;
-        std::this_thread::sleep_for(10ms);
-    }
-}
-}
-
 std::shared_ptr<VSTEditorWindow> VSTEditorWindow::create(const std::shared_ptr<VST3Host>& host)
 {
     return std::shared_ptr<VSTEditorWindow>(new VSTEditorWindow(host), Deleter{});

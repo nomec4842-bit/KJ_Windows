@@ -51,6 +51,26 @@ using namespace VST3::Hosting;
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
+namespace kj {
+
+void waitForGuiAttachReady(VST3Host* host)
+{
+    if (!host)
+        return;
+
+    using namespace std::chrono_literals;
+    const auto timeout = std::chrono::steady_clock::now() + 2s;
+
+    while (!host->guiAttachReady_.load(std::memory_order_acquire))
+    {
+        if (std::chrono::steady_clock::now() > timeout)
+            break;
+        std::this_thread::sleep_for(10ms);
+    }
+}
+
+} // namespace kj
+
 namespace {
 
 std::mutex gWindowClassMutex;
