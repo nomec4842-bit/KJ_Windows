@@ -51,6 +51,9 @@ public:
     ~VST3Host();
 
     bool load(const std::string& path);
+#ifdef _WIN32
+    void loadPluginAsync(const std::wstring& path);
+#endif
     void showPluginUI(void* parentWindowHandle);
     bool ShowPluginEditor();
     void unload();
