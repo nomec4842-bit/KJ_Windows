@@ -1927,19 +1927,34 @@ void VST3Host::clearCurrentViewRect()
 bool VST3Host::ShowPluginEditor()
 {
     auto self = shared_from_this();
-    VSTGuiThread::instance().post([self]() {
-        if (!self || !self->controller_)
+
+    // NEW: Fully async, non-blocking GUI-safe behavior
+    //
+    // 1. waitForPluginReady() runs on a background thread
+    // 2. When the plugin is ready, we hop back onto the GUI thread
+    // 3. Then we create/show the editor window
+    //
+    // This prevents the entire KJ GUI from freezing.
+    std::thread([self]() {
+        if (!self)
             return;
 
+        // Run plugin load wait OFF the GUI thread
         if (!self->waitForPluginReady())
             return;
 
-        if (!self->editorWindow_)
-            self->editorWindow_ = VSTEditorWindow::create(self);
+        // After plugin is ready, create/show editor on GUI thread
+        VSTGuiThread::instance().post([self]() {
+            if (!self || !self->controller_)
+                return;
 
-        if (self->editorWindow_)
-            self->editorWindow_->show();
-    });
+            if (!self->editorWindow_)
+                self->editorWindow_ = VSTEditorWindow::create(self);
+
+            if (self->editorWindow_)
+                self->editorWindow_->show();
+        });
+    }).detach();
 
     return true;
 }
