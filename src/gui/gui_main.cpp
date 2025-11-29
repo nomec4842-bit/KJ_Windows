@@ -111,12 +111,6 @@ std::filesystem::path getDefaultVstPluginPath()
     return exePath.parent_path() / L"plugins" / L"TestPlugin.vst3";
 }
 
-void notifyEffectsWindowTrackValuesChanged(int trackId)
-{
-    notifyModMatrixWindowValuesChanged(trackId);
-    // TODO: update FX window when track parameters change.
-}
-
 std::string formatNormalizedValue(float value)
 {
     std::ostringstream stream;
@@ -4527,6 +4521,15 @@ void notifyEffectsWindowActiveTrackChanged(int trackId)
     notifySidechainWindowTrackChanged(trackId);
     notifyEqWindowTrackChanged(trackId);
     notifyDelayWindowTrackChanged(trackId);
+}
+
+void notifyEffectsWindowTrackValuesChanged(int trackId)
+{
+    notifyModMatrixWindowValuesChanged(trackId);
+    if (gEffectsWindow && IsWindow(gEffectsWindow))
+    {
+        PostMessageW(gEffectsWindow, WM_EFFECTS_REFRESH_VALUES, static_cast<WPARAM>(trackId), 0);
+    }
 }
 
 LRESULT CALLBACK EffectsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
