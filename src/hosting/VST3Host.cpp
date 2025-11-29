@@ -1448,10 +1448,9 @@ void VST3Host::process(float** inputs, int numInputChannels, float** outputs, in
     }
 
     inputEventList_.clear();
-    for (const auto& ev : processEvents_)
+    for (auto ev : processEvents_)
     {
-        Event mutableEvent = ev;
-        inputEventList_.addEvent(mutableEvent);
+        inputEventList_.addEvent(ev);
     }
 
     const auto sampleCount = static_cast<size_t>(numSamples);
