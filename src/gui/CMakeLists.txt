@@ -1,5 +1,6 @@
 add_library(kj_gui STATIC
     gui_main.cpp
+    gui_refresh.cpp
     compressor_window.cpp
     effects_window.cpp
     lfo_window.cpp

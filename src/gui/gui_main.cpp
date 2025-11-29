@@ -895,20 +895,6 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 
 } // namespace
 
-void requestMainMenuRefresh()
-{
-    if (!gMainWindow || !IsWindow(gMainWindow))
-        return;
-
-    if (gViewMenu && IsMenu(gViewMenu))
-    {
-        updateViewMenuChecks();
-        DrawMenuBar(gMainWindow);
-    }
-
-    InvalidateRect(gMainWindow, nullptr, FALSE);
-}
-
 std::unique_ptr<LICE_SysBitmap> gSurface;
 
 struct AudioDeviceDropdownOption
