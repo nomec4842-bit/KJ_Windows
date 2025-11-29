@@ -14,6 +14,7 @@
 namespace kj {
 
 using namespace kj;
+namespace {
 
 static void waitForGuiAttachReady(kj::VST3Host* host)
 {
@@ -26,14 +27,6 @@ static void waitForGuiAttachReady(kj::VST3Host* host)
             break;
         std::this_thread::sleep_for(10ms);
     }
-}
-
-namespace {
-RECT computeWindowRect(const Steinberg::ViewRect& rect, DWORD style, DWORD exStyle)
-{
-    RECT desired {rect.left, rect.top, rect.right, rect.bottom};
-    ::AdjustWindowRectEx(&desired, style, FALSE, exStyle);
-    return desired;
 }
 }
 
@@ -174,24 +167,32 @@ bool VSTEditorWindow::createWindow()
     }
 
     static std::once_flag classFlag;
+    static bool classRegistered = false;
     std::call_once(classFlag, []() {
         WNDCLASSEXW wc {};
         wc.cbSize = sizeof(WNDCLASSEXW);
-        wc.style = CS_DBLCLKS;
+        wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
         wc.lpfnWndProc = &VSTEditorWindow::WndProc;
         wc.hInstance = ::GetModuleHandleW(nullptr);
         wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         wc.lpszClassName = kWindowClass;
-        ::RegisterClassExW(&wc);
+        classRegistered = ::RegisterClassExW(&wc) != 0;
     });
 
-    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    DWORD exStyle = WS_EX_APPWINDOW;
-    RECT desired = computeWindowRect(initialRect, style, exStyle);
+    if (!classRegistered)
+        return false;
 
-    hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT,
-                              desired.right - desired.left, desired.bottom - desired.top, nullptr, nullptr,
+    HWND parent = host->getParentWindowForEditor();
+    if (!::IsWindow(parent))
+        parent = ::GetDesktopWindow();
+
+    const DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    const DWORD exStyle = 0;
+    const int width = std::max<int>(1, initialRect.getWidth() > 0 ? initialRect.getWidth() : 800);
+    const int height = std::max<int>(1, initialRect.getHeight() > 0 ? initialRect.getHeight() : 600);
+
+    hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, 0, 0, width, height, parent, nullptr,
                               ::GetModuleHandleW(nullptr), this);
     if (!hwnd_)
         return false;
