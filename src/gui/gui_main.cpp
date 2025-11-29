@@ -902,10 +902,16 @@ void pianoRollApplyMenuParameter(int parameterIndex,
 
 void requestMainMenuRefresh()
 {
-    if (gMainWindow && IsWindow(gMainWindow))
+    if (!gMainWindow || !IsWindow(gMainWindow))
+        return;
+
+    if (gViewMenu && IsMenu(gViewMenu))
     {
-        InvalidateRect(gMainWindow, nullptr, FALSE);
+        updateViewMenuChecks();
+        DrawMenuBar(gMainWindow);
     }
+
+    InvalidateRect(gMainWindow, nullptr, FALSE);
 }
 
 std::unique_ptr<LICE_SysBitmap> gSurface;
@@ -7101,7 +7107,3 @@ void initGUI()
     }
 }
 
-
-void requestMainMenuRefresh() {
-    // placeholder
-}
