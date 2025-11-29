@@ -97,4 +97,11 @@ target_link_libraries(KJ
     PRIVATE kj_hosting
 )
 
+if (MSVC)
+    # Ensure all GUI symbols are available when linking the Windows executable.
+    # This avoids missing exports like requestMainMenuRefresh() that may
+    # otherwise be omitted when kj_gui is consumed as a static library.
+    target_link_options(KJ PRIVATE "/WHOLEARCHIVE:kj_gui")
+endif()
+
 message(STATUS "KJ configured with VST3 SDK: ${VST3_SDK_DIR}")
