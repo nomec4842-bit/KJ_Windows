@@ -43,6 +43,9 @@
 #include <vector>
 #include <chrono>
 
+HWND gMainWindow = nullptr;
+HMENU gViewMenu = nullptr;
+
 namespace {
 
 std::wstring ToWideString(const std::string& value)
@@ -224,7 +227,6 @@ bool midiPortDropdownOpen = false;
 int midiPortDropdownTrackId = 0;
 bool midiChannelDropdownOpen = false;
 int midiChannelDropdownTrackId = 0;
-HWND gMainWindow = nullptr;
 HWND gPianoRollWindow = nullptr;
 bool gPianoRollClassRegistered = false;
 int gPianoRollSelectedMenuTab = 0;
@@ -237,7 +239,6 @@ HWND gEqWindow = nullptr;
 bool gEqWindowClassRegistered = false;
 HWND gDelayWindow = nullptr;
 bool gDelayWindowClassRegistered = false;
-HMENU gViewMenu = nullptr;
 
 void notifyEffectsWindowTrackListChanged();
 void notifyEffectsWindowActiveTrackChanged(int trackId);
