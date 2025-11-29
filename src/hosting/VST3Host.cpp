@@ -412,6 +412,20 @@ std::wstring Utf8ToWide(const std::string& value)
     return result;
 }
 
+std::string WideToUtf8(const std::wstring& value)
+{
+    if (value.empty())
+        return {};
+
+    int required = ::WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 0)
+        return std::string(value.begin(), value.end());
+
+    std::string result(static_cast<size_t>(required - 1), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), required, nullptr, nullptr);
+    return result;
+}
+
 std::wstring String128ToWide(const Steinberg::Vst::String128& value)
 {
     Steinberg::UString string(const_cast<Steinberg::Vst::String128&>(value), VST3_STRING128_SIZE);
@@ -674,6 +688,27 @@ void VST3Host::waitForProcessingToComplete()
     while (activeProcessCount_.load(std::memory_order_acquire) != 0)
         std::this_thread::yield();
 }
+
+#ifdef _WIN32
+// ------------------------------------------------------------
+// ASYNC PLUGIN LOAD PIPELINE (NEW)
+// ------------------------------------------------------------
+// This replaces all GUI-thread-blocking load code. It runs the
+// ENTIRE VST creation + initialization pipeline off the GUI
+// thread, then signals readiness via loadingCv_.
+// ------------------------------------------------------------
+void VST3Host::loadPluginAsync(const std::wstring& path)
+{
+    std::thread([self = shared_from_this(), path]() {
+        if (!self)
+            return;
+
+        const auto utf8Path = WideToUtf8(path);
+
+        self->load(utf8Path);
+    }).detach();
+}
+#endif
 
 bool VST3Host::waitForPluginReady()
 {
@@ -1928,22 +1963,21 @@ bool VST3Host::ShowPluginEditor()
 {
     auto self = shared_from_this();
 
-    // NEW: Fully async, non-blocking GUI-safe behavior
+    // ------------------------------------------------------------
+    // NEW: Fully async editor creation
     //
-    // 1. waitForPluginReady() runs on a background thread
-    // 2. When the plugin is ready, we hop back onto the GUI thread
-    // 3. Then we create/show the editor window
-    //
-    // This prevents the entire KJ GUI from freezing.
+    // 1. We wait for plugin load off the GUI thread
+    // 2. When loading finishes, we post to GUI thread
+    // ------------------------------------------------------------
     std::thread([self]() {
         if (!self)
             return;
 
-        // Run plugin load wait OFF the GUI thread
+        // Wait OFF the GUI thread
         if (!self->waitForPluginReady())
             return;
 
-        // After plugin is ready, create/show editor on GUI thread
+        // Plugin loaded. Create editor window on GUI thread.
         VSTGuiThread::instance().post([self]() {
             if (!self || !self->controller_)
                 return;
