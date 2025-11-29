@@ -19,16 +19,16 @@ public:
     static std::shared_ptr<VST3AsyncLoader> create(std::shared_ptr<VST3Host> host);
 
     void loadPlugin(const std::wstring& path);
-    void setOnLoaded(std::function<void()> fn);
+    void setOnLoaded(std::function<void(bool success)> fn);
 
 private:
     explicit VST3AsyncLoader(std::shared_ptr<VST3Host> host);
 
     void workerLoad(const std::wstring& path);
-    void notifyLoaded();
+    void notifyLoaded(bool success);
 
     std::weak_ptr<VST3Host> host_;
-    std::function<void()> onLoaded_;
+    std::function<void(bool)> onLoaded_;
 
     std::atomic<bool> loading_ {false};
     std::atomic<bool> loaded_ {false};

@@ -19,7 +19,7 @@ VST3AsyncLoader::VST3AsyncLoader(std::shared_ptr<VST3Host> host)
 {
 }
 
-void VST3AsyncLoader::setOnLoaded(std::function<void()> fn)
+void VST3AsyncLoader::setOnLoaded(std::function<void(bool success)> fn)
 {
     onLoaded_ = std::move(fn);
 }
@@ -46,7 +46,7 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
     {
         failed_.store(true, std::memory_order_release);
         loading_.store(false, std::memory_order_release);
-        notifyLoaded();
+        notifyLoaded(false);
         return;
     }
 
@@ -57,15 +57,15 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
     failed_.store(!success, std::memory_order_release);
     loading_.store(false, std::memory_order_release);
 
-    notifyLoaded();
+    notifyLoaded(success);
 }
 
-void VST3AsyncLoader::notifyLoaded()
+void VST3AsyncLoader::notifyLoaded(bool success)
 {
     auto self = shared_from_this();
-    VSTGuiThread::instance().post([self]() {
+    VSTGuiThread::instance().post([self, success]() {
         if (self->onLoaded_)
-            self->onLoaded_();
+            self->onLoaded_(success);
     });
 }
 
