@@ -5908,7 +5908,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CREATE:
         gMainWindow = hwnd;
         buildStepRects();
-        SetTimer(hwnd, 1, 60, nullptr);
+        // UI heartbeat timer (~66 fps)
+        SetTimer(hwnd, 1, 15, nullptr);
         {
             gViewMenu = nullptr;
             HMENU menuBar = CreateMenu();
@@ -6998,6 +6999,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 MessageBoxW(hwnd, notification.message.c_str(), notification.title.c_str(), MB_OK | MB_ICONERROR);
             }
         }
+        // Soft heartbeat for plugin UIs
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
