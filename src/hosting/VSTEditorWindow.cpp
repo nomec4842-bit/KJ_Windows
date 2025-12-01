@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <future>
 
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
@@ -148,6 +149,25 @@ void VSTEditorWindow::destroyOnGuiThread()
 }
 
 bool VSTEditorWindow::createWindow()
+{
+    auto& guiThread = VSTGuiThread::instance();
+    if (!guiThread.isGuiThread())
+    {
+        bool created = false;
+        auto self = shared_from_this();
+        auto future = guiThread.post([self, &created]() {
+            if (!self)
+                return;
+            created = self->createWindowInternal();
+        });
+        future.wait();
+        return created;
+    }
+
+    return createWindowInternal();
+}
+
+bool VSTEditorWindow::createWindowInternal()
 {
     auto host = host_.lock();
     if (!host)

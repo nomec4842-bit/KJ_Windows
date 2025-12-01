@@ -37,6 +37,7 @@ private:
 
     void showOnGuiThread();
     void destroyOnGuiThread();
+    bool createWindowInternal();
     bool createWindow();
     void Show();
     void detachView();
