@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -25,6 +26,7 @@ private:
     explicit VST3AsyncLoader(std::shared_ptr<VST3Host> host);
 
     void workerLoad(const std::wstring& path);
+    void startQueuedLoadIfNeeded();
     void notifyLoaded(bool success);
 
     std::weak_ptr<VST3Host> host_;
@@ -33,6 +35,9 @@ private:
     std::atomic<bool> loading_ {false};
     std::atomic<bool> loaded_ {false};
     std::atomic<bool> failed_ {false};
+
+    std::mutex queueMutex_;
+    std::optional<std::wstring> queuedPath_;
 };
 
 } // namespace kj
