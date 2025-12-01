@@ -55,6 +55,7 @@ std::future<bool> VSTGuiThread::post(std::function<void()> task)
     }
 
     bool posted = false;
+    DWORD lastError = ERROR_SUCCESS;
     for (int attempt = 0; attempt < 3 && running_.load(std::memory_order_acquire); ++attempt)
     {
         if (::PostThreadMessageW(threadId, kRunTaskMessage, 0, 0))
@@ -62,11 +63,28 @@ std::future<bool> VSTGuiThread::post(std::function<void()> task)
             posted = true;
             break;
         }
+        lastError = ::GetLastError();
         ::Sleep(1);
     }
 
     if (!posted)
-        std::cerr << "[VSTGuiThread] Failed to post wake message to GUI thread." << std::endl;
+    {
+        std::cerr << "[VSTGuiThread] Failed to post wake message to GUI thread (error "
+                  << lastError << ")." << std::endl;
+
+        std::queue<PendingTask> failedTasks;
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            std::swap(failedTasks, tasks_);
+        }
+
+        while (!failedTasks.empty())
+        {
+            auto failed = std::move(failedTasks.front());
+            failedTasks.pop();
+            failed.promise.set_value(false);
+        }
+    }
 
     return future;
 }
