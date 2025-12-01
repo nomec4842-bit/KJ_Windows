@@ -572,7 +572,10 @@ tresult PLUGIN_API VST3Host::HostApplication::createInstance(Steinberg::TUID cid
         if (!attributeList)
             return kOutOfMemory;
 
-        *obj = attributeList.take();
+        // Manually transfer ownership without relying on IPtr::take/forget helper
+        // functions, which are not available in all SDK versions.
+        attributeList->addRef();
+        *obj = attributeList.get();
         return kResultOk;
     }
 
