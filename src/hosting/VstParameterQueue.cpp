@@ -6,7 +6,7 @@ void VstParameterQueue::push_gui_change(Steinberg::Vst::ParamID id, double norma
 {
     std::lock_guard<std::mutex> lock(access_mutex_);
 
-    Steinberg::Vst::ParameterChange change{};
+    ParameterChange change{};
     change.id = id;
     change.value = normalized_value;
     change.sampleOffset = 0;
