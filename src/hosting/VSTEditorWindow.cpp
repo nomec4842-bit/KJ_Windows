@@ -153,7 +153,7 @@ bool VSTEditorWindow::createWindow()
     if (!host)
         return false;
 
-    if (!host->waitForPluginReady())
+    if (!host->isPluginReady())
     {
         std::cerr << "[VST] Plug-in not ready; editor cannot be created." << std::endl;
         return false;
