@@ -794,6 +794,16 @@ bool VST3Host::load(const std::string& pluginPath)
 {
     markLoadStarted();
     bool finished = false;
+    struct LoadScopeGuard
+    {
+        VST3Host& host;
+        bool& finished;
+        ~LoadScopeGuard()
+        {
+            if (!finished)
+                host.markLoadFinished(false);
+        }
+    } guard{*this, finished};
     const auto finish = [this, &finished](bool success) {
         markLoadFinished(success);
         finished = true;
@@ -1003,14 +1013,17 @@ bool VST3Host::load(const std::string& pluginPath)
     catch (const std::exception& e)
     {
         std::cerr << "[KJ] Exception while loading plug-in: " << e.what() << "\n";
+        markLoadFinished(false);
+        finished = true;
+        return false;
     }
     catch (...)
     {
         std::cerr << "[KJ] Unknown exception while loading plug-in.\n";
+        markLoadFinished(false);
+        finished = true;
+        return false;
     }
-
-    if (!finished)
-        finish(false);
 
     return false;
 }
