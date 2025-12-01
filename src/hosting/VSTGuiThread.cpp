@@ -70,6 +70,9 @@ void VSTGuiThread::shutdown()
 
     if (thread_.joinable())
         thread_.join();
+
+    // Ensure the next startup waits for a fresh thread ID rather than using a stale value.
+    threadId_.store(0, std::memory_order_release);
 }
 
 void VSTGuiThread::threadMain()
@@ -103,6 +106,9 @@ void VSTGuiThread::threadMain()
     }
 
     drainTasks();
+
+    // Clear the thread ID so future wakeups won't target a dead GUI thread.
+    threadId_.store(0, std::memory_order_release);
 }
 
 void VSTGuiThread::drainTasks()
