@@ -220,6 +220,7 @@ bool VSTEditorWindow::createWindowInternal()
     DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
     DWORD exStyle = 0;
     HWND windowParent = parent;
+    HWND ownerForPopup = nullptr;
 
     if (parentValid)
     {
@@ -230,7 +231,12 @@ bool VSTEditorWindow::createWindowInternal()
             std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
             style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
             exStyle = WS_EX_TOOLWINDOW;
-            windowParent = parent;
+
+            // The parent belongs to another thread, so pass nullptr to CreateWindowExW
+            // to avoid cross-thread parent/child creation failures. Re-attach as owner
+            // after creation so focus/z-order still follow the host.
+            windowParent = nullptr;
+            ownerForPopup = parent;
         }
     }
 
@@ -241,6 +247,9 @@ bool VSTEditorWindow::createWindowInternal()
                               ::GetModuleHandleW(nullptr), this);
     if (!hwnd_)
         return false;
+
+    if (ownerForPopup)
+        ::SetWindowLongPtrW(hwnd_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(ownerForPopup));
 
     view_ = view;
     plugFrame_ = Steinberg::IPtr<PlugFrame>(new PlugFrame(*host));
