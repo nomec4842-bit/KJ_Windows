@@ -572,7 +572,7 @@ tresult PLUGIN_API VST3Host::HostApplication::createInstance(Steinberg::TUID cid
         if (!attributeList)
             return kOutOfMemory;
 
-        *obj = attributeList.forget();
+        *obj = attributeList.take();
         return kResultOk;
     }
 
