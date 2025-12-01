@@ -212,10 +212,12 @@ bool VSTEditorWindow::createWindowInternal()
     if (!classRegistered)
         return false;
 
+    // If the host does not provide a valid window handle, create a standalone popup window so the
+    // editor can still appear. The popup path bypasses cross-thread parent checks and avoids the
+    // previous desktop fallback, which could prevent the editor from opening when no host window
+    // is available.
     HWND parent = host->getParentWindowForEditor();
     const bool parentValid = ::IsWindow(parent) != FALSE;
-    if (!parentValid)
-        parent = ::GetDesktopWindow();
 
     DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
     DWORD exStyle = 0;
@@ -232,6 +234,13 @@ bool VSTEditorWindow::createWindowInternal()
             exStyle = WS_EX_TOOLWINDOW;
             windowParent = parent;
         }
+    }
+    else
+    {
+        // When the host window is invalid, fall back to a standalone popup so the editor can still show.
+        style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+        exStyle = WS_EX_TOOLWINDOW;
+        windowParent = nullptr;
     }
 
     const int width = std::max<int>(1, initialRect.getWidth() > 0 ? initialRect.getWidth() : 800);
