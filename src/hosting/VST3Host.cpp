@@ -737,12 +737,21 @@ void VST3Host::loadPluginAsync(const std::wstring& path)
     if (!loader_)
         loader_ = VST3AsyncLoader::create(self);
 
-    loader_->setOnLoaded([self](bool success) {
+    auto callback = onPluginLoaded_;
+    loader_->setOnLoaded([self, callback](bool success) {
+        if (callback)
+            callback(success);
+
         if (self && success)
             self->ShowPluginEditor();
     });
 
     loader_->loadPlugin(path);
+}
+
+void VST3Host::setOnPluginLoaded(std::function<void(bool)> callback)
+{
+    onPluginLoaded_ = std::move(callback);
 }
 #endif
 

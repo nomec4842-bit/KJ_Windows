@@ -5888,16 +5888,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         else if (host && host->isPluginLoading())
         {
-            std::thread([host = std::move(host), trackId, parent = hwnd]() {
-                if (host->waitUntilReady())
-                {
-                    PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
-                }
-                else
-                {
-                    std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
-                }
-            }).detach();
+            std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
         }
         else
         {
@@ -6618,16 +6609,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (vstEditorLoading)
                 {
                     std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
-                    std::thread([host = activeVstHost, trackId = activeTrackId, parent = hwnd]() {
-                        if (host->waitUntilReady())
-                        {
-                            PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
-                        }
-                        else
-                        {
-                            std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
-                        }
-                    }).detach();
                 }
                 else
                 {
@@ -6677,33 +6658,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 std::wcout << L"[GUI] Selected plug-in path does not exist: " << pluginPath.c_str() << std::endl;
             }
 
-            if (requestTrackVstLoad(activeTrackId, pluginPath))
+            auto host = trackEnsureVstHost(activeTrackId);
+            if (!host)
             {
-                std::cout << "[GUI] Enqueued VST3 plug-in load: " << pluginPath.string() << std::endl;
+                std::cerr << "[GUI] Failed to obtain VST3 host for track." << std::endl;
+                return 0;
+            }
 
-                auto host = trackGetVstHost(activeTrackId);
-                if (host)
+            host->setOnPluginLoaded([parent = hwnd, trackId = activeTrackId](bool success) {
+                if (success)
                 {
-                    std::thread([host = std::move(host), trackId = activeTrackId, parent = hwnd]() {
-                        if (host->waitUntilReady())
-                        {
-                            PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
-                        }
-                        else
-                        {
-                            std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
-                        }
-                    }).detach();
+                    PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
                 }
                 else
                 {
-                    std::cerr << "[GUI] VST3 host was not available after enqueueing load." << std::endl;
+                    std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
                 }
-            }
-            else
-            {
-                std::cout << "[GUI] Failed to enqueue VST3 plug-in load: " << pluginPath.string() << std::endl;
-            }
+            });
+
+            host->loadPluginAsync(pluginPath.wstring());
+            std::cout << "[GUI] Requested async VST3 plug-in load: " << pluginPath.string() << std::endl;
 
             return 0;
         }
