@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -38,7 +39,7 @@ private:
     void showOnGuiThread();
     void destroyOnGuiThread();
     bool createWindowInternal();
-    bool createWindow();
+    std::future<bool> createWindow();
     void Show();
     void detachView();
     void onResize(UINT width, UINT height);
