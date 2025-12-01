@@ -1932,38 +1932,55 @@ std::wstring VST3Host::getPluginDisplayName() const
 bool VST3Host::createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect,
                                      std::string& platformType)
 {
-    if (!controller_ || !controllerInitialized_)
-        return false;
+    auto createOnGui = [this, &outView, &rect, &platformType]() -> bool {
+        if (!controller_ || !controllerInitialized_)
+            return false;
 
-    platformType.clear();
-    const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
-                                                           : requestedViewType_.c_str();
+        platformType.clear();
+        const char* preferredType = requestedViewType_.empty() ? Steinberg::Vst::ViewType::kEditor
+                                                               : requestedViewType_.c_str();
 
-    std::string usedType;
-    if (!createViewForRequestedType(preferredType, outView, usedType, platformType))
-    {
-        showGenericEditorFallback();
-        return false;
-    }
+        std::string usedType;
+        if (!createViewForRequestedType(preferredType, outView, usedType, platformType))
+        {
+            showGenericEditorFallback();
+            return false;
+        }
 
-    if (!outView || platformType.empty())
-    {
-        showGenericEditorFallback();
-        return false;
-    }
+        if (!outView || platformType.empty())
+        {
+            showGenericEditorFallback();
+            return false;
+        }
 
-    if (outView->getSize(&rect) != kResultTrue)
-    {
-        rect.left = 0;
-        rect.top = 0;
-        rect.right = 800;
-        rect.bottom = 600;
-    }
+        if (outView->getSize(&rect) != kResultTrue)
+        {
+            rect.left = 0;
+            rect.top = 0;
+            rect.right = 800;
+            rect.bottom = 600;
+        }
 
-    currentViewType_ = usedType;
-    currentPlatformType_ = platformType;
-    fallbackVisible_ = false;
-    return true;
+        currentViewType_ = usedType;
+        currentPlatformType_ = platformType;
+        fallbackVisible_ = false;
+        return true;
+    };
+
+    auto& guiThread = VSTGuiThread::instance();
+    if (guiThread.isGuiThread())
+        return createOnGui();
+
+    bool success = false;
+    auto self = shared_from_this();
+    auto future = guiThread.post([self, &success, createOnGui]() mutable {
+        if (!self)
+            return;
+        success = createOnGui();
+    });
+
+    future.wait();
+    return success;
 }
 
 bool VST3Host::resizePluginViewWindow(HWND window, const Steinberg::ViewRect& rect)
