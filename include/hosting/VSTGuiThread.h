@@ -38,6 +38,8 @@ private:
     std::atomic<DWORD> threadId_ {0};
     std::thread thread_;
     std::atomic<bool> running_ {false};
+    std::condition_variable threadStartedCv_;
+    std::mutex threadStartMutex_;
 
     struct PendingTask
     {
