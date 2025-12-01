@@ -6,6 +6,7 @@
 #include "hosting/VSTGuiThread.h"
 
 #include <filesystem>
+#include <iostream>
 
 namespace kj {
 
@@ -28,7 +29,18 @@ void VST3AsyncLoader::loadPlugin(const std::wstring& path)
 {
     bool expected = false;
     if (!loading_.compare_exchange_strong(expected, true))
+    {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex_);
+            queuedPath_ = path;
+        }
+
+        std::wcerr << L"[KJ] Plug-in load request suppressed because a load is already in progress: "
+                    << path << std::endl;
+
+        notifyLoaded(false);
         return;
+    }
 
     loaded_.store(false, std::memory_order_release);
     failed_.store(false, std::memory_order_release);
@@ -58,6 +70,24 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
     loading_.store(false, std::memory_order_release);
 
     notifyLoaded(success);
+
+    startQueuedLoadIfNeeded();
+}
+
+void VST3AsyncLoader::startQueuedLoadIfNeeded()
+{
+    std::optional<std::wstring> queuedPath;
+    {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        if (queuedPath_)
+        {
+            queuedPath = std::move(queuedPath_);
+            queuedPath_.reset();
+        }
+    }
+
+    if (queuedPath)
+        loadPlugin(*queuedPath);
 }
 
 void VST3AsyncLoader::notifyLoaded(bool success)
