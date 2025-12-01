@@ -46,6 +46,7 @@ using namespace kj;
 #include "pluginterfaces/vst/vstspeaker.h"
 #include "public.sdk/source/vst/vstcomponent.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
+#include "public.sdk/source/vst/hosting/hostclasses.h"
 
 using namespace VST3::Hosting;
 using namespace Steinberg;
@@ -497,6 +498,11 @@ float GetContentScaleForWindow(HWND hwnd)
 
 namespace kj {
 
+VST3Host::HostApplication::HostApplication()
+    : interfaceSupport_(Steinberg::owned(new Steinberg::Vst::PlugInterfaceSupport()))
+{
+}
+
 tresult PLUGIN_API VST3Host::HostApplication::queryInterface(const TUID _iid, void** obj)
 {
     if (!obj)
@@ -507,6 +513,9 @@ tresult PLUGIN_API VST3Host::HostApplication::queryInterface(const TUID _iid, vo
         *obj = static_cast<Steinberg::Vst::IHostApplication*>(this);
     else if (std::memcmp(_iid, Steinberg::FUnknown::iid, sizeof(TUID)) == 0)
         *obj = static_cast<Steinberg::FUnknown*>(static_cast<Steinberg::Vst::IHostApplication*>(this));
+
+    if (interfaceSupport_ && interfaceSupport_->queryInterface(_iid, obj) == kResultOk)
+        return kResultOk;
 
     if (*obj)
     {
@@ -539,11 +548,33 @@ tresult PLUGIN_API VST3Host::HostApplication::getName(Steinberg::Vst::String128 
 
 tresult PLUGIN_API VST3Host::HostApplication::createInstance(Steinberg::TUID cid, Steinberg::TUID iid, void** obj)
 {
-    (void)cid;
-    (void)iid;
+    if (!obj)
+        return kInvalidArgument;
 
-    if (obj)
-        *obj = nullptr;
+    *obj = nullptr;
+
+    const bool isMessageRequest = std::memcmp(cid, Steinberg::Vst::IMessage::iid, sizeof(TUID)) == 0 &&
+                                  std::memcmp(iid, Steinberg::Vst::IMessage::iid, sizeof(TUID)) == 0;
+    const bool isAttributeRequest = std::memcmp(cid, Steinberg::Vst::IAttributeList::iid, sizeof(TUID)) == 0 &&
+                                    std::memcmp(iid, Steinberg::Vst::IAttributeList::iid, sizeof(TUID)) == 0;
+
+    if (isMessageRequest)
+    {
+        auto* message = new Steinberg::Vst::HostMessage();
+        message->addRef();
+        *obj = static_cast<Steinberg::Vst::IMessage*>(message);
+        return kResultOk;
+    }
+
+    if (isAttributeRequest)
+    {
+        auto attributeList = Steinberg::Vst::HostAttributeList::make();
+        if (!attributeList)
+            return kOutOfMemory;
+
+        *obj = attributeList.forget();
+        return kResultOk;
+    }
 
     return kNoInterface;
 }
