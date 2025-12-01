@@ -12,6 +12,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -57,6 +58,7 @@ public:
     bool load(const std::string& path);
 #ifdef _WIN32
     void loadPluginAsync(const std::wstring& path);
+    void setOnPluginLoaded(std::function<void(bool)> callback);
 #endif
     void showPluginUI(void* parentWindowHandle);
     bool ShowPluginEditor();
@@ -274,6 +276,7 @@ private:
 #ifdef _WIN32
     // Async loader
     std::shared_ptr<VST3AsyncLoader> loader_;
+    std::function<void(bool)> onPluginLoaded_;
 #endif
 
     HostApplication hostApplication_ {};
