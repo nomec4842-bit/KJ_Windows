@@ -39,19 +39,24 @@ std::future<bool> VSTGuiThread::post(std::function<void()> task)
         tasks_.push(std::move(pending));
     }
 
-    if (threadId_.load(std::memory_order_acquire) != 0)
-        ::PostThreadMessageW(threadId_.load(std::memory_order_acquire), kRunTaskMessage, 0, 0);
+    const auto threadId = threadId_.load(std::memory_order_acquire);
+    if (threadId != 0)
+        ::PostThreadMessageW(threadId, kRunTaskMessage, 0, 0);
 
     return future;
 }
 
 void VSTGuiThread::ensureStarted()
 {
-    if (running_.load(std::memory_order_acquire))
-        return;
+    bool expectedRunning = false;
+    if (running_.compare_exchange_strong(expectedRunning, true, std::memory_order_acq_rel))
+        thread_ = std::thread([this]() { threadMain(); });
 
-    running_.store(true, std::memory_order_release);
-    thread_ = std::thread([this]() { threadMain(); });
+    std::unique_lock<std::mutex> lock(threadStartMutex_);
+    threadStartedCv_.wait(lock, [this]() {
+        return threadId_.load(std::memory_order_acquire) != 0
+            || !running_.load(std::memory_order_acquire);
+    });
 }
 
 void VSTGuiThread::shutdown()
@@ -72,6 +77,13 @@ void VSTGuiThread::threadMain()
     threadId_.store(::GetCurrentThreadId(), std::memory_order_release);
 
     MSG msg {};
+    ::PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE);
+
+    {
+        std::lock_guard<std::mutex> lock(threadStartMutex_);
+        threadStartedCv_.notify_all();
+    }
+
     while (running_.load(std::memory_order_acquire))
     {
         BOOL result = ::GetMessageW(&msg, nullptr, 0, 0);
