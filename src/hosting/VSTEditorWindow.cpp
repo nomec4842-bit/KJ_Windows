@@ -213,15 +213,31 @@ bool VSTEditorWindow::createWindowInternal()
         return false;
 
     HWND parent = host->getParentWindowForEditor();
-    if (!::IsWindow(parent))
+    const bool parentValid = ::IsWindow(parent) != FALSE;
+    if (!parentValid)
         parent = ::GetDesktopWindow();
 
-    const DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-    const DWORD exStyle = 0;
+    DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    DWORD exStyle = 0;
+    HWND windowParent = parent;
+
+    if (parentValid)
+    {
+        const DWORD parentThread = ::GetWindowThreadProcessId(parent, nullptr);
+        const DWORD currentThread = ::GetCurrentThreadId();
+        if (parentThread != 0 && parentThread != currentThread)
+        {
+            std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
+            style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+            exStyle = WS_EX_TOOLWINDOW;
+            windowParent = parent;
+        }
+    }
+
     const int width = std::max<int>(1, initialRect.getWidth() > 0 ? initialRect.getWidth() : 800);
     const int height = std::max<int>(1, initialRect.getHeight() > 0 ? initialRect.getHeight() : 600);
 
-    hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, 0, 0, width, height, parent, nullptr,
+    hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, 0, 0, width, height, windowParent, nullptr,
                               ::GetModuleHandleW(nullptr), this);
     if (!hwnd_)
         return false;
