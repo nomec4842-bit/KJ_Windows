@@ -34,14 +34,39 @@ std::future<bool> VSTGuiThread::post(std::function<void()> task)
     pending.fn = std::move(task);
     auto future = pending.promise.get_future();
 
+    std::unique_lock<std::mutex> startLock(threadStartMutex_);
+    threadStartedCv_.wait(startLock, [this]() {
+        return threadId_.load(std::memory_order_acquire) != 0
+            || !running_.load(std::memory_order_acquire);
+    });
+
+    const auto threadId = threadId_.load(std::memory_order_acquire);
+    if (threadId == 0)
+    {
+        pending.promise.set_value(false);
+        return future;
+    }
+
+    startLock.unlock();
+
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         tasks_.push(std::move(pending));
     }
 
-    const auto threadId = threadId_.load(std::memory_order_acquire);
-    if (threadId != 0)
-        ::PostThreadMessageW(threadId, kRunTaskMessage, 0, 0);
+    bool posted = false;
+    for (int attempt = 0; attempt < 3 && running_.load(std::memory_order_acquire); ++attempt)
+    {
+        if (::PostThreadMessageW(threadId, kRunTaskMessage, 0, 0))
+        {
+            posted = true;
+            break;
+        }
+        ::Sleep(1);
+    }
+
+    if (!posted)
+        std::cerr << "[VSTGuiThread] Failed to post wake message to GUI thread." << std::endl;
 
     return future;
 }
