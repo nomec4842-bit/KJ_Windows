@@ -791,6 +791,7 @@ void VST3Host::markLoadStarted()
     std::lock_guard<std::mutex> lock(loadingMutex_);
     loadingInProgress_ = true;
     pluginReady_ = false;
+    guiAttachReady_.store(false, std::memory_order_release);
 }
 
 void VST3Host::markLoadFinished(bool success)
@@ -1850,6 +1851,8 @@ void VST3Host::unloadLocked()
     destroyPluginUI();
 #endif
 
+    guiAttachReady_.store(false, std::memory_order_release);
+
     if (processor_)
         processor_->setProcessing(false);
 
@@ -2050,6 +2053,8 @@ void VST3Host::clearCurrentViewRect()
 
 bool VST3Host::ShowPluginEditor()
 {
+    waitForGuiAttachReady(this);
+
     auto self = shared_from_this();
 
     VSTGuiThread::instance().post([self]() {
