@@ -27,14 +27,64 @@ void VST3AsyncLoader::setOnLoaded(std::function<void(bool success)> fn)
     onLoaded_ = std::move(fn);
 }
 
-void VST3AsyncLoader::loadPlugin(const std::wstring& path)
+namespace
+{
+
+const wchar_t* apartmentName(COINIT apartment)
+{
+    switch (apartment)
+    {
+    case COINIT_APARTMENTTHREADED:
+        return L"COINIT_APARTMENTTHREADED";
+    case COINIT_MULTITHREADED:
+        return L"COINIT_MULTITHREADED";
+    default:
+        return L"(unknown COINIT)";
+    }
+}
+
+struct ComInitializationResult
+{
+    bool initialized {false};
+    bool usedFallback {false};
+    COINIT apartmentMode {COINIT_APARTMENTTHREADED};
+    HRESULT hr {S_OK};
+};
+
+ComInitializationResult initializeCom(COINIT requested)
+{
+    ComInitializationResult result{};
+    result.apartmentMode = requested;
+    result.hr = CoInitializeEx(nullptr, requested);
+    if (SUCCEEDED(result.hr))
+    {
+        result.initialized = true;
+        return result;
+    }
+
+    if (result.hr == RPC_E_CHANGED_MODE)
+    {
+        result.usedFallback = true;
+        result.apartmentMode = (requested == COINIT_APARTMENTTHREADED) ? COINIT_MULTITHREADED
+                                                                      : COINIT_APARTMENTTHREADED;
+        result.hr = CoInitializeEx(nullptr, result.apartmentMode);
+        if (SUCCEEDED(result.hr))
+            result.initialized = true;
+    }
+
+    return result;
+}
+
+} // namespace
+
+void VST3AsyncLoader::loadPlugin(const std::wstring& path, COINIT comApartment)
 {
     bool expected = false;
     if (!loading_.compare_exchange_strong(expected, true))
     {
         {
             std::lock_guard<std::mutex> lock(queueMutex_);
-            queuedPath_ = path;
+            queuedRequest_ = QueuedLoadRequest{path, comApartment};
         }
 
         std::wcerr << L"[KJ] Plug-in load request suppressed because a load is already in progress: "
@@ -48,19 +98,25 @@ void VST3AsyncLoader::loadPlugin(const std::wstring& path)
     failed_.store(false, std::memory_order_release);
 
     auto self = shared_from_this();
-    std::thread([self, path]() {
-        self->workerLoad(path);
+    std::thread([self, path, comApartment]() {
+        self->workerLoad(path, comApartment);
     }).detach();
 }
 
-void VST3AsyncLoader::workerLoad(const std::wstring& path)
+void VST3AsyncLoader::workerLoad(const std::wstring& path, COINIT comApartment)
 {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool comInitialized = SUCCEEDED(hr);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+    const auto comInit = initializeCom(comApartment);
+    if (comInit.initialized)
+    {
+        std::wcerr << L"[KJ] VST3 loader initialized COM with "
+                    << apartmentName(comInit.apartmentMode)
+                    << (comInit.usedFallback ? L" after RPC_E_CHANGED_MODE" : L"")
+                    << L" (HRESULT=0x" << std::hex << comInit.hr << std::dec << L")" << std::endl;
+    }
+    else if (FAILED(comInit.hr))
     {
         std::wcerr << L"[KJ] Failed to initialize COM for VST3 load (CoInitializeEx HRESULT=0x"
-                    << std::hex << hr << std::dec << L")" << std::endl;
+                    << std::hex << comInit.hr << std::dec << L")" << std::endl;
     }
 
     auto host = host_.lock();
@@ -69,17 +125,17 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
         failed_.store(true, std::memory_order_release);
         loading_.store(false, std::memory_order_release);
         notifyLoaded(false);
-        if (comInitialized)
+        if (comInit.initialized)
             CoUninitialize();
         return;
     }
 
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+    if (FAILED(comInit.hr))
     {
         failed_.store(true, std::memory_order_release);
         loading_.store(false, std::memory_order_release);
         notifyLoaded(false);
-        if (comInitialized)
+        if (comInit.initialized)
             CoUninitialize();
         startQueuedLoadIfNeeded();
         return;
@@ -92,7 +148,7 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
     failed_.store(!success, std::memory_order_release);
     loading_.store(false, std::memory_order_release);
 
-    if (comInitialized)
+    if (comInit.initialized)
         CoUninitialize();
 
     notifyLoaded(success);
@@ -102,18 +158,18 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
 
 void VST3AsyncLoader::startQueuedLoadIfNeeded()
 {
-    std::optional<std::wstring> queuedPath;
+    std::optional<QueuedLoadRequest> queuedRequest;
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
-        if (queuedPath_)
+        if (queuedRequest_)
         {
-            queuedPath = std::move(queuedPath_);
-            queuedPath_.reset();
+            queuedRequest = std::move(queuedRequest_);
+            queuedRequest_.reset();
         }
     }
 
-    if (queuedPath)
-        loadPlugin(*queuedPath);
+    if (queuedRequest)
+        loadPlugin(queuedRequest->path, queuedRequest->comApartment);
 }
 
 void VST3AsyncLoader::notifyLoaded(bool success)
