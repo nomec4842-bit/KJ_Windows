@@ -5,6 +5,8 @@
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
 
+#include <objbase.h>
+
 #include <filesystem>
 #include <iostream>
 
@@ -53,12 +55,33 @@ void VST3AsyncLoader::loadPlugin(const std::wstring& path)
 
 void VST3AsyncLoader::workerLoad(const std::wstring& path)
 {
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool comInitialized = SUCCEEDED(hr);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+    {
+        std::wcerr << L"[KJ] Failed to initialize COM for VST3 load (CoInitializeEx HRESULT=0x"
+                    << std::hex << hr << std::dec << L")" << std::endl;
+    }
+
     auto host = host_.lock();
     if (!host)
     {
         failed_.store(true, std::memory_order_release);
         loading_.store(false, std::memory_order_release);
         notifyLoaded(false);
+        if (comInitialized)
+            CoUninitialize();
+        return;
+    }
+
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
+    {
+        failed_.store(true, std::memory_order_release);
+        loading_.store(false, std::memory_order_release);
+        notifyLoaded(false);
+        if (comInitialized)
+            CoUninitialize();
+        startQueuedLoadIfNeeded();
         return;
     }
 
@@ -68,6 +91,9 @@ void VST3AsyncLoader::workerLoad(const std::wstring& path)
     loaded_.store(success, std::memory_order_release);
     failed_.store(!success, std::memory_order_release);
     loading_.store(false, std::memory_order_release);
+
+    if (comInitialized)
+        CoUninitialize();
 
     notifyLoaded(success);
 
