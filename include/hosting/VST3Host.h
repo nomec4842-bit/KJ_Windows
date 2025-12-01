@@ -36,6 +36,7 @@
 #include "base/source/fobject.h"
 
 #include "public.sdk/source/vst/hosting/module.h"
+#include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 
@@ -215,7 +216,7 @@ private:
     class HostApplication : public Steinberg::Vst::IHostApplication
     {
     public:
-        HostApplication() = default;
+        HostApplication();
 
         // IUnknown
         Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID _iid, void** obj) override;
@@ -228,6 +229,7 @@ private:
 
     private:
         std::atomic<Steinberg::uint32> refCount_ {1};
+        Steinberg::IPtr<Steinberg::Vst::PlugInterfaceSupport> interfaceSupport_;
     };
 
 #ifdef _WIN32
