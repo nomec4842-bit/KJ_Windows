@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <objbase.h>
 #pragma comment(lib, "comctl32.lib")
 #endif
 
@@ -750,7 +751,16 @@ void VST3Host::loadPluginAsync(const std::wstring& path)
         });
     }
 
-    loader_->loadPlugin(path);
+    COINIT comApartment = COINIT_APARTMENTTHREADED;
+    APTTYPE apartmentType = APTTYPE_STA;
+    APTTYPEQUALIFIER qualifier = APTTYPEQUALIFIER_NONE;
+    if (SUCCEEDED(CoGetApartmentType(&apartmentType, &qualifier)))
+    {
+        if (apartmentType == APTTYPE_MTA || apartmentType == APTTYPE_NA)
+            comApartment = COINIT_MULTITHREADED;
+    }
+
+    loader_->loadPlugin(path, comApartment);
 }
 
 void VST3Host::setOnPluginLoaded(std::function<void(bool)> callback)
