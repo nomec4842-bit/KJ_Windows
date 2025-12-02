@@ -87,10 +87,8 @@ void VST3AsyncLoader::loadPlugin(const std::wstring& path, COINIT comApartment)
             queuedRequest_ = QueuedLoadRequest{path, comApartment};
         }
 
-        std::wcerr << L"[KJ] Plug-in load request suppressed because a load is already in progress: "
+        std::wcerr << L"[KJ] Deferring plug-in load while another load is in progress: "
                     << path << std::endl;
-
-        notifyLoaded(false);
         return;
     }
 
