@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <future>
+#include <mutex>
 
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
