@@ -450,8 +450,6 @@ bool VSTEditorWindow::createWindowInternal()
     // editor can still appear. The popup path bypasses cross-thread parent checks and avoids the
     // previous desktop fallback, which could prevent the editor from opening when no host window
     // is available.
-    auto& guiThread = VSTGuiThread::instance();
-
     HWND parent = host->getParentWindowForEditor();
     bool parentValid = ::IsWindow(parent) != FALSE;
     const DWORD currentThread = ::GetCurrentThreadId();
