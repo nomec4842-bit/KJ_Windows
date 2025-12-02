@@ -10,9 +10,137 @@
 #include <thread>
 #include <future>
 #include <mutex>
+#include <array>
+#include <cwctype>
 
 #include "hosting/VST3Host.h"
 #include "hosting/VSTGuiThread.h"
+#include "pluginterfaces/base/keycodes.h"
+
+namespace
+{
+Steinberg::int16 translateVirtualKeyFromVK(WPARAM vk)
+{
+    using Steinberg::CharToVirtualKeyCode;
+
+    switch (vk)
+    {
+    case VK_BACK: return Steinberg::KEY_BACK;
+    case VK_TAB: return Steinberg::KEY_TAB;
+    case VK_CLEAR: return Steinberg::KEY_CLEAR;
+    case VK_RETURN: return Steinberg::KEY_RETURN;
+    case VK_PAUSE: return Steinberg::KEY_PAUSE;
+    case VK_ESCAPE: return Steinberg::KEY_ESCAPE;
+    case VK_SPACE: return Steinberg::KEY_SPACE;
+    case VK_PRIOR: return Steinberg::KEY_PAGEUP;
+    case VK_NEXT: return Steinberg::KEY_PAGEDOWN;
+    case VK_END: return Steinberg::KEY_END;
+    case VK_HOME: return Steinberg::KEY_HOME;
+    case VK_LEFT: return Steinberg::KEY_LEFT;
+    case VK_UP: return Steinberg::KEY_UP;
+    case VK_RIGHT: return Steinberg::KEY_RIGHT;
+    case VK_DOWN: return Steinberg::KEY_DOWN;
+    case VK_SNAPSHOT: return Steinberg::KEY_SNAPSHOT;
+    case VK_INSERT: return Steinberg::KEY_INSERT;
+    case VK_DELETE: return Steinberg::KEY_DELETE;
+    case VK_HELP: return Steinberg::KEY_HELP;
+    case VK_NUMPAD0: return Steinberg::KEY_NUMPAD0;
+    case VK_NUMPAD1: return Steinberg::KEY_NUMPAD1;
+    case VK_NUMPAD2: return Steinberg::KEY_NUMPAD2;
+    case VK_NUMPAD3: return Steinberg::KEY_NUMPAD3;
+    case VK_NUMPAD4: return Steinberg::KEY_NUMPAD4;
+    case VK_NUMPAD5: return Steinberg::KEY_NUMPAD5;
+    case VK_NUMPAD6: return Steinberg::KEY_NUMPAD6;
+    case VK_NUMPAD7: return Steinberg::KEY_NUMPAD7;
+    case VK_NUMPAD8: return Steinberg::KEY_NUMPAD8;
+    case VK_NUMPAD9: return Steinberg::KEY_NUMPAD9;
+    case VK_MULTIPLY: return Steinberg::KEY_MULTIPLY;
+    case VK_ADD: return Steinberg::KEY_ADD;
+    case VK_SEPARATOR: return Steinberg::KEY_SEPARATOR;
+    case VK_SUBTRACT: return Steinberg::KEY_SUBTRACT;
+    case VK_DECIMAL: return Steinberg::KEY_DECIMAL;
+    case VK_DIVIDE: return Steinberg::KEY_DIVIDE;
+    case VK_F1: return Steinberg::KEY_F1;
+    case VK_F2: return Steinberg::KEY_F2;
+    case VK_F3: return Steinberg::KEY_F3;
+    case VK_F4: return Steinberg::KEY_F4;
+    case VK_F5: return Steinberg::KEY_F5;
+    case VK_F6: return Steinberg::KEY_F6;
+    case VK_F7: return Steinberg::KEY_F7;
+    case VK_F8: return Steinberg::KEY_F8;
+    case VK_F9: return Steinberg::KEY_F9;
+    case VK_F10: return Steinberg::KEY_F10;
+    case VK_F11: return Steinberg::KEY_F11;
+    case VK_F12: return Steinberg::KEY_F12;
+    case VK_F13: return Steinberg::KEY_F13;
+    case VK_F14: return Steinberg::KEY_F14;
+    case VK_F15: return Steinberg::KEY_F15;
+    case VK_F16: return Steinberg::KEY_F16;
+    case VK_F17: return Steinberg::KEY_F17;
+    case VK_F18: return Steinberg::KEY_F18;
+    case VK_F19: return Steinberg::KEY_F19;
+    case VK_F20: return Steinberg::KEY_F20;
+    case VK_F21: return Steinberg::KEY_F21;
+    case VK_F22: return Steinberg::KEY_F22;
+    case VK_F23: return Steinberg::KEY_F23;
+    case VK_F24: return Steinberg::KEY_F24;
+    case VK_NUMLOCK: return Steinberg::KEY_NUMLOCK;
+    case VK_SCROLL: return Steinberg::KEY_SCROLL;
+    case VK_SHIFT: return Steinberg::KEY_SHIFT;
+    case VK_CONTROL: return Steinberg::KEY_CONTROL;
+    case VK_MENU: return Steinberg::KEY_ALT;
+    case VK_APPS: return Steinberg::KEY_CONTEXTMENU;
+    case VK_LWIN:
+    case VK_RWIN: return Steinberg::KEY_SUPER;
+    default:
+        break;
+    }
+
+    if (vk >= 'A' && vk <= 'Z')
+        return CharToVirtualKeyCode(static_cast<Steinberg::tchar>(vk));
+
+    if (vk >= 'a' && vk <= 'z')
+        return CharToVirtualKeyCode(static_cast<Steinberg::tchar>(std::towupper(static_cast<wchar_t>(vk))));
+
+    if (vk >= '0' && vk <= '9')
+        return CharToVirtualKeyCode(static_cast<Steinberg::tchar>(vk));
+
+    return 0;
+}
+
+Steinberg::int16 currentKeyModifiers()
+{
+    Steinberg::int16 modifiers = 0;
+    if (::GetKeyState(VK_SHIFT) & 0x8000)
+        modifiers |= Steinberg::kShiftKey;
+    if (::GetKeyState(VK_MENU) & 0x8000)
+        modifiers |= Steinberg::kAlternateKey;
+    if (::GetKeyState(VK_CONTROL) & 0x8000)
+        modifiers |= Steinberg::kCommandKey;
+    if ((::GetKeyState(VK_LWIN) & 0x8000) || (::GetKeyState(VK_RWIN) & 0x8000))
+        modifiers |= Steinberg::kControlKey;
+    return modifiers;
+}
+
+Steinberg::char16 translateCharacter(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_CHAR)
+        return static_cast<Steinberg::char16>(wParam);
+
+    std::array<BYTE, 256> keyState {};
+    if (!::GetKeyboardState(keyState.data()))
+        return 0;
+
+    WCHAR chars[4] = {0};
+    UINT scanCode = static_cast<UINT>((lParam >> 16) & 0xff);
+    int result = ::ToUnicode(static_cast<UINT>(wParam), scanCode, keyState.data(), chars, 4, 0);
+    if (result > 0)
+        return static_cast<Steinberg::char16>(chars[0]);
+
+    return 0;
+}
+
+} // namespace
 
 namespace kj {
 
@@ -480,6 +608,26 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     }
 
     auto* window = reinterpret_cast<VSTEditorWindow*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    const auto viewReady = [&](const VSTEditorWindow* target) {
+        return target && target->view_ && target->attached_;
+    };
+
+    const auto forwardKeyEvent = [&](UINT message, bool isKeyDown) {
+        if (!viewReady(window))
+            return false;
+
+        const Steinberg::char16 character = translateCharacter(message, wParam, lParam);
+        const Steinberg::int16 virtualKey =
+            message == WM_CHAR ? Steinberg::CharToVirtualKeyCode(static_cast<Steinberg::tchar>(wParam))
+                               : translateVirtualKeyFromVK(wParam);
+        const Steinberg::int16 modifiers = currentKeyModifiers();
+
+        const auto result = isKeyDown ? window->view_->onKeyDown(character, virtualKey, modifiers)
+                                      : window->view_->onKeyUp(character, virtualKey, modifiers);
+
+        return result == Steinberg::kResultOk;
+    };
+
     switch (msg)
     {
     case WM_SIZE:
@@ -487,56 +635,48 @@ LRESULT CALLBACK VSTEditorWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
             window->onResize(LOWORD(lParam), HIWORD(lParam));
         return 0;
     case WM_SETFOCUS:
-        if (window && window->view_)
-        {
-            if (auto host = window->host_.lock())
-            {
-                window->view_->onFocus(static_cast<Steinberg::TBool>(true));
-            }
-            else
-            {
-                window->view_->onFocus(static_cast<Steinberg::TBool>(true));
-            }
-        }
+        if (viewReady(window))
+            window->view_->onFocus(static_cast<Steinberg::TBool>(true));
         return 0;
     case WM_KILLFOCUS:
-        if (window && window->view_)
-        {
-            if (auto host = window->host_.lock())
-            {
-                window->view_->onFocus(static_cast<Steinberg::TBool>(false));
-            }
-            else
-            {
-                window->view_->onFocus(static_cast<Steinberg::TBool>(false));
-            }
-        }
+        if (viewReady(window))
+            window->view_->onFocus(static_cast<Steinberg::TBool>(false));
         return 0;
     case WM_DESTROY:
         if (window)
             window->detachView();
         return 0;
+    case WM_MOUSEWHEEL:
+        if (viewReady(window))
+        {
+            const auto result = window->view_->onWheel(static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) /
+                                                       static_cast<float>(WHEEL_DELTA));
+            if (result == Steinberg::kResultOk)
+                return 0;
+        }
+        break;
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+        if (window)
+            ::SetFocus(hwnd);
+        break;
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        if (forwardKeyEvent(msg, true))
+            return 0;
+        break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        if (forwardKeyEvent(msg, false))
+            return 0;
+        break;
+    case WM_CHAR:
+        if (forwardKeyEvent(msg, true))
+            return 0;
+        break;
     default:
         break;
-    }
-
-    if (window && window->view_)
-    {
-        switch (msg)
-        {
-        case WM_MOUSEWHEEL:
-            if (auto host = window->host_.lock())
-            {
-                window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
-            }
-            else
-            {
-                window->view_->onWheel(GET_WHEEL_DELTA_WPARAM(wParam));
-            }
-            return 0;
-        default:
-            break;
-        }
     }
 
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
