@@ -5,7 +5,9 @@
 #include "core/track_type_vst.h"
 #include "hosting/VST3Host.h"
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <iostream>
 #include <commdlg.h>
 #include <filesystem>
@@ -22,6 +24,69 @@ LRESULT CALLBACK SafeParentWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 {
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
+class VSTGuiThread::RunLoop : public Steinberg::Linux::IRunLoop
+{
+public:
+    explicit RunLoop(VSTGuiThread& thread) : thread_(thread) {}
+
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override
+    {
+        if (!obj)
+            return Steinberg::kInvalidArgument;
+
+        *obj = nullptr;
+
+        if (std::memcmp(iid, Steinberg::Linux::IRunLoop::iid, sizeof(Steinberg::TUID)) == 0 ||
+            std::memcmp(iid, Steinberg::FUnknown::iid, sizeof(Steinberg::TUID)) == 0)
+        {
+            *obj = static_cast<Steinberg::Linux::IRunLoop*>(this);
+            addRef();
+            return Steinberg::kResultOk;
+        }
+
+        return Steinberg::kNoInterface;
+    }
+
+    Steinberg::uint32 PLUGIN_API addRef() override { return ++refCount_; }
+
+    Steinberg::uint32 PLUGIN_API release() override
+    {
+        auto newCount = --refCount_;
+        if (newCount == 0)
+            delete this;
+        return newCount;
+    }
+
+    Steinberg::tresult PLUGIN_API registerEventHandler(Steinberg::Linux::IEventHandler* handler,
+                                                       Steinberg::Linux::FileDescriptor fd) override
+    {
+        (void)handler;
+        (void)fd;
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API unregisterEventHandler(Steinberg::Linux::IEventHandler* handler) override
+    {
+        (void)handler;
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API registerTimer(Steinberg::Linux::ITimerHandler* handler,
+                                                Steinberg::Linux::TimerInterval milliseconds) override
+    {
+        return thread_.registerTimerHandler(handler, milliseconds);
+    }
+
+    Steinberg::tresult PLUGIN_API unregisterTimer(Steinberg::Linux::ITimerHandler* handler) override
+    {
+        return thread_.unregisterTimerHandler(handler);
+    }
+
+private:
+    std::atomic<Steinberg::uint32> refCount_ {1};
+    VSTGuiThread& thread_;
+};
 
 } // namespace
 
@@ -41,6 +106,14 @@ VSTGuiThread& VSTGuiThread::instance()
 bool VSTGuiThread::isGuiThread() const
 {
     return threadId_.load(std::memory_order_acquire) == ::GetCurrentThreadId();
+}
+
+Steinberg::IPtr<Steinberg::Linux::IRunLoop> VSTGuiThread::getRunLoop()
+{
+    ensureStarted();
+    if (!runLoop_)
+        runLoop_ = Steinberg::IPtr<RunLoop>(new RunLoop(*this));
+    return runLoop_;
 }
 
 std::future<bool> VSTGuiThread::post(std::function<void()> task)
@@ -228,9 +301,17 @@ void VSTGuiThread::threadMain()
             continue;
         }
 
+        if (msg.message == WM_TIMER)
+        {
+            handleTimer(static_cast<UINT_PTR>(msg.wParam));
+            continue;
+        }
+
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
+
+    clearTimersOnGuiThread();
 
     auto parent = safeParentWindow_.load(std::memory_order_acquire);
     if (parent && ::IsWindow(parent))
@@ -275,6 +356,163 @@ void VSTGuiThread::drainTasks()
             task.promise.set_value(false);
         }
     }
+}
+
+Steinberg::tresult VSTGuiThread::registerTimerHandler(Steinberg::Linux::ITimerHandler* handler,
+                                                      Steinberg::Linux::TimerInterval milliseconds)
+{
+    if (!handler || milliseconds <= 0)
+        return Steinberg::kInvalidArgument;
+
+    ensureStarted();
+
+    auto promise = std::make_shared<std::promise<Steinberg::tresult>>();
+    auto future = promise->get_future();
+
+    auto task = [this, handler, milliseconds, promise]() {
+        promise->set_value(registerTimerInternal(handler, milliseconds));
+    };
+
+    if (isGuiThread())
+    {
+        task();
+    }
+    else
+    {
+        auto postResult = post(task);
+        if (!postResult.valid())
+            return Steinberg::kInternalError;
+        postResult.wait();
+    }
+
+    try
+    {
+        return future.get();
+    }
+    catch (...)
+    {
+        return Steinberg::kInternalError;
+    }
+}
+
+Steinberg::tresult VSTGuiThread::unregisterTimerHandler(Steinberg::Linux::ITimerHandler* handler)
+{
+    if (!handler)
+        return Steinberg::kInvalidArgument;
+
+    ensureStarted();
+
+    auto promise = std::make_shared<std::promise<Steinberg::tresult>>();
+    auto future = promise->get_future();
+
+    auto task = [this, handler, promise]() {
+        promise->set_value(unregisterTimerInternal(handler));
+    };
+
+    if (isGuiThread())
+    {
+        task();
+    }
+    else
+    {
+        auto postResult = post(task);
+        if (!postResult.valid())
+            return Steinberg::kInternalError;
+        postResult.wait();
+    }
+
+    try
+    {
+        return future.get();
+    }
+    catch (...)
+    {
+        return Steinberg::kInternalError;
+    }
+}
+
+Steinberg::tresult VSTGuiThread::registerTimerInternal(Steinberg::Linux::ITimerHandler* handler,
+                                                       Steinberg::Linux::TimerInterval milliseconds)
+{
+    std::lock_guard<std::mutex> lock(timerMutex_);
+
+    auto existing = timerIdsByHandler_.find(handler);
+    if (existing != timerIdsByHandler_.end())
+    {
+        auto timerId = existing->second;
+        ::KillTimer(nullptr, timerId);
+        timersById_.erase(timerId);
+        timerIdsByHandler_.erase(existing);
+    }
+
+    UINT_PTR timerId = nextTimerId_.fetch_add(1, std::memory_order_relaxed);
+    if (timerId == 0)
+        timerId = nextTimerId_.fetch_add(1, std::memory_order_relaxed);
+
+    const UINT interval = static_cast<UINT>(std::max<Steinberg::Linux::TimerInterval>(1, milliseconds));
+    if (::SetTimer(nullptr, timerId, interval, nullptr) == 0)
+        return Steinberg::kInternalError;
+
+    handler->addRef();
+    timersById_[timerId] = Steinberg::IPtr<Steinberg::Linux::ITimerHandler>(handler, false);
+    timerIdsByHandler_[handler] = timerId;
+    return Steinberg::kResultOk;
+}
+
+Steinberg::tresult VSTGuiThread::unregisterTimerInternal(Steinberg::Linux::ITimerHandler* handler)
+{
+    std::lock_guard<std::mutex> lock(timerMutex_);
+
+    auto it = timerIdsByHandler_.find(handler);
+    if (it == timerIdsByHandler_.end())
+        return Steinberg::kResultFalse;
+
+    const UINT_PTR timerId = it->second;
+    timerIdsByHandler_.erase(it);
+
+    auto entry = timersById_.find(timerId);
+    if (entry != timersById_.end())
+        timersById_.erase(entry);
+
+    ::KillTimer(nullptr, timerId);
+    return Steinberg::kResultOk;
+}
+
+void VSTGuiThread::handleTimer(UINT_PTR timerId)
+{
+    Steinberg::IPtr<Steinberg::Linux::ITimerHandler> handler;
+    {
+        std::lock_guard<std::mutex> lock(timerMutex_);
+        auto it = timersById_.find(timerId);
+        if (it != timersById_.end())
+            handler = it->second;
+    }
+
+    if (handler)
+    {
+        try
+        {
+            handler->onTimer();
+        }
+        catch (const std::exception& ex)
+        {
+            std::cerr << "[VSTGuiThread] Timer handler threw exception: " << ex.what() << std::endl;
+        }
+        catch (...)
+        {
+            std::cerr << "[VSTGuiThread] Timer handler threw unknown exception." << std::endl;
+        }
+    }
+}
+
+void VSTGuiThread::clearTimersOnGuiThread()
+{
+    std::lock_guard<std::mutex> lock(timerMutex_);
+    for (const auto& entry : timerIdsByHandler_)
+        ::KillTimer(nullptr, entry.second);
+
+    timerIdsByHandler_.clear();
+    timersById_.clear();
 }
 
 std::filesystem::path getDefaultVstPluginPath()

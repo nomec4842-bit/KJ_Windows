@@ -3,6 +3,7 @@
 #include "hosting/VST3PlugFrame.h"
 
 #include <cstring>
+#include <utility>
 
 #include "hosting/VST3Host.h"
 
@@ -20,6 +21,11 @@ void PlugFrame::setActiveView(Steinberg::IPlugView* view)
     activeView_ = view;
     if (!view)
         clearCachedRect();
+}
+
+void PlugFrame::setRunLoop(Steinberg::IPtr<Steinberg::Linux::IRunLoop> runLoop)
+{
+    runLoop_ = std::move(runLoop);
 }
 
 void PlugFrame::setCachedRect(const Steinberg::ViewRect& rect)
@@ -46,6 +52,13 @@ Steinberg::tresult PLUGIN_API PlugFrame::queryInterface(const Steinberg::TUID ii
     {
         *obj = static_cast<Steinberg::IPlugFrame*>(this);
         addRef();
+        return Steinberg::kResultOk;
+    }
+
+    if (runLoop_ && std::memcmp(iid, Steinberg::Linux::IRunLoop::iid, sizeof(Steinberg::TUID)) == 0)
+    {
+        *obj = runLoop_.get();
+        runLoop_->addRef();
         return Steinberg::kResultOk;
     }
 
