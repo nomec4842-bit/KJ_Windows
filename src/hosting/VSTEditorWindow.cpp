@@ -393,6 +393,13 @@ std::future<bool> VSTEditorWindow::createWindow()
 
 bool VSTEditorWindow::createWindowInternal()
 {
+    auto& guiThread = VSTGuiThread::instance();
+    if (!guiThread.isGuiThread())
+    {
+        std::cerr << "[VST] A VST window must be created by the thread that runs the message loop." << std::endl;
+        return false;
+    }
+
     auto host = host_.lock();
     if (!host)
         return false;
