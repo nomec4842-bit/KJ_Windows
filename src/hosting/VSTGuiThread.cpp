@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(_WIN64)
+#error "VSTGuiThread is only supported on Windows; ensure _WIN32 or _WIN64 is defined."
+#endif
+
 #ifdef _WIN32
 
 #include "hosting/VSTGuiThread.h"
