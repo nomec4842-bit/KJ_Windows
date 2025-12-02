@@ -23,7 +23,7 @@ void PlugFrame::setActiveView(Steinberg::IPlugView* view)
         clearCachedRect();
 }
 
-void PlugFrame::setRunLoop(Steinberg::IPtr<Steinberg::Linux::IRunLoop> runLoop)
+void PlugFrame::setRunLoop(Steinberg::IPtr<Steinberg::FUnknown> runLoop)
 {
     runLoop_ = std::move(runLoop);
 }
@@ -52,13 +52,6 @@ Steinberg::tresult PLUGIN_API PlugFrame::queryInterface(const Steinberg::TUID ii
     {
         *obj = static_cast<Steinberg::IPlugFrame*>(this);
         addRef();
-        return Steinberg::kResultOk;
-    }
-
-    if (runLoop_ && std::memcmp(iid, Steinberg::Linux::IRunLoop::iid, sizeof(Steinberg::TUID)) == 0)
-    {
-        *obj = runLoop_.get();
-        runLoop_->addRef();
         return Steinberg::kResultOk;
     }
 

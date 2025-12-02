@@ -21,7 +21,7 @@ public:
     void setActiveView(Steinberg::IPlugView* view);
     void setCachedRect(const Steinberg::ViewRect& rect);
     void clearCachedRect();
-    void setRunLoop(Steinberg::IPtr<Steinberg::Linux::IRunLoop> runLoop);
+    void setRunLoop(Steinberg::IPtr<Steinberg::FUnknown> runLoop);
 
     // IPlugFrame
     Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override;
@@ -36,7 +36,7 @@ private:
     Steinberg::IPlugView* activeView_ = nullptr;
     Steinberg::ViewRect cachedRect_ {};
     bool hasCachedRect_ = false;
-    Steinberg::IPtr<Steinberg::Linux::IRunLoop> runLoop_;
+    Steinberg::IPtr<Steinberg::FUnknown> runLoop_;
 };
 
 } // namespace kj

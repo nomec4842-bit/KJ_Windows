@@ -105,7 +105,7 @@ public:
     std::mutex& vst3Mutex() { return vst3Mutex_; }
 
 #ifdef _WIN32
-    Steinberg::IPtr<Steinberg::Linux::IRunLoop> getRunLoop();
+    Steinberg::IPtr<Steinberg::FUnknown> getRunLoop();
     std::wstring getPluginDisplayName() const;
     bool createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outView, Steinberg::ViewRect& rect,
                                std::string& platformType);
@@ -335,7 +335,7 @@ private:
 #ifdef _WIN32
     std::wstring pluginNameW_;
     std::wstring pluginVendorW_;
-    Steinberg::IPtr<Steinberg::Linux::IRunLoop> runLoop_;
+    Steinberg::IPtr<Steinberg::FUnknown> runLoop_;
     std::vector<FallbackParameter> fallbackParameters_;
     bool fallbackVisible_ = false;
     Steinberg::int32 fallbackSelectedIndex_ = -1;

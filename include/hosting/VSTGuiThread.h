@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <windows.h>
 
+#include "pluginterfaces/base/funknown.h"
 #include "hosting/VST3Host.h"
 #include "pluginterfaces/gui/iplugview.h"
 
@@ -37,6 +38,13 @@ struct VstUiState
 class VSTGuiThread
 {
 public:
+    using RunLoopPtr =
+#if SMTG_OS_LINUX
+        Steinberg::IPtr<Steinberg::Linux::IRunLoop>;
+#else
+        Steinberg::IPtr<Steinberg::FUnknown>;
+#endif
+
     static VSTGuiThread& instance();
 
     VSTGuiThread(const VSTGuiThread&) = delete;
@@ -46,11 +54,16 @@ public:
     bool isGuiThread() const;
     void shutdown();
     HWND ensureSafeParentWindow();
-    Steinberg::IPtr<Steinberg::Linux::IRunLoop> getRunLoop();
+    RunLoopPtr getRunLoop();
 
+#if SMTG_OS_LINUX
     Steinberg::tresult registerTimerHandler(Steinberg::Linux::ITimerHandler* handler,
                                             Steinberg::Linux::TimerInterval milliseconds);
     Steinberg::tresult unregisterTimerHandler(Steinberg::Linux::ITimerHandler* handler);
+#else
+    Steinberg::tresult registerTimerHandler(void* handler, Steinberg::uint32 milliseconds = 0);
+    Steinberg::tresult unregisterTimerHandler(void* handler);
+#endif
 
 private:
     VSTGuiThread();
@@ -60,13 +73,18 @@ private:
     void threadMain();
     void drainTasks();
     HWND createSafeParentWindowOnGuiThread();
-    Steinberg::tresult registerTimerInternal(Steinberg::Linux::ITimerHandler* handler,
-                                             Steinberg::Linux::TimerInterval milliseconds);
+#if SMTG_OS_LINUX
+    Steinberg::tresult registerTimerInternal(
+        Steinberg::Linux::ITimerHandler* handler,
+        Steinberg::Linux::TimerInterval milliseconds);
     Steinberg::tresult unregisterTimerInternal(Steinberg::Linux::ITimerHandler* handler);
     void handleTimer(UINT_PTR timerId);
     void clearTimersOnGuiThread();
+#endif
 
+#if SMTG_OS_LINUX
     class RunLoop;
+#endif
 
     static constexpr UINT kRunTaskMessage = WM_APP + 0x230;
 
@@ -85,11 +103,13 @@ private:
     std::mutex queueMutex_;
     std::queue<PendingTask> tasks_;
 
+#if SMTG_OS_LINUX
     std::atomic<UINT_PTR> nextTimerId_ {1};
     std::mutex timerMutex_;
     std::unordered_map<UINT_PTR, Steinberg::IPtr<Steinberg::Linux::ITimerHandler>> timersById_;
     std::unordered_map<Steinberg::Linux::ITimerHandler*, UINT_PTR> timerIdsByHandler_;
-    Steinberg::IPtr<RunLoop> runLoop_;
+#endif
+    RunLoopPtr runLoop_;
 
     std::atomic<HWND> safeParentWindow_ {nullptr};
     std::once_flag safeParentWindowClassRegistered_;
