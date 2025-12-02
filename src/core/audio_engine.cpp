@@ -1392,7 +1392,7 @@ void sequencerWarmupLoop()
 
     while (running.load(std::memory_order_acquire))
     {
-        if (audioSequencerReady.load(std::memory_order_acquire))
+        if (!audioSequencerReady.load(std::memory_order_acquire))
         {
             lastUpdate = Clock::time_point{};
             stepSampleCounter = 0.0;
