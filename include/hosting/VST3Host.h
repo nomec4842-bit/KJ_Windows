@@ -255,7 +255,7 @@ private:
     friend class VSTGuiThread;
 #endif
 
-    friend void waitForGuiAttachReady(VST3Host* host);
+    friend bool waitForGuiAttachReady(VST3Host* host);
 
     void queueParameterChange(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value, bool notifyController = true);
     void onControllerParameterChanged(Steinberg::Vst::ParamID paramId, Steinberg::Vst::ParamValue value);

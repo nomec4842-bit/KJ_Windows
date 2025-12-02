@@ -245,6 +245,7 @@ void VSTEditorWindow::Show()
 
     if (view_->setFrame(plugFrame_) != Steinberg::kResultOk)
     {
+        std::cerr << "[VST] Failed to set plug-in view frame before attachment." << std::endl;
         detachView();
         return;
     }
@@ -283,6 +284,7 @@ void VSTEditorWindow::Show()
         }
         else
         {
+            std::cerr << "[VST] Plug-in view attachment failed for platform '" << self->platformType_ << "'." << std::endl;
             self->detachView();
         }
     };
@@ -443,7 +445,10 @@ bool VSTEditorWindow::createWindowInternal()
     });
 
     if (!classRegistered)
+    {
+        std::cerr << "[VST] Failed to register VST3 editor window class." << std::endl;
         return false;
+    }
 
     // If the host does not provide a valid window handle, create a standalone popup window so the
     // editor can still appear. The popup path bypasses cross-thread parent checks and avoids the
@@ -527,7 +532,10 @@ bool VSTEditorWindow::createWindowInternal()
     hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, 0, 0, width, height, windowParent, nullptr,
                               ::GetModuleHandleW(nullptr), this);
     if (!hwnd_)
+    {
+        std::cerr << "[VST] CreateWindowEx failed for VST3 editor window." << std::endl;
         return false;
+    }
 
     if (ownerForPopup)
         ::SetWindowLongPtrW(hwnd_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(ownerForPopup));
