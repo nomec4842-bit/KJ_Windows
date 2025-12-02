@@ -95,8 +95,6 @@ private:
     VSTGuiThread& thread_;
 };
 
-} // namespace
-
 VSTGuiThread::VSTGuiThread() = default;
 VSTGuiThread::~VSTGuiThread()
 {
