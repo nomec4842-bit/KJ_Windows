@@ -4,14 +4,29 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <filesystem>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
 #include <windows.h>
 
+struct Track;
+
 namespace kj {
+
+class VST3Host;
+
+struct VstUiState
+{
+    bool showLoader = false;
+    bool editorAvailable = false;
+    bool editorLoading = false;
+    std::shared_ptr<VST3Host> host;
+};
 
 class VSTGuiThread
 {
@@ -51,7 +66,13 @@ private:
     std::queue<PendingTask> tasks_;
 };
 
+constexpr UINT kShowVstEditorMessage = WM_APP + 40;
+
+VstUiState queryVstUiState(int activeTrackId, const ::Track* activeTrack);
+bool handleShowVstEditor(HWND parent, int trackId);
+bool promptAndLoadVstPlugin(HWND parent, int trackId);
+std::filesystem::path getDefaultVstPluginPath();
+
 } // namespace kj
 
 #endif // _WIN32
-

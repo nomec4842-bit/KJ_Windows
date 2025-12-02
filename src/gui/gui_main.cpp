@@ -13,7 +13,7 @@
 #include "gui/compressor_window.h"
 #include "gui/mod_matrix_window.h"
 #include "gui/waveform_window.h"
-#include "hosting/VST3Host.h"
+#include "hosting/VSTGuiThread.h"
 #include "wdl/lice/lice.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -114,17 +114,6 @@ std::string formatDelayPercentValue(float value)
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(1) << (value * 100.0f) << " %";
     return stream.str();
-}
-
-std::filesystem::path getDefaultVstPluginPath()
-{
-    std::array<wchar_t, MAX_PATH> buffer{};
-    DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length == 0 || length == buffer.size())
-        return {};
-
-    std::filesystem::path exePath(buffer.data());
-    return exePath.parent_path() / L"plugins" / L"TestPlugin.vst3";
 }
 
 std::string formatNormalizedValue(float value)
@@ -337,7 +326,6 @@ constexpr UINT WM_DELAY_SET_TRACK = WM_APP + 21;
 constexpr UINT WM_SIDECHAIN_REFRESH_VALUES = WM_APP + 30;
 constexpr UINT WM_SIDECHAIN_SET_TRACK = WM_APP + 31;
 constexpr UINT WM_SIDECHAIN_RELOAD_TRACKS = WM_APP + 32;
-constexpr UINT WM_SHOW_VST_EDITOR = WM_APP + 40;
 
 struct PianoRollLayout
 {
@@ -5428,9 +5416,7 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
     bool showMidiChannelSelector = false;
     bool showMidiPortSelector = false;
     SynthWaveType activeWaveType = SynthWaveType::Sine;
-    std::shared_ptr<kj::VST3Host> activeVstHost;
-    bool vstEditorAvailable = false;
-    bool vstEditorLoading = false;
+    kj::VstUiState vstUiState{};
     int activeMidiChannel = 1;
     int activeMidiPort = -1;
     std::wstring activeMidiPortName;
@@ -5453,21 +5439,12 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
             activeMidiPortName = activeTrackPtr->midiPortName;
             break;
         case TrackType::VST:
-            showVstLoader = true;
-            activeVstHost = activeTrackPtr->vstHost;
             break;
         }
     }
 
-    if (!activeVstHost && activeTrackId > 0)
-    {
-        activeVstHost = trackGetVstHost(activeTrackId);
-    }
-    if (activeVstHost)
-    {
-        vstEditorAvailable = activeVstHost->isPluginReady();
-        vstEditorLoading = activeVstHost->isPluginLoading();
-    }
+    vstUiState = kj::queryVstUiState(activeTrackId, activeTrackPtr);
+    showVstLoader = vstUiState.showLoader;
 
     if (waveDropdownOpen && (!showWaveSelector || waveDropdownTrackId != activeTrackId))
     {
@@ -5499,9 +5476,9 @@ void renderUI(LICE_SysBitmap& surface, const RECT& client)
                    RGB(50, 50, 50), RGB(120, 120, 120),
                    "Load VST");
 
-        COLORREF showFill = vstEditorAvailable ? RGB(50, 50, 50) : (vstEditorLoading ? RGB(40, 40, 40) : RGB(30, 30, 30));
-        COLORREF showOutline = vstEditorAvailable ? RGB(120, 120, 120) : (vstEditorLoading ? RGB(100, 100, 100) : RGB(80, 80, 80));
-        const char* showLabel = vstEditorLoading ? "Show VST (Loading)" : "Show VST";
+        COLORREF showFill = vstUiState.editorAvailable ? RGB(50, 50, 50) : (vstUiState.editorLoading ? RGB(40, 40, 40) : RGB(30, 30, 30));
+        COLORREF showOutline = vstUiState.editorAvailable ? RGB(120, 120, 120) : (vstUiState.editorLoading ? RGB(100, 100, 100) : RGB(80, 80, 80));
+        const char* showLabel = vstUiState.editorLoading ? "Show VST (Loading)" : "Show VST";
         drawButton(surface, showVstButton, showFill, showOutline, showLabel);
     }
     else if (showMidiChannelSelector)
@@ -5878,24 +5855,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
-    case WM_SHOW_VST_EDITOR:
-    {
-        int trackId = static_cast<int>(wParam);
-        auto host = trackGetVstHost(trackId);
-        if (host && host->isPluginReady())
-        {
-            host->showPluginUI(hwnd);
-        }
-        else if (host && host->isPluginLoading())
-        {
-            std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
-        }
-        else
-        {
-            std::cout << "[GUI] VST3 plug-in editor request received but plug-in is not ready." << std::endl;
-        }
-        return 0;
-    }
+    case kj::kShowVstEditorMessage:
+        if (kj::handleShowVstEditor(hwnd, static_cast<int>(wParam)))
+            return 0;
+        break;
     case WM_CREATE:
         gMainWindow = hwnd;
         buildStepRects();
@@ -6064,9 +6027,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         bool showWaveSelector = false;
         bool showMidiChannelSelector = false;
         bool showMidiPortSelector = false;
-        std::shared_ptr<kj::VST3Host> activeVstHost;
-        bool vstEditorAvailable = false;
-        bool vstEditorLoading = false;
+        kj::VstUiState vstUiState{};
         if (const Track* activeTrack = findTrackById(tracks, activeTrackId))
         {
             showSampleLoader = activeTrack->type == TrackType::Sample;
@@ -6074,10 +6035,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showWaveSelector = activeTrack->type == TrackType::Synth;
             showMidiChannelSelector = activeTrack->type == TrackType::MidiOut;
             showMidiPortSelector = activeTrack->type == TrackType::MidiOut;
-            if (showVstLoader)
-            {
-                activeVstHost = activeTrack->vstHost;
-            }
+            vstUiState = kj::queryVstUiState(activeTrackId, activeTrack);
         }
         else if (activeTrackId > 0)
         {
@@ -6087,16 +6045,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             showWaveSelector = trackType == TrackType::Synth;
             showMidiChannelSelector = trackType == TrackType::MidiOut;
             showMidiPortSelector = trackType == TrackType::MidiOut;
-            if (showVstLoader)
-            {
-                activeVstHost = trackGetVstHost(activeTrackId);
-            }
-        }
-
-        if (activeVstHost)
-        {
-            vstEditorAvailable = activeVstHost->isPluginReady();
-            vstEditorLoading = activeVstHost->isPluginLoading();
+            vstUiState = kj::queryVstUiState(activeTrackId, nullptr);
         }
 
         if (!showWaveSelector)
@@ -6590,23 +6539,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         if (showVstLoader && pointInRect(showVstButton, x, y))
         {
-            if (!activeVstHost)
-            {
-                activeVstHost = trackGetVstHost(activeTrackId);
-            }
-
-            if (!activeVstHost)
+            if (!vstUiState.host)
             {
                 std::cout << "[GUI] No VST host available for track." << std::endl;
                 return 0;
             }
 
-            vstEditorAvailable = activeVstHost->isPluginReady();
-            vstEditorLoading = activeVstHost->isPluginLoading();
-
-            if (!vstEditorAvailable)
+            if (!vstUiState.editorAvailable)
             {
-                if (vstEditorLoading)
+                if (vstUiState.editorLoading)
                 {
                     std::cout << "[GUI] VST3 plug-in is still loading; editor will open when ready." << std::endl;
                 }
@@ -6617,68 +6558,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 return 0;
             }
 
-            PostMessageW(hwnd, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(activeTrackId), 0);
+            PostMessageW(hwnd, kj::kShowVstEditorMessage, static_cast<WPARAM>(activeTrackId), 0);
             return 0;
         }
 
         if (showVstLoader && pointInRect(loadVstButton, x, y))
         {
-            wchar_t fileBuffer[MAX_PATH] = {0};
-            OPENFILENAMEW ofn = {0};
-            ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = hwnd;
-            ofn.lpstrFilter = L"VST3 Plug-ins\0*.vst3\0All Files\0*.*\0";
-            ofn.lpstrFile = fileBuffer;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-            ofn.lpstrDefExt = L"vst3";
-
-            std::filesystem::path pluginPath;
-            if (GetOpenFileNameW(&ofn))
-            {
-                pluginPath = std::filesystem::path(fileBuffer);
-            }
-            else
-            {
-                pluginPath = getDefaultVstPluginPath();
-                if (!pluginPath.empty())
-                {
-                    std::wcout << L"[GUI] Using default VST3 path: " << pluginPath.c_str() << std::endl;
-                }
-            }
-
-            if (pluginPath.empty())
-            {
-                std::cout << "[GUI] No VST3 plug-in selected." << std::endl;
-                return 0;
-            }
-
-            if (!std::filesystem::exists(pluginPath))
-            {
-                std::wcout << L"[GUI] Selected plug-in path does not exist: " << pluginPath.c_str() << std::endl;
-            }
-
-            auto host = trackEnsureVstHost(activeTrackId);
-            if (!host)
-            {
-                std::cerr << "[GUI] Failed to obtain VST3 host for track." << std::endl;
-                return 0;
-            }
-
-            host->setOnPluginLoaded([parent = hwnd, trackId = activeTrackId](bool success) {
-                if (success)
-                {
-                    PostMessageW(parent, WM_SHOW_VST_EDITOR, static_cast<WPARAM>(trackId), 0);
-                }
-                else
-                {
-                    std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
-                }
-            });
-
-            host->loadPluginAsync(pluginPath.wstring());
-            std::cout << "[GUI] Requested async VST3 plug-in load: " << pluginPath.string() << std::endl;
-
+            kj::promptAndLoadVstPlugin(hwnd, activeTrackId);
             return 0;
         }
 
