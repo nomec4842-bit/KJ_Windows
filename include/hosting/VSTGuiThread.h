@@ -14,11 +14,11 @@
 #include <thread>
 #include <windows.h>
 
+#include "hosting/VST3Host.h"
+
 struct Track;
 
 namespace kj {
-
-class VST3Host;
 
 struct VstUiState
 {
