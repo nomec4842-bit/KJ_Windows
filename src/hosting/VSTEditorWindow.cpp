@@ -534,6 +534,7 @@ bool VSTEditorWindow::createWindowInternal()
 
     view_ = view;
     plugFrame_ = Steinberg::IPtr<PlugFrame>(new PlugFrame(*host));
+    plugFrame_->setRunLoop(host->getRunLoop());
     plugFrame_->setHostWindow(hwnd_);
     plugFrame_->setActiveView(view_);
     plugFrame_->setCachedRect(initialRect);

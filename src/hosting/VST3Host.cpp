@@ -874,6 +874,12 @@ bool VST3Host::load(const std::string& pluginPath)
             return finish(false);
         }
 
+#ifdef _WIN32
+        runLoop_ = getRunLoop();
+        if (runLoop_)
+            module->setHostContext(runLoop_.get());
+#endif
+
         auto factory = module->getFactory();
         auto factory3 = Steinberg::FUnknownPtr<Steinberg::IPluginFactory3>(factory.get());
         if (!factory3)
@@ -1981,6 +1987,13 @@ void VST3Host::setGuiAttachReady(bool state)
 }
 
 #ifdef _WIN32
+
+Steinberg::IPtr<Steinberg::Linux::IRunLoop> VST3Host::getRunLoop()
+{
+    if (!runLoop_)
+        runLoop_ = VSTGuiThread::instance().getRunLoop();
+    return runLoop_;
+}
 
 std::wstring VST3Host::getPluginDisplayName() const
 {
