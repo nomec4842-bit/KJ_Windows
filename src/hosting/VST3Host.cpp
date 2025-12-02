@@ -773,10 +773,31 @@ bool VST3Host::waitForPluginReady()
 {
     std::unique_lock<std::mutex> lock(loadingMutex_);
     constexpr auto kLoadTimeout = std::chrono::seconds(10);
-    if (!loadingCv_.wait_for(lock, kLoadTimeout, [this] { return !loadingInProgress_; }))
+    const auto deadline = std::chrono::steady_clock::now() + kLoadTimeout;
+
+    while (loadingInProgress_)
     {
-        std::cerr << "[KJ] Timed out while waiting for the plug-in to finish loading.\n";
-        return false;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+        {
+            std::cerr << "[KJ] Timed out while waiting for the plug-in to finish loading.\n";
+            return false;
+        }
+
+        const auto nextWake = std::min(deadline, now + std::chrono::milliseconds(15));
+        loadingCv_.wait_until(lock, nextWake, [this] { return !loadingInProgress_; });
+
+#ifdef _WIN32
+        // Keep the UI responsive while we wait by draining the message queue.
+        lock.unlock();
+        MSG msg {};
+        while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            ::TranslateMessage(&msg);
+            ::DispatchMessageW(&msg);
+        }
+        lock.lock();
+#endif
     }
 
     if (!pluginReady_)
