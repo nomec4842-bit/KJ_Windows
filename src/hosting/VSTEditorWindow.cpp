@@ -183,39 +183,28 @@ void VSTEditorWindow::showOnGuiThread()
     if (!hwnd_ || !::IsWindow(hwnd_))
     {
         auto self = shared_from_this();
-        auto creationFuture = createWindow();
 
-        std::thread([self, future = std::move(creationFuture)]() mutable {
-            bool created = false;
-            try
-            {
-                created = future.get();
-            }
-            catch (const std::exception& ex)
-            {
-                std::cerr << "[VST] Exception while creating VST3 editor window: " << ex.what() << std::endl;
-            }
-            catch (...)
-            {
-                std::cerr << "[VST] Unknown exception while creating VST3 editor window." << std::endl;
-            }
+        bool created = false;
+        try
+        {
+            created = createWindow().get();
+        }
+        catch (const std::exception& ex)
+        {
+            std::cerr << "[VST] Exception while creating VST3 editor window: " << ex.what() << std::endl;
+        }
+        catch (...)
+        {
+            std::cerr << "[VST] Unknown exception while creating VST3 editor window." << std::endl;
+        }
 
-            auto& gui = VSTGuiThread::instance();
-            auto onReady = [self, created]() {
-                if (!created)
-                {
-                    std::cerr << "[VST] Failed to create VST3 editor window." << std::endl;
-                    return;
-                }
-                self->Show();
-            };
+        if (!created)
+        {
+            std::cerr << "[VST] Failed to create VST3 editor window." << std::endl;
+            return;
+        }
 
-            if (gui.isGuiThread())
-                onReady();
-            else
-                gui.post(onReady);
-        }).detach();
-
+        Show();
         return;
     }
 
