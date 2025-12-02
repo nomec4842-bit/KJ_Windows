@@ -393,8 +393,8 @@ std::future<bool> VSTEditorWindow::createWindow()
 
 bool VSTEditorWindow::createWindowInternal()
 {
-    auto& guiThread = VSTGuiThread::instance();
-    if (!guiThread.isGuiThread())
+    auto& guiThreadInstance = VSTGuiThread::instance();
+    if (!guiThreadInstance.isGuiThread())
     {
         std::cerr << "[VST] A VST window must be created by the thread that runs the message loop." << std::endl;
         return false;
@@ -468,7 +468,7 @@ bool VSTEditorWindow::createWindowInternal()
         const DWORD parentThread = ::GetWindowThreadProcessId(parent, nullptr);
         if (parentThread != 0 && parentThread != currentThread)
         {
-            safeParent = guiThread.ensureSafeParentWindow();
+            safeParent = guiThreadInstance.ensureSafeParentWindow();
             usingSafeParent = safeParent && ::IsWindow(safeParent);
             parentValid = usingSafeParent;
             windowParent = usingSafeParent ? safeParent : nullptr;
@@ -490,7 +490,7 @@ bool VSTEditorWindow::createWindowInternal()
     }
     else
     {
-        safeParent = guiThread.ensureSafeParentWindow();
+        safeParent = guiThreadInstance.ensureSafeParentWindow();
         usingSafeParent = safeParent && ::IsWindow(safeParent);
         parentValid = usingSafeParent;
         windowParent = usingSafeParent ? safeParent : nullptr;
