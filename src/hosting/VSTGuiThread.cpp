@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
-#include <iostream>
 #include <commdlg.h>
+#include <cstring>
 #include <filesystem>
+#include <iostream>
+#include <mutex>
+#include <queue>
 #include <utility>
 
 namespace kj {
