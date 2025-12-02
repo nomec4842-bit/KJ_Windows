@@ -61,7 +61,11 @@ bool waitForGuiAttachReady(VST3Host* host)
         return false;
 
     using namespace std::chrono_literals;
-    const auto timeout = std::chrono::steady_clock::now() + 2s;
+    // Give the asynchronous loader ample time to finish so the editor can attach. Some plug-ins
+    // take several seconds to initialize on slower machines, and the shorter 2s grace period could
+    // return early and prevent the UI from showing even though the plug-in eventually finishes
+    // loading.
+    const auto timeout = std::chrono::steady_clock::now() + 10s;
 
     while (!host->guiAttachReady_.load(std::memory_order_acquire))
     {
