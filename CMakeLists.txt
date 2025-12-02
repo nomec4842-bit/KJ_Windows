@@ -64,11 +64,12 @@ add_library(kj_hosting STATIC
     src/hosting/VST3Host.cpp
     src/hosting/VST3PlugFrame.cpp
     src/hosting/VstParameterQueue.cpp
-    src/hosting/VSTGuiThread.cpp
     src/hosting/VSTEditorWindow.cpp
 )
 
 if (WIN32)
+    target_sources(kj_hosting PRIVATE src/hosting/VSTGuiThread.cpp)
+
     # Ensure the Windows-specific hosting sources are compiled with the
     # expected platform macro.  Some toolchains (for example, clang-cl) do
     # not automatically provide _WIN32, which leaves the guarded
