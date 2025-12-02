@@ -32,6 +32,7 @@ LRESULT CALLBACK SafeParentWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 } // namespace
 
+#if SMTG_OS_LINUX
 class VSTGuiThread::RunLoop : public Steinberg::Linux::IRunLoop
 {
 public:
@@ -94,6 +95,7 @@ private:
     std::atomic<Steinberg::uint32> refCount_ {1};
     VSTGuiThread& thread_;
 };
+#endif
 
 VSTGuiThread::VSTGuiThread() = default;
 VSTGuiThread::~VSTGuiThread()
@@ -113,12 +115,16 @@ bool VSTGuiThread::isGuiThread() const
     return threadId_.load(std::memory_order_acquire) == ::GetCurrentThreadId();
 }
 
-Steinberg::IPtr<Steinberg::Linux::IRunLoop> VSTGuiThread::getRunLoop()
+VSTGuiThread::RunLoopPtr VSTGuiThread::getRunLoop()
 {
+#if SMTG_OS_LINUX
     ensureStarted();
     if (!runLoop_)
         runLoop_ = Steinberg::IPtr<RunLoop>(new RunLoop(*this));
     return runLoop_;
+#else
+    return {};
+#endif
 }
 
 std::future<bool> VSTGuiThread::post(std::function<void()> task)
@@ -306,17 +312,22 @@ void VSTGuiThread::threadMain()
             continue;
         }
 
+#if SMTG_OS_LINUX
         if (msg.message == WM_TIMER)
         {
             handleTimer(static_cast<UINT_PTR>(msg.wParam));
             continue;
         }
+#endif
 
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
 
+    
+#if SMTG_OS_LINUX
     clearTimersOnGuiThread();
+#endif
 
     auto parent = safeParentWindow_.load(std::memory_order_acquire);
     if (parent && ::IsWindow(parent))
@@ -363,6 +374,7 @@ void VSTGuiThread::drainTasks()
     }
 }
 
+#if SMTG_OS_LINUX
 Steinberg::tresult VSTGuiThread::registerTimerHandler(Steinberg::Linux::ITimerHandler* handler,
                                                       Steinberg::Linux::TimerInterval milliseconds)
 {
@@ -519,6 +531,20 @@ void VSTGuiThread::clearTimersOnGuiThread()
     timerIdsByHandler_.clear();
     timersById_.clear();
 }
+#else
+Steinberg::tresult VSTGuiThread::registerTimerHandler(void* handler, Steinberg::uint32 milliseconds)
+{
+    (void)handler;
+    (void)milliseconds;
+    return Steinberg::kNotImplemented;
+}
+
+Steinberg::tresult VSTGuiThread::unregisterTimerHandler(void* handler)
+{
+    (void)handler;
+    return Steinberg::kNotImplemented;
+}
+#endif
 
 std::filesystem::path getDefaultVstPluginPath()
 {

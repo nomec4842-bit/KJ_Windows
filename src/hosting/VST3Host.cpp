@@ -1988,7 +1988,7 @@ void VST3Host::setGuiAttachReady(bool state)
 
 #ifdef _WIN32
 
-Steinberg::IPtr<Steinberg::Linux::IRunLoop> VST3Host::getRunLoop()
+Steinberg::IPtr<Steinberg::FUnknown> VST3Host::getRunLoop()
 {
     if (!runLoop_)
         runLoop_ = VSTGuiThread::instance().getRunLoop();
