@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -327,13 +328,19 @@ bool VSTEditorWindow::createWindowInternal()
     HWND windowParent = parent;
     HWND ownerForPopup = nullptr;
 
+    static std::atomic<bool> crossThreadWarningShown {false};
+
     if (parentValid)
     {
         const DWORD parentThread = ::GetWindowThreadProcessId(parent, nullptr);
         const DWORD currentThread = ::GetCurrentThreadId();
         if (parentThread != 0 && parentThread != currentThread)
         {
-            std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
+            bool expected = false;
+            if (crossThreadWarningShown.compare_exchange_strong(expected, true))
+            {
+                std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
+            }
             style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
             exStyle = WS_EX_TOOLWINDOW;
 
