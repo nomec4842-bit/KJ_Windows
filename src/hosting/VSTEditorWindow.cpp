@@ -3,12 +3,9 @@
 #include "hosting/VSTEditorWindow.h"
 
 #include <algorithm>
-#include <chrono>
 #include <atomic>
 #include <iostream>
 #include <string>
-#include <thread>
-#include <future>
 #include <mutex>
 #include <array>
 #include <cwctype>
@@ -180,14 +177,20 @@ void VSTEditorWindow::close()
 
 void VSTEditorWindow::showOnGuiThread()
 {
+    auto self = shared_from_this();
+    auto& guiThread = VSTGuiThread::instance();
+    if (!guiThread.isGuiThread())
+    {
+        guiThread.post([self]() { self->showOnGuiThread(); });
+        return;
+    }
+
     if (!hwnd_ || !::IsWindow(hwnd_))
     {
-        auto self = shared_from_this();
-
         bool created = false;
         try
         {
-            created = createWindow().get();
+            created = createWindowInternal();
         }
         catch (const std::exception& ex)
         {
@@ -297,98 +300,6 @@ void VSTEditorWindow::destroyOnGuiThread()
         ::DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
-}
-
-std::future<bool> VSTEditorWindow::createWindow()
-{
-    auto promise = std::make_shared<std::promise<bool>>();
-    auto future = promise->get_future();
-
-    auto& guiThread = VSTGuiThread::instance();
-    if (!guiThread.isGuiThread())
-    {
-        auto self = shared_from_this();
-        auto postFuture = guiThread.post([self, promise]() {
-            if (!self)
-            {
-                promise->set_value(false);
-                return;
-            }
-
-            try
-            {
-                promise->set_value(self->createWindowInternal());
-            }
-            catch (const std::exception& ex)
-            {
-                std::cerr << "[VST] Exception during window creation: " << ex.what() << std::endl;
-                promise->set_value(false);
-            }
-            catch (...)
-            {
-                std::cerr << "[VST] Unknown exception during window creation." << std::endl;
-                promise->set_value(false);
-            }
-        });
-
-        if (postFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-        {
-            try
-            {
-                if (!postFuture.get())
-                    promise->set_value(false);
-            }
-            catch (const std::exception& ex)
-            {
-                std::cerr << "[VST] Posting window creation task failed: " << ex.what() << std::endl;
-                promise->set_value(false);
-            }
-            catch (...)
-            {
-                std::cerr << "[VST] Posting window creation task failed with unknown error." << std::endl;
-                promise->set_value(false);
-            }
-        }
-        else
-        {
-            std::thread([promise, postFuture = std::move(postFuture)]() mutable {
-                try
-                {
-                    if (!postFuture.get())
-                        promise->set_value(false);
-                }
-                catch (const std::exception& ex)
-                {
-                    std::cerr << "[VST] Posting window creation task failed: " << ex.what() << std::endl;
-                    promise->set_value(false);
-                }
-                catch (...)
-                {
-                    std::cerr << "[VST] Posting window creation task failed with unknown error." << std::endl;
-                    promise->set_value(false);
-                }
-            }).detach();
-        }
-
-        return future;
-    }
-
-    try
-    {
-        promise->set_value(createWindowInternal());
-    }
-    catch (const std::exception& ex)
-    {
-        std::cerr << "[VST] Exception during window creation: " << ex.what() << std::endl;
-        promise->set_value(false);
-    }
-    catch (...)
-    {
-        std::cerr << "[VST] Unknown exception during window creation." << std::endl;
-        promise->set_value(false);
-    }
-
-    return future;
 }
 
 bool VSTEditorWindow::createWindowInternal()
