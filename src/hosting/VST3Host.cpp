@@ -55,10 +55,10 @@ using namespace Steinberg::Vst;
 
 namespace kj {
 
-void waitForGuiAttachReady(VST3Host* host)
+bool waitForGuiAttachReady(VST3Host* host)
 {
     if (!host)
-        return;
+        return false;
 
     using namespace std::chrono_literals;
     const auto timeout = std::chrono::steady_clock::now() + 2s;
@@ -69,6 +69,14 @@ void waitForGuiAttachReady(VST3Host* host)
             break;
         std::this_thread::sleep_for(10ms);
     }
+
+    const bool ready = host->guiAttachReady_.load(std::memory_order_acquire);
+    if (!ready)
+    {
+        std::cerr << "[KJ] Timed out waiting for GUI attach readiness; editor show may fail." << std::endl;
+    }
+
+    return ready;
 }
 
 } // namespace kj
@@ -1527,6 +1535,9 @@ bool VST3Host::createViewForRequestedType(const char* preferredType,
     const char* fallbackType = Steinberg::Vst::ViewType::kEditor;
     usedType = preferredType && *preferredType ? preferredType : fallbackType;
 
+    std::cout << "[KJ] Requesting plug-in view type '" << usedType << "'"
+              << " (preferred request: '" << (preferredType ? preferredType : "") << "')." << std::endl;
+
 #ifdef _WIN32
     ScopedCurrentDirectory resourceDirectory(ResolvePluginResourceDirectory(pluginPath_));
 #endif
@@ -1535,27 +1546,37 @@ bool VST3Host::createViewForRequestedType(const char* preferredType,
     if (!newView && std::strcmp(usedType.c_str(), fallbackType) != 0)
     {
         // Fall back to the standard editor type if the plug-in rejected the requested view.
+        std::cerr << "[KJ] Plug-in rejected view type '" << usedType
+                  << "'; falling back to standard editor." << std::endl;
         newView = controllerRef->createView(fallbackType);
         usedType = fallbackType;
     }
 
     if (!newView)
+    {
+        std::cerr << "[KJ] Plug-in did not return a view for type '" << usedType << "'." << std::endl;
         return false;
+    }
+
+    std::cout << "[KJ] Plug-in returned view for type '" << usedType << "'." << std::endl;
 
 #ifdef _WIN32
     const std::array<const char*, 1> supportedPlatforms {Steinberg::kPlatformTypeHWND};
+    std::cout << "[KJ] Checking plug-in platform support for view type '" << usedType << "'." << std::endl;
     for (const auto* candidate : supportedPlatforms)
     {
         if (newView->isPlatformTypeSupported(candidate) == kResultTrue)
         {
             platformType = candidate;
+            std::cout << "[KJ] Plug-in reports platform support for '" << candidate << "'." << std::endl;
             break;
         }
     }
 
     if (platformType.empty())
     {
-        std::cerr << "[KJ] Plug-in editor does not support a compatible platform window." << std::endl;
+        std::cerr << "[KJ] Plug-in editor does not support a compatible platform window (requested '"
+                  << supportedPlatforms.front() << "')." << std::endl;
         return false;
     }
 #endif
@@ -2087,11 +2108,31 @@ void VST3Host::clearCurrentViewRect()
 
 bool VST3Host::ShowPluginEditor()
 {
-    waitForGuiAttachReady(this);
+    if (!waitForGuiAttachReady(this))
+    {
+        std::cerr << "[KJ] GUI attach readiness not signaled; skipping editor show request." << std::endl;
+        return false;
+    }
 
     auto self = shared_from_this();
 
-    VSTGuiThread::instance().post([self]() {
+    auto& guiThread = VSTGuiThread::instance();
+
+    if (guiThread.isGuiThread())
+    {
+        if (!self || !self->controller_)
+            return false;
+
+        if (!self->editorWindow_)
+            self->editorWindow_ = VSTEditorWindow::create(self);
+
+        if (self->editorWindow_)
+            self->editorWindow_->show();
+
+        return true;
+    }
+
+    auto result = guiThread.post([self]() {
         if (!self || !self->controller_)
             return;
 
@@ -2102,7 +2143,10 @@ bool VST3Host::ShowPluginEditor()
             self->editorWindow_->show();
     });
 
-    return true;
+    if (!result.valid())
+        return false;
+
+    return result.get();
 }
 
 void VST3Host::showPluginUI(void* parentWindowHandle)
