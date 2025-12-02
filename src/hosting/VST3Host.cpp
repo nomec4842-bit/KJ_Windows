@@ -831,6 +831,11 @@ void VST3Host::markLoadFinished(bool success)
         loadingInProgress_ = false;
         pluginReady_ = success;
     }
+
+    // Allow the GUI to attach as soon as the plug-in has finished loading,
+    // even if audio processing has not started yet.
+    guiAttachReady_.store(success, std::memory_order_release);
+
     loadingCv_.notify_all();
 }
 
