@@ -9,6 +9,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <once_flag>
 #include <queue>
 #include <string>
 #include <thread>
@@ -39,6 +40,7 @@ public:
     std::future<bool> post(std::function<void()> task);
     bool isGuiThread() const;
     void shutdown();
+    HWND ensureSafeParentWindow();
 
 private:
     VSTGuiThread();
@@ -47,6 +49,7 @@ private:
     void ensureStarted();
     void threadMain();
     void drainTasks();
+    HWND createSafeParentWindowOnGuiThread();
 
     static constexpr UINT kRunTaskMessage = WM_APP + 0x230;
 
@@ -64,6 +67,9 @@ private:
 
     std::mutex queueMutex_;
     std::queue<PendingTask> tasks_;
+
+    std::atomic<HWND> safeParentWindow_ {nullptr};
+    std::once_flag safeParentWindowClassRegistered_;
 };
 
 constexpr UINT kShowVstEditorMessage = WM_APP + 40;

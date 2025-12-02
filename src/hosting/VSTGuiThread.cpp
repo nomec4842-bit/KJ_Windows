@@ -14,6 +14,17 @@ namespace kj {
 
 using namespace kj;
 
+namespace {
+
+constexpr const wchar_t* kSafeParentWindowClass = L"KJ_VST3_SAFE_PARENT";
+
+LRESULT CALLBACK SafeParentWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+} // namespace
+
 VSTGuiThread::VSTGuiThread() = default;
 VSTGuiThread::~VSTGuiThread()
 {
@@ -124,6 +135,73 @@ void VSTGuiThread::shutdown()
     threadId_.store(0, std::memory_order_release);
 }
 
+HWND VSTGuiThread::createSafeParentWindowOnGuiThread()
+{
+    auto current = safeParentWindow_.load(std::memory_order_acquire);
+    if (current && ::IsWindow(current))
+        return current;
+
+    std::call_once(safeParentWindowClassRegistered_, []() {
+        WNDCLASSEXW wc {};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = &SafeParentWndProc;
+        wc.hInstance = ::GetModuleHandleW(nullptr);
+        wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = kSafeParentWindowClass;
+        ::RegisterClassExW(&wc);
+    });
+
+    HWND created = ::CreateWindowExW(WS_EX_TOOLWINDOW, kSafeParentWindowClass, L"KJ VST3 Editor Host",
+                                     WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, CW_USEDEFAULT,
+                                     CW_USEDEFAULT, 640, 480, nullptr, nullptr, ::GetModuleHandleW(nullptr),
+                                     nullptr);
+    if (!created)
+        return nullptr;
+
+    ::ShowWindow(created, SW_SHOWNOACTIVATE);
+    safeParentWindow_.store(created, std::memory_order_release);
+    return created;
+}
+
+HWND VSTGuiThread::ensureSafeParentWindow()
+{
+    ensureStarted();
+
+    auto current = safeParentWindow_.load(std::memory_order_acquire);
+    if (current && ::IsWindow(current))
+        return current;
+
+    auto promise = std::make_shared<std::promise<HWND>>();
+    auto future = promise->get_future();
+
+    auto task = [this, promise]() {
+        promise->set_value(createSafeParentWindowOnGuiThread());
+    };
+
+    if (isGuiThread())
+    {
+        task();
+    }
+    else
+    {
+        auto result = post(task);
+        if (!result.valid())
+            return nullptr;
+        result.wait();
+    }
+
+    try
+    {
+        return future.get();
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
 void VSTGuiThread::threadMain()
 {
     threadId_.store(::GetCurrentThreadId(), std::memory_order_release);
@@ -152,6 +230,13 @@ void VSTGuiThread::threadMain()
 
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
+    }
+
+    auto parent = safeParentWindow_.load(std::memory_order_acquire);
+    if (parent && ::IsWindow(parent))
+    {
+        ::DestroyWindow(parent);
+        safeParentWindow_.store(nullptr, std::memory_order_release);
     }
 
     drainTasks();

@@ -320,47 +320,80 @@ bool VSTEditorWindow::createWindowInternal()
     // editor can still appear. The popup path bypasses cross-thread parent checks and avoids the
     // previous desktop fallback, which could prevent the editor from opening when no host window
     // is available.
+    auto& guiThread = VSTGuiThread::instance();
+
     HWND parent = host->getParentWindowForEditor();
-    const bool parentValid = ::IsWindow(parent) != FALSE;
+    bool parentValid = ::IsWindow(parent) != FALSE;
+    const DWORD currentThread = ::GetCurrentThreadId();
 
     DWORD style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
     DWORD exStyle = 0;
     HWND windowParent = parent;
     HWND ownerForPopup = nullptr;
+    HWND safeParent = nullptr;
+    bool usingSafeParent = false;
 
     static std::atomic<bool> crossThreadWarningShown {false};
 
     if (parentValid)
     {
         const DWORD parentThread = ::GetWindowThreadProcessId(parent, nullptr);
-        const DWORD currentThread = ::GetCurrentThreadId();
         if (parentThread != 0 && parentThread != currentThread)
         {
-            bool expected = false;
-            if (crossThreadWarningShown.compare_exchange_strong(expected, true))
-            {
-                std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
-            }
-            style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-            exStyle = WS_EX_TOOLWINDOW;
+            safeParent = guiThread.ensureSafeParentWindow();
+            usingSafeParent = safeParent && ::IsWindow(safeParent);
+            parentValid = usingSafeParent;
+            windowParent = usingSafeParent ? safeParent : nullptr;
 
-            // The parent belongs to another thread, so pass nullptr to CreateWindowExW
-            // to avoid cross-thread parent/child creation failures. Re-attach as owner
-            // after creation so focus/z-order still follow the host.
-            windowParent = nullptr;
-            ownerForPopup = parent;
+            if (!usingSafeParent)
+            {
+                bool expected = false;
+                if (crossThreadWarningShown.compare_exchange_strong(expected, true))
+                {
+                    std::cerr << "[VST] Parent window belongs to a different thread; creating popup editor window instead." << std::endl;
+                }
+                style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+                exStyle = WS_EX_TOOLWINDOW;
+
+                windowParent = nullptr;
+                ownerForPopup = parent;
+            }
         }
     }
     else
     {
-        // When the host window is invalid, fall back to a standalone popup so the editor can still show.
-        style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-        exStyle = WS_EX_TOOLWINDOW;
-        windowParent = nullptr;
+        safeParent = guiThread.ensureSafeParentWindow();
+        usingSafeParent = safeParent && ::IsWindow(safeParent);
+        parentValid = usingSafeParent;
+        windowParent = usingSafeParent ? safeParent : nullptr;
+
+        if (!usingSafeParent)
+        {
+            // When the host window is invalid, fall back to a standalone popup so the editor can still show.
+            style = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+            exStyle = WS_EX_TOOLWINDOW;
+        }
     }
 
     const int width = std::max<int>(1, initialRect.getWidth() > 0 ? initialRect.getWidth() : 800);
     const int height = std::max<int>(1, initialRect.getHeight() > 0 ? initialRect.getHeight() : 600);
+
+    if (usingSafeParent && windowParent)
+    {
+        RECT parentRect {0, 0, width, height};
+        DWORD parentStyle = WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+        DWORD parentExStyle = WS_EX_TOOLWINDOW;
+        ::AdjustWindowRectEx(&parentRect, parentStyle, FALSE, parentExStyle);
+
+        ::SetWindowLongPtrW(windowParent, GWL_STYLE, static_cast<LONG_PTR>(parentStyle));
+        ::SetWindowLongPtrW(windowParent, GWL_EXSTYLE, static_cast<LONG_PTR>(parentExStyle));
+        ::SetWindowTextW(windowParent, title_.c_str());
+        ::SetWindowPos(windowParent, nullptr, 0, 0, parentRect.right - parentRect.left,
+                       parentRect.bottom - parentRect.top,
+                       SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        ::ShowWindow(windowParent, SW_SHOWNORMAL);
+        ::UpdateWindow(windowParent);
+    }
 
     hwnd_ = ::CreateWindowExW(exStyle, kWindowClass, title_.c_str(), style, 0, 0, width, height, windowParent, nullptr,
                               ::GetModuleHandleW(nullptr), this);
