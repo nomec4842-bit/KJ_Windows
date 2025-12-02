@@ -656,7 +656,7 @@ bool promptAndLoadVstPlugin(HWND parent, int trackId)
         if (success)
             PostMessageW(parent, kShowVstEditorMessage, static_cast<WPARAM>(trackId), 0);
         else
-            std::cerr << "[GUI] VST3 plug-in did not finish loading; editor will not be shown." << std::endl;
+            std::cerr << "[GUI] VST3 plug-in failed to load for the selected track; editor will not be shown." << std::endl;
     });
 
     host->loadPluginAsync(pluginPath.wstring());
