@@ -25,6 +25,8 @@ LRESULT CALLBACK SafeParentWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+} // namespace
+
 class VSTGuiThread::RunLoop : public Steinberg::Linux::IRunLoop
 {
 public:
