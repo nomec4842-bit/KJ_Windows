@@ -3,6 +3,7 @@
 #include "hosting/VSTGuiThread.h"
 
 #include "core/track_type_vst.h"
+#include "hosting/VST3Host.h"
 
 #include <array>
 #include <iostream>
