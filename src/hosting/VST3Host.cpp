@@ -60,6 +60,12 @@ bool waitForGuiAttachReady(VST3Host* host)
     if (!host)
         return false;
 
+    // Avoid blocking the GUI/message-loop thread. If the caller is already on the GUI
+    // thread, we must assume the loader has finished (or will resurface via callback)
+    // and bail out early instead of stalling the pump.
+    if (VSTGuiThread::instance().isGuiThread())
+        return host->guiAttachReady_.load(std::memory_order_acquire);
+
     using namespace std::chrono_literals;
     // Give the asynchronous loader ample time to finish so the editor can attach. Some plug-ins
     // take several seconds to initialize on slower machines, and the shorter 2s grace period could
@@ -2074,6 +2080,9 @@ bool VST3Host::createEditorViewOnGui(Steinberg::IPtr<Steinberg::IPlugView>& outV
     if (guiThread.isGuiThread())
         return createOnGui();
 
+    // Editor creation must be initiated on the GUI/message-loop thread. Forward the work
+    // there and block the caller until completion so the worker thread never directly
+    // builds Win32 windows.
     bool success = false;
     auto self = shared_from_this();
     auto future = guiThread.post([self, &success, createOnGui]() mutable {
@@ -2117,41 +2126,40 @@ void VST3Host::clearCurrentViewRect()
 
 bool VST3Host::ShowPluginEditor()
 {
-    if (!waitForGuiAttachReady(this))
-    {
-        std::cerr << "[KJ] GUI attach readiness not signaled; skipping editor show request." << std::endl;
-        return false;
-    }
-
     auto self = shared_from_this();
-
     auto& guiThread = VSTGuiThread::instance();
 
-    if (guiThread.isGuiThread())
-    {
+    const auto showTask = [self]() {
         if (!self || !self->controller_)
             return false;
 
-        if (!self->editorWindow_)
-            self->editorWindow_ = VSTEditorWindow::create(self);
-
-        if (self->editorWindow_)
-            self->editorWindow_->show();
-
-        return true;
-    }
-
-    auto result = guiThread.post([self]() {
-        if (!self || !self->controller_)
-            return;
+        if (!self->guiAttachReady_.load(std::memory_order_acquire))
+        {
+            std::cerr << "[KJ] GUI attach readiness not signaled; skipping editor show request." << std::endl;
+            return false;
+        }
 
         if (!self->editorWindow_)
             self->editorWindow_ = VSTEditorWindow::create(self);
 
         if (self->editorWindow_)
+        {
             self->editorWindow_->show();
-    });
+            return true;
+        }
 
+        return false;
+    };
+
+    // Never block the message loop waiting for readiness; only worker/audio threads should
+    // wait for the plug-in to finish loading.
+    if (!guiThread.isGuiThread() && !waitForGuiAttachReady(this))
+        return false;
+
+    if (guiThread.isGuiThread())
+        return showTask();
+
+    auto result = guiThread.post([showTask]() { return showTask(); });
     if (!result.valid())
         return false;
 
