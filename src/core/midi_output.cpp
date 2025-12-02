@@ -76,3 +76,19 @@ void midiOutputSendNoteOff(int portId, int channel, int note, int velocity)
     int status = 0x80 | channel;
     sendShortMessage(portId, makeShortMessage(status, note, velocity));
 }
+
+void shutdownMidiOutput()
+{
+    std::lock_guard<std::mutex> lock(gMidiMutex);
+    for (auto& entry : gMidiOutPorts)
+    {
+        HMIDIOUT handle = entry.second;
+        if (handle)
+        {
+            midiOutReset(handle);
+            midiOutClose(handle);
+        }
+    }
+
+    gMidiOutPorts.clear();
+}

@@ -3323,6 +3323,7 @@ void shutdownAudio() {
     if (audioThread.joinable()) audioThread.join();
     if (vstCommandThread.joinable()) vstCommandThread.join();
     if (sequencerThread.joinable()) sequencerThread.join();
+    shutdownMidiOutput();
 }
 
 bool loadSampleFile(int trackId, const std::filesystem::path& path) {
