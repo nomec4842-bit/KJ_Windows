@@ -101,6 +101,7 @@ public:
     bool waitForPluginReady();
 
     void setGuiAttachReady(bool state);
+    void notifyGuiOfLoadResult(bool success, const char* reason);
 
     std::mutex& vst3Mutex() { return vst3Mutex_; }
 
@@ -329,6 +330,7 @@ private:
     std::condition_variable loadingCv_;
     bool loadingInProgress_ = false;
     bool pluginReady_ = false;
+    std::atomic<bool> guiLoadNotified_ {false};
     std::atomic<int> owningTrackId_ {0};
     std::filesystem::path pluginPath_;
 

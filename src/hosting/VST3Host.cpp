@@ -760,9 +760,7 @@ void VST3Host::loadPluginAsync(const std::wstring& path)
             if (!self)
                 return;
 
-            auto callback = self->onPluginLoaded_;
-            if (callback)
-                callback(success);
+            self->notifyGuiOfLoadResult(success, "async load completion");
 
             if (success)
                 self->ShowPluginEditor();
@@ -792,14 +790,15 @@ bool VST3Host::waitForPluginReady()
     std::unique_lock<std::mutex> lock(loadingMutex_);
     constexpr auto kLoadTimeout = std::chrono::seconds(10);
     const auto deadline = std::chrono::steady_clock::now() + kLoadTimeout;
+    bool timedOut = false;
 
     while (loadingInProgress_)
     {
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline)
         {
-            std::cerr << "[KJ] Timed out while waiting for the plug-in to finish loading.\n";
-            return false;
+            timedOut = true;
+            break;
         }
 
         const auto nextWake = std::min(deadline, now + std::chrono::milliseconds(15));
@@ -818,8 +817,17 @@ bool VST3Host::waitForPluginReady()
 #endif
     }
 
+    if (timedOut)
+    {
+        lock.unlock();
+
+        std::cerr << "[KJ] Timed out while waiting for the plug-in to finish loading; notifying GUI to show fallback." << std::endl;
+        markLoadFinished(false);
+        return false;
+    }
+
     if (!pluginReady_)
-        std::cerr << "[KJ] Plug-in failed to finish loading successfully.\n";
+        std::cerr << "[KJ] Plug-in failed to finish loading successfully; notifying GUI." << std::endl;
 
     return pluginReady_;
 }
@@ -831,6 +839,7 @@ void VST3Host::markLoadStarted()
     loadingInProgress_ = true;
     pluginReady_ = false;
     guiAttachReady_.store(false, std::memory_order_release);
+    guiLoadNotified_.store(false, std::memory_order_release);
 }
 
 void VST3Host::markLoadFinished(bool success)
@@ -847,6 +856,42 @@ void VST3Host::markLoadFinished(bool success)
     guiAttachReady_.store(success, std::memory_order_release);
 
     loadingCv_.notify_all();
+
+    if (!success)
+        notifyGuiOfLoadResult(false, "load completion");
+}
+
+void VST3Host::notifyGuiOfLoadResult(bool success, const char* reason)
+{
+    bool expected = false;
+    if (!guiLoadNotified_.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        return;
+
+    auto callback = onPluginLoaded_;
+    auto self = shared_from_this();
+
+    if (!success)
+    {
+        std::cerr << "[KJ] Plug-in load failed (" << (reason ? reason : "unknown reason")
+                  << "); notifying GUI for fallback handling." << std::endl;
+    }
+
+    if (callback)
+    {
+        VSTGuiThread::instance().post([self, callback, success]() {
+            if (self)
+                callback(success);
+        });
+        return;
+    }
+
+    if (success)
+        return;
+
+    VSTGuiThread::instance().post([self]() {
+        if (self)
+            self->showGenericEditorFallback();
+    });
 }
 
 bool VST3Host::load(const std::string& pluginPath)
