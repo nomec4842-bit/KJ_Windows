@@ -877,7 +877,7 @@ bool VST3Host::load(const std::string& pluginPath)
 #ifdef _WIN32
         runLoop_ = getRunLoop();
         if (runLoop_)
-            module->setHostContext(runLoop_.get());
+            module->getFactory().setHostContext(runLoop_.get());
 #endif
 
         auto factory = module->getFactory();
