@@ -40,6 +40,8 @@ std::shared_ptr<kj::VST3Host> trackEnsureVstHost(int trackId)
             return track->vstHost;
         }
     }
+
+    std::cerr << "[VST] No track found while creating host for track id " << trackId << std::endl;
     return {};
 }
 
