@@ -2181,9 +2181,16 @@ bool VST3Host::ShowPluginEditor()
 
         auto result = guiThread.post([showTask]() { return showTask(); });
         if (!result.valid())
+        {
+            std::cerr << "[KJ] Failed to queue GUI thread show request." << std::endl;
             return false;
+        }
 
-        return result.get();
+        const bool shown = result.get();
+        if (!shown)
+            std::cerr << "[KJ] GUI thread rejected plug-in editor show request." << std::endl;
+
+        return shown;
     };
 
     bool pluginReady = isPluginReady();
