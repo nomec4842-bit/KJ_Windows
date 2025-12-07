@@ -831,6 +831,7 @@ void VST3Host::markLoadStarted()
     loadingInProgress_ = true;
     pluginReady_ = false;
     guiAttachReady_.store(false, std::memory_order_release);
+    pendingEditorShow_.store(false, std::memory_order_release);
 }
 
 void VST3Host::markLoadFinished(bool success)
@@ -847,6 +848,28 @@ void VST3Host::markLoadFinished(bool success)
     guiAttachReady_.store(success, std::memory_order_release);
 
     loadingCv_.notify_all();
+
+#ifdef _WIN32
+    const bool showAfterLoad = success && pendingEditorShow_.exchange(false, std::memory_order_acq_rel);
+    if (showAfterLoad)
+    {
+        auto self = shared_from_this();
+        auto dispatchShow = [self]() {
+            if (self)
+                self->ShowPluginEditor();
+        };
+
+        auto& guiThread = VSTGuiThread::instance();
+        if (guiThread.isGuiThread())
+            dispatchShow();
+        else
+            guiThread.post(dispatchShow);
+    }
+    else if (!success)
+    {
+        pendingEditorShow_.store(false, std::memory_order_release);
+    }
+#endif
 }
 
 bool VST3Host::load(const std::string& pluginPath)
@@ -1915,6 +1938,7 @@ void VST3Host::unloadLocked()
 #endif
 
     guiAttachReady_.store(false, std::memory_order_release);
+    pendingEditorShow_.store(false, std::memory_order_release);
 
     if (processor_)
         processor_->setProcessing(false);
@@ -2151,19 +2175,51 @@ bool VST3Host::ShowPluginEditor()
         return false;
     };
 
-    // Never block the message loop waiting for readiness; only worker/audio threads should
-    // wait for the plug-in to finish loading.
-    if (!guiThread.isGuiThread() && !waitForGuiAttachReady(this))
+    const auto dispatchShow = [&]() -> bool {
+        if (guiThread.isGuiThread())
+            return showTask();
+
+        auto result = guiThread.post([showTask]() { return showTask(); });
+        if (!result.valid())
+            return false;
+
+        return result.get();
+    };
+
+    bool pluginReady = isPluginReady();
+    if (!pluginReady)
+    {
+        if (guiThread.isGuiThread())
+        {
+            pendingEditorShow_.store(isPluginLoading(), std::memory_order_release);
+            return false;
+        }
+
+        // Worker threads may wait for the loader to finish before attempting to show.
+        if (!waitForPluginReady())
+            return false;
+
+        pluginReady = isPluginReady();
+    }
+
+    if (!pluginReady)
         return false;
 
     if (guiThread.isGuiThread())
-        return showTask();
+    {
+        if (!guiAttachReady_.load(std::memory_order_acquire))
+        {
+            pendingEditorShow_.store(isPluginLoading(), std::memory_order_release);
+            return false;
+        }
 
-    auto result = guiThread.post([showTask]() { return showTask(); });
-    if (!result.valid())
+        return showTask();
+    }
+
+    if (!waitForGuiAttachReady(this))
         return false;
 
-    return result.get();
+    return dispatchShow();
 }
 
 void VST3Host::showPluginUI(void* parentWindowHandle)

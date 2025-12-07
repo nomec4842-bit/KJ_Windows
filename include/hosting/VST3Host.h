@@ -304,6 +304,7 @@ private:
     mutable std::mutex processMutex_;
     std::atomic<bool> processingSuspended_ {false};
     std::atomic<uint32_t> activeProcessCount_ {0};
+    std::atomic<bool> pendingEditorShow_ {false};
     std::atomic<bool> guiAttachReady_ {false};
 
     Steinberg::Vst::ParameterChanges inputParameterChanges_;
