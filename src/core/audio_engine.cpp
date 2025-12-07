@@ -32,9 +32,7 @@
 #include <deque>
 #include <condition_variable>
 #include <future>
-#ifdef DEBUG_AUDIO
 #include <iostream>
-#endif
 
 #include "core/tracks.h"
 #include "core/track_type_sample.h"
@@ -216,12 +214,24 @@ bool consumeAudioThreadNotification(AudioThreadNotification& notification)
 
 bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
 {
-    if (trackId <= 0 || path.empty())
+    if (trackId <= 0)
+    {
+        std::cerr << "[VST] Rejecting plug-in load; invalid track id: " << trackId << std::endl;
         return false;
+    }
+
+    if (path.empty())
+    {
+        std::cerr << "[VST] Rejecting plug-in load; empty plug-in path for track " << trackId << std::endl;
+        return false;
+    }
 
     auto host = trackEnsureVstHost(trackId);
     if (!host)
+    {
+        std::cerr << "[VST] Rejecting plug-in load; no host available for track " << trackId << std::endl;
         return false;
+    }
 
     auto completion = std::make_shared<std::promise<bool>>();
 
@@ -240,11 +250,17 @@ bool requestTrackVstLoad(int trackId, const std::filesystem::path& path)
 bool requestTrackVstUnload(int trackId)
 {
     if (trackId <= 0)
+    {
+        std::cerr << "[VST] Rejecting plug-in unload; invalid track id: " << trackId << std::endl;
         return false;
+    }
 
     auto host = trackGetVstHost(trackId);
     if (!host)
+    {
+        std::cerr << "[VST] Rejecting plug-in unload; no host available for track " << trackId << std::endl;
         return false;
+    }
 
     auto completion = std::make_shared<std::promise<bool>>();
     auto result = completion->get_future();
