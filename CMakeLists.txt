@@ -65,6 +65,15 @@ add_library(kj_hosting STATIC
     src/hosting/VST3PlugFrame.cpp
     src/hosting/VstParameterQueue.cpp
     src/hosting/VSTEditorWindow.cpp
+    # Force-include full Steinberg hosting stack so tests and the app share
+    # the same VST3 Module implementation.
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/hostclasses.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/connectionproxy.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/parameterchanges.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/processdata.cpp
 )
 
 if (WIN32)
@@ -85,15 +94,6 @@ target_link_libraries(kj_hosting
 
 add_executable(KJ
     src/main.cpp
-
-    # Force-include full Steinberg hosting stack
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/hostclasses.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/connectionproxy.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/parameterchanges.cpp
-    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/processdata.cpp
 )
 
 target_link_libraries(KJ
