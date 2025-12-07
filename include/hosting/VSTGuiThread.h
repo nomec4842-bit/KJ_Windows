@@ -15,6 +15,7 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <type_traits>
 #include <thread>
 #include <unordered_map>
 #include <windows.h>
@@ -50,7 +51,29 @@ public:
     VSTGuiThread(const VSTGuiThread&) = delete;
     VSTGuiThread& operator=(const VSTGuiThread&) = delete;
 
-    std::future<bool> post(std::function<void()> task);
+    std::future<bool> post(std::function<bool()> task);
+
+    template <typename Callable,
+              typename = std::enable_if_t<!std::is_same_v<std::decay_t<Callable>, std::function<bool()>>>>
+    std::future<bool> post(Callable&& task)
+    {
+        using TaskType = std::decay_t<Callable>;
+        using ResultType = std::invoke_result_t<TaskType>;
+
+        auto wrapped = [callable = std::forward<Callable>(task)]() mutable -> bool {
+            if constexpr (std::is_void_v<ResultType>)
+            {
+                std::invoke(callable);
+                return true;
+            }
+            else
+            {
+                return static_cast<bool>(std::invoke(callable));
+            }
+        };
+
+        return post(std::function<bool()>(std::move(wrapped)));
+    }
     bool isGuiThread() const;
     void shutdown();
     HWND ensureSafeParentWindow();
@@ -96,7 +119,7 @@ private:
 
     struct PendingTask
     {
-        std::function<void()> fn;
+        std::function<bool()> fn;
         std::promise<bool> promise;
     };
 

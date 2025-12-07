@@ -18,6 +18,7 @@
 #include <mutex>
 #include <queue>
 #include <utility>
+#include <type_traits>
 
 namespace kj {
 
@@ -127,7 +128,7 @@ VSTGuiThread::RunLoopPtr VSTGuiThread::getRunLoop()
 #endif
 }
 
-std::future<bool> VSTGuiThread::post(std::function<void()> task)
+std::future<bool> VSTGuiThread::post(std::function<bool()> task)
 {
     ensureStarted();
 
@@ -357,9 +358,10 @@ void VSTGuiThread::drainTasks()
 
         try
         {
+            bool result = false;
             if (task.fn)
-                task.fn();
-            task.promise.set_value(true);
+                result = task.fn();
+            task.promise.set_value(result);
         }
         catch (const std::exception& ex)
         {

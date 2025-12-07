@@ -107,4 +107,14 @@ if (MSVC)
     target_link_options(KJ PRIVATE "/WHOLEARCHIVE:kj_gui")
 endif()
 
+if (WIN32)
+    add_executable(kj_hosting_tests
+        src/hosting/tests/VSTGuiThreadTests.cpp
+    )
+
+    target_link_libraries(kj_hosting_tests
+        PRIVATE kj_hosting
+    )
+endif()
+
 message(STATUS "KJ configured with VST3 SDK: ${VST3_SDK_DIR}")
